@@ -1,5 +1,5 @@
 import { Buffer } from "buffer";
-import * as CSL from "../lib/CardanoSerializationLib";
+import * as CSL from "../lib/CardanoSerializationLib.ts";
 import axios from "axios";
 
 const defaultOptions = {
