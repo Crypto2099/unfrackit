@@ -208,6 +208,9 @@ export default {
             throw e;
           }
         },
+        async getWalletNetwork() {
+          return await this.cardano.Wallet.getNetworkId();
+        },
         async checkNetwork(network_id) {
           const wallet_network = await this.cardano.Wallet.getNetworkId();
           console.log(

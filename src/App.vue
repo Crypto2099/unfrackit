@@ -4,7 +4,7 @@
             <v-container class="d-flex">
                 <div class="d-flex align-center">
                     <v-icon class="me-2">mdi-lan</v-icon>
-                    UnFrackIt
+                    UnFrack.It
                 </div>
 
                 <v-spacer></v-spacer>
@@ -19,6 +19,12 @@
 
         <v-main>
             <v-container class="my-16">
+                <div class="mb-8">
+                    <h1 class="display-4">UnFrack.It</h1>
+                    <h2>Powered By
+                        <v-img :src="require('./assets/dripdropz.svg')" contain width="256" alt="DripDropz"></v-img>
+                    </h2>
+                </div>
                 <template v-if="cardano.status === `init`">
                     <p>
                         Checking for Cardano wallets... </p>
@@ -40,6 +46,16 @@
                             <v-img :src="cardano.ActiveWallet.icon" class="me-2" contain height="24" width="24"></v-img>
                             {{ cardano.ActiveWallet.name.replace(' Wallet', '') }} Connected
                         </v-chip>
+                        <template v-if="network === 1">
+                            <v-chip label color="primary" class="me-2">
+                                MAINNET
+                            </v-chip>
+                        </template>
+                        <template v-else-if="network === 0">
+                            <v-chip label color="red" dark class="me-2 text-uppercase" @click="chooseTestnet = true">
+                                {{ testnet }} TESTNET
+                            </v-chip>
+                        </template>
                         <v-btn color="secondary" x-large @click="disconnect"
                                :disabled="gettingUTxO || analyzingUTxO || (pendingTx !== null)">
                             Disconnect
@@ -196,6 +212,17 @@
                 </v-card-actions>
             </v-card>
         </v-dialog>
+        <v-dialog v-model="chooseTestnet" max-width="512" persistent>
+            <v-card>
+                <v-card-title>Choose Your Testnet</v-card-title>
+                <v-card-text>
+                    <v-btn v-for="(label, name) in testnets" :key="name" block class="mb-2 text-start"
+                           @click="testnet = name; chooseTestnet = false;">
+                        {{ label }}
+                    </v-btn>
+                </v-card-text>
+            </v-card>
+        </v-dialog>
     </v-app>
 </template>
 
@@ -261,6 +288,13 @@ export default {
         inputTokens: [],
         pendingTx: null,
         watchingTx: null,
+        network: null,
+        testnet: 'preprod',
+        chooseTestnet: false,
+        testnets: {
+            preprod: 'Pre-Production',
+            preview: 'Preview'
+        }
     }),
     methods: {
         showError(msg, title) {
@@ -285,6 +319,10 @@ export default {
             await this.connect(wallet);
             this.stakeKey = await this.getStakeKey();
             this.changeAddress = await this.getChangeAddress();
+            this.network = await this.getWalletNetwork();
+            if (this.network === 0) {
+                this.chooseTestnet = true;
+            }
             this.connectModal = false;
             await this.checkWalletBalance();
         },
@@ -292,6 +330,7 @@ export default {
             this.stakeKey = null;
             this.changeAddress = null;
             this.UTxOSet = null;
+            this.network = null;
             this.analyzedUTxO = [];
             this.analysis = JSON.parse(JSON.stringify(analysis_format));
             this.ProposedUTxO = JSON.parse(JSON.stringify(default_proposed));
@@ -340,7 +379,6 @@ export default {
             const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
             let estimated_fees = (tx_size * 52) + 155381;
             let lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
-            console.log(`Have ${lovelace_balance} Lovelace left to split up!`);
 
             let iterations = 1;
 
@@ -348,7 +386,6 @@ export default {
                 if (iterations >= 100) {
                     throw Error("Could not add enough change to balance!");
                 }
-                console.log(`Have ${lovelace_balance} Lovelace left to split up!`);
 
                 for (const utxo_input of this.analyzedUTxO) {
                     if (utxo_input.output.amount.multiasset === null) {
@@ -377,7 +414,6 @@ export default {
                 const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
                 let estimated_fees = (tx_size * 52) + 155381;
                 lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
-                console.log(`Have ${lovelace_balance} Lovelace left to split up!`);
             }
 
             if (lovelace_balance > 100000000 && this.settings.splitLovelace) {
@@ -437,7 +473,12 @@ export default {
 
         },
         async doUnFrack() {
-            const unfrackit_address = 'addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv';
+            let unfrackit_address;
+            if (this.network === 0) {
+                unfrackit_address = 'addr_test1vz4ajuum47atvtf0vh0y9754cnryuzpa0h5lq8cgp5ml4lshrl9ch';
+            } else {
+                unfrackit_address = 'addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv';
+            }
             if (this.ProposedUTxO.tip > 0) {
                 // Check if we already have a tip in the output sets... Don't want to add multiple tips!
                 const tip_amt = this.toLovelace(this.ProposedUTxO.tip);
@@ -460,11 +501,9 @@ export default {
                     this.ProposedUTxO.outputs.push(output);
                     this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
                 } else {
-                    console.log("Changing tip amount!");
                     for (const i in this.ProposedUTxO.outputs) {
                         const output = this.ProposedUTxO.outputs[i];
                         if (output.address().to_bech32() === unfrackit_address) {
-                            console.log("Updating tip amount!", output.amount());
                             output.amount().set_coin(CSL.BigNum.from_str(tip_amt.toString()));
                         }
                     }
@@ -614,7 +653,6 @@ export default {
 
                 const bail_out_level = 1024;
                 const tx_size = this.estimateSize(this.ProposedUTxO);
-                console.log("Tx Size Now:", tx_size);
                 if (tx_size < bail_out_level) {
                     console.log("We don't have room to process anymore! Bail out!");
                     break;
@@ -781,20 +819,6 @@ export default {
 
                 if (size >= 15360) {
                     console.log("Size is too large, we should stop now!", size);
-                    this.calcTxSize(mock, true);
-                    for (const [txid, input] of Object.entries(mock.inputs)) {
-                        if (this.ProposedUTxO.inputs_json[txid] === undefined) {
-                            this.ProposedUTxO.inputs_json[txid] = input;
-                            this.ProposedUTxO.inputs.add_input(
-                                this.changeAddress,
-                                CSL.TransactionInput.from_json(JSON.stringify(input.input)),
-                                CSL.Value.from_json(JSON.stringify(input.output.amount))
-                            );
-                            const input_coin_amt = parseInt(input.output.amount.coin);
-                            this.ProposedUTxO.input_lovelace += input_coin_amt;
-                        }
-                    }
-                    this.handleBundled(mock.outputs);
                     break;
                 }
 
@@ -818,25 +842,27 @@ export default {
 
                 if (size >= 15360) {
                     console.log("Size is too large, we should stop now!", size);
-                    this.calcTxSize(mock, true);
-                    for (const [txid, input] of Object.entries(mock.inputs)) {
-                        if (this.ProposedUTxO.inputs_json[txid] === undefined) {
-                            this.ProposedUTxO.inputs_json[txid] = input;
-                            this.ProposedUTxO.inputs.add_input(
-                                this.changeAddress,
-                                CSL.TransactionInput.from_json(JSON.stringify(input.input)),
-                                CSL.Value.from_json(JSON.stringify(input.output.amount))
-                            );
-                            const input_coin_amt = parseInt(input.output.amount.coin);
-                            this.ProposedUTxO.input_lovelace += input_coin_amt;
-                        }
-                    }
-                    this.handleBundled(mock.outputs);
+                    // this.calcTxSize(mock, true);
                     break;
                 }
             }
 
+
+
             this.calcTxSize(mock, true);
+            for (const [txid, input] of Object.entries(mock.inputs)) {
+                if (this.ProposedUTxO.inputs_json[txid] === undefined) {
+                    this.ProposedUTxO.inputs_json[txid] = input;
+                    this.ProposedUTxO.inputs.add_input(
+                        this.changeAddress,
+                        CSL.TransactionInput.from_json(JSON.stringify(input.input)),
+                        CSL.Value.from_json(JSON.stringify(input.output.amount))
+                    );
+                    const input_coin_amt = parseInt(input.output.amount.coin);
+                    this.ProposedUTxO.input_lovelace += input_coin_amt;
+                }
+            }
+            this.handleBundled(mock.outputs);
 
             if (this.ProposedUTxO.inputs.length === 0 || this.ProposedUTxO.outputs.length === 0) {
                 this.ProposedUTxO.optimized = true;
@@ -916,9 +942,6 @@ export default {
             }
 
             if ((txn_size >= max_tx || doBackfill === true) && Object.entries(balance_tokens).length) {
-                if (doBackfill === true) {
-                    console.log("Doing backfill!");
-                }
                 const backfill_fungible = {};
                 const backfill_nonfungible = {};
 
@@ -1164,8 +1187,12 @@ export default {
         this.watchingTx = setInterval(async () => {
             if (this.pendingTx !== null) {
                 try {
+                    let subdomain = 'api';
+                    if (this.network === 0) {
+                        subdomain = this.testnet;
+                    }
                     const response = await axios.post(
-                        `https://api.koios.rest/api/v0/tx_status`,
+                        `https://${subdomain}.koios.rest/api/v0/tx_status`,
                         {
                             "_tx_hashes": [this.pendingTx]
                         }
