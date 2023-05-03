@@ -10,4 +10,4 @@ import cslInit from './cardano-serialization-lib-web/cardano_serialization_lib.j
 })()
 
 
-export * from './cardano-serialization-lib-web/cardano_serialization_lib'
+export * from './cardano-serialization-lib-web/cardano_serialization_lib.js'
