@@ -1,7 +1,6 @@
-/* eslint-disable */
 (globalThis as any)['cslInitialized'] = false
 
-import cslInit from './cardano-serialization-lib-web/cardano_serialization_lib'
+import cslInit from './cardano-serialization-lib-web/cardano_serialization_lib.js'
 
 (async () => {
 
@@ -9,4 +8,4 @@ import cslInit from './cardano-serialization-lib-web/cardano_serialization_lib'
 
 })()
 
-export * from './cardano-serialization-lib-web/cardano_serialization_lib'
+export * from './cardano-serialization-lib-web/cardano_serialization_lib.js'
