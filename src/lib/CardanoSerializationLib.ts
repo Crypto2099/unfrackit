@@ -1,3 +1,4 @@
+/* eslint-disable */
 (globalThis as any)['cslInitialized'] = false
 
 import cslInit from './cardano-serialization-lib-web/cardano_serialization_lib.js'

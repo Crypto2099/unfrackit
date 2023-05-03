@@ -201,7 +201,7 @@
 
 <script>
 import debounce from "lodash.debounce";
-import * as CSL from "./lib/CardanoSerializationLib.ts";
+import * as CSL from "./lib/CardanoSerializationLib.js";
 import axios from "axios";
 
 const analysis_format = {
