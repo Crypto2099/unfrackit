@@ -19,11 +19,12 @@
 
         <v-main>
             <v-container class="my-16">
-                <div class="mb-8">
-                    <h1 class="display-4">UnFrack.It</h1>
-                    <h2>Powered By
-                        <v-img :src="require('./assets/dripdropz.svg')" contain width="256" alt="DripDropz"></v-img>
-                    </h2>
+                <div class="mb-8 text-center text-md-start">
+                    <v-img :src="require('./assets/unfrackit.svg')" contain max-width="256" alt="UnFrack.It by DripDropz" class="mx-auto mx-md-0"></v-img>
+<!--                    <h1 class="display-2">UnFrack.It</h1>
+                    <h3>Powered By
+                        <v-img :src="require('./assets/dripdropz.svg')" contain width="128" alt="DripDropz" class="mx-auto mx-md-0"></v-img>
+                    </h3>-->
                 </div>
                 <template v-if="cardano.status === `init`">
                     <p>
@@ -36,59 +37,86 @@
                     </v-alert>
                 </template>
                 <template v-if="cardano.status === `found`">
-                    <v-btn color="primary" x-large @click="connectModal = true">
-                        Connect Wallet
-                    </v-btn>
+                    <div class="my-4 text-center text-md-start">
+                        <v-btn color="primary" x-large @click="connectModal = true">
+                            Connect Wallet
+                        </v-btn>
+                    </div>
+
                 </template>
                 <template v-if="cardano.status === `connected`">
-                    <v-row align="center" class="mb-4">
-                        <v-chip x-large label class="me-2 text-capitalize">
+                    <v-row align="center" justify="center" justify-md="start" class="mb-8">
+                        <v-chip label class="me-2 mb-2 text-capitalize py-2">
                             <v-img :src="cardano.ActiveWallet.icon" class="me-2" contain height="24" width="24"></v-img>
                             {{ cardano.ActiveWallet.name.replace(' Wallet', '') }} Connected
                         </v-chip>
                         <template v-if="network === 1">
-                            <v-chip label color="primary" class="me-2">
+                            <v-chip label color="primary" class="me-2 mb-2">
                                 MAINNET
                             </v-chip>
                         </template>
                         <template v-else-if="network === 0">
-                            <v-chip label color="red" dark class="me-2 text-uppercase" @click="chooseTestnet = true">
+                            <v-chip label color="red" dark class="me-2 mb-2 text-uppercase"
+                                    @click="chooseTestnet = true">
                                 {{ testnet }} TESTNET
                             </v-chip>
                         </template>
-                        <v-btn color="secondary" x-large @click="disconnect"
+                        <v-btn color="secondary" @click="disconnect" small class="mb-2"
                                :disabled="gettingUTxO || analyzingUTxO || (pendingTx !== null)">
                             Disconnect
                         </v-btn>
                     </v-row>
-                    <h3>UnFrackIt Settings</h3>
-                    <v-row align="center" class="mb-4">
-                        <v-col cols="12" class="mb-4 mt-12">
-                            <v-slider label="Bundle Size" min="1" max="60" thumb-label="always" persistent-hint
-                                      hint="Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens than bundle size will be split into multiple UTxO. Tokens from different policies will be collected up to 1/2 bundle size."
-                                      v-model="settings.bundleSize"></v-slider>
-                        </v-col>
-                        <v-col>
-                            <v-switch v-model="settings.isolateFungible" label="Isolate Fungible Tokens?"
-                                      persistent-hint
-                                      hint="Should fungible tokens be placed on their own, individual UTxO? This can decrease fees and errors when interacting with DEXes and paying with fungible tokens.">
-
-                            </v-switch>
-                        </v-col>
-                        <v-col>
-                            <v-switch v-model="settings.isolateNonfungible" label="Isolate Non-Fungible Tokens?"
-                                      persistent-hint
-                                      hint="Should non-fungible tokens be placed on their own, policy-specific individual UTxO? This can decrease fees and errors when interacting with marketplaces or sending NFTs."></v-switch>
-                        </v-col>
-                        <v-col>
-                            <v-switch v-model="settings.splitLovelace" label="Sub-Divide ADA-Only UTxO?" persistent-hint
-                                      hint="Should we break ADA-only UTxO down into smaller spendable UTxO? This can decrease fees and increase the wallet's capability to handle multiple concurrent payments"></v-switch>
-                        </v-col>
-                    </v-row>
+                    <v-card class="mb-8">
+                        <v-card-title>UnFrack.It Settings</v-card-title>
+                        <v-card-text>
+                            <v-row align="start">
+                                <v-col cols="12" class="mb-4 mt-6">
+                                    <v-slider label="Bundle Size" min="1" max="60" thumb-label="always" persistent-hint
+                                              hint="Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens than bundle size will be split into multiple UTxO. Tokens from different policies will be collected up to 1/2 bundle size."
+                                              v-model="settings.bundleSize"></v-slider>
+                                </v-col>
+                                <v-col cols="12" md="6">
+                                    <v-switch v-model="settings.isolateFungible"
+                                              label="Isolate Fungible Tokens"></v-switch>
+                                    <p>
+                                        Should we place each fungible token (by Policy ID) on its own, individual UTxO?
+                                        This can decrease fees and make building transactions easier when interacting
+                                        with DEXes or paying with fungible tokens. </p>
+                                </v-col>
+                                <v-col cols="12" md="6">
+                                    <v-switch v-model="settings.isolateNonfungible"
+                                              label="Isolate Non-Fungible Tokens"></v-switch>
+                                    <p>
+                                        Should non-fungible tokens (NFTs) be grouped and separated onto policy-specific
+                                        UTxO? This can decrease fees when interacting with marketplaces, staking
+                                        platforms, or sending tokens between wallets. </p>
+                                </v-col>
+                                <v-col cols="12" md="6">
+                                    <v-switch v-model="settings.splitLovelace"
+                                              label="Subdivide ADA-Only UTxO"></v-switch>
+                                    <p>
+                                        If there is leftover ADA included in the transaction (greater than 100 &#8371;),
+                                        we will subdivide the remaining balance into several separate UTxO by percentage
+                                        (50, 15, 10, 10, 5, 5, 5). This helps the wallet have multiple options when
+                                        spending ADA only on transactions to decrease fees and increase
+                                        parallelism. </p>
+                                </v-col>
+                                <v-col cols="12" md="6">
+                                    <v-switch v-model="settings.rollupLovelace"
+                                              label="Roll Up ADA-Only UTxO"></v-switch>
+                                    <p>
+                                        By default we will only collect ADA-only UTxO when needed to make additional
+                                        change for UTxO rebalancing. When this is turned on we will intentionally
+                                        attempt to collect as many ADA-only UTxO as possible and either lump them
+                                        together or subdivide them per the previous setting. </p>
+                                </v-col>
+                            </v-row>
+                        </v-card-text>
+                    </v-card>
                     <p v-if="stakeKey !== null">
-                        <strong>Connected Account:</strong> {{ stakeKey }} </p>
+                        <strong>Connected Account:</strong> <span style="word-break: break-all">{{ stakeKey }}</span></p>
                     <p v-if="changeAddress !== null">
-                        <strong>Change Address:</strong> {{ changeAddress.to_bech32() }} </p>
+                        <strong>Change Address:</strong> <span style="word-break: break-all">{{ changeAddress.to_bech32() }}</span></p>
                     <template v-if="gettingUTxO">
                         <h3>Checking wallet UTxO balance...</h3>
                         <v-progress-linear indeterminate height="24" class="mb-4"></v-progress-linear>
@@ -187,7 +215,7 @@
                         </li>
                     </ul>
                 </v-card-text>
-                <v-card-text class="text-center">
+                <v-card-text class="text-center" v-if="network === 1">
                     <template v-if="ProposedUTxO.addTip">
                         <p class="body-1">
                             Please choose a tip amount: </p>
@@ -228,8 +256,9 @@
 
 <script>
 import debounce from "lodash.debounce";
-import * as CSL from "./lib/CardanoSerializationLib.js";
+import * as CSL from "./lib/CardanoSerializationLib";
 import axios from "axios";
+import stringify from "fast-safe-stringify";
 
 const analysis_format = {
     lovelace: 0,
@@ -245,7 +274,8 @@ const default_settings = {
     extraADA: 5,
     isolateFungible: false,
     splitLovelace: true,
-    isolateNonfungible: false
+    isolateNonfungible: false,
+    rollupLovelace: true,
 };
 
 const default_proposed = {
@@ -283,8 +313,8 @@ export default {
         settings: null,
         unfrack: false,
         analyzedUTxO: [],
-        analysis: JSON.parse(JSON.stringify(analysis_format)),
-        ProposedUTxO: JSON.parse(JSON.stringify(default_proposed)),
+        analysis: JSON.parse(stringify(analysis_format)),
+        ProposedUTxO: JSON.parse(stringify(default_proposed)),
         inputTokens: [],
         pendingTx: null,
         watchingTx: null,
@@ -332,16 +362,16 @@ export default {
             this.UTxOSet = null;
             this.network = null;
             this.analyzedUTxO = [];
-            this.analysis = JSON.parse(JSON.stringify(analysis_format));
-            this.ProposedUTxO = JSON.parse(JSON.stringify(default_proposed));
+            this.analysis = JSON.parse(stringify(analysis_format));
+            this.ProposedUTxO = JSON.parse(stringify(default_proposed));
             this.changeWallet();
         },
         async checkWalletBalance() {
             this.gettingUTxO = true;
             this.UTxOSet = null;
             this.analyzedUTxO = [];
-            this.analysis = JSON.parse(JSON.stringify(analysis_format));
-            this.ProposedUTxO = JSON.parse(JSON.stringify(default_proposed));
+            this.analysis = JSON.parse(stringify(analysis_format));
+            this.ProposedUTxO = JSON.parse(stringify(default_proposed));
             this.UTxOSet = await this.getUTxO();
             this.gettingUTxO = false;
             await this.analyzeUTxO();
@@ -366,18 +396,18 @@ export default {
                 }
             }
 
-            this.ProposedUTxO.token_keep = 0;
+            this.ProposedUTxO.token_keep = BigInt(0);
 
             for (const output of this.ProposedUTxO.outputs_json) {
                 try {
-                    this.ProposedUTxO.token_keep += parseInt(output.amount.coin);
+                    this.ProposedUTxO.token_keep += BigInt(output.amount.coin);
                 } catch (e) {
                     console.error("Error attempting to add output coin amount!", e);
                 }
             }
 
             const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-            let estimated_fees = (tx_size * 52) + 155381;
+            let estimated_fees = BigInt((tx_size * 52) + 155381);
             let lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
 
             let iterations = 1;
@@ -395,16 +425,16 @@ export default {
                             this.ProposedUTxO.inputs_json[tx_id] = utxo_input;
                             this.ProposedUTxO.inputs.add_input(
                                 this.changeAddress,
-                                CSL.TransactionInput.from_json(JSON.stringify(utxo_input.input)),
-                                CSL.Value.from_json(JSON.stringify(utxo_input.output.amount))
+                                CSL.TransactionInput.from_json(stringify(utxo_input.input)),
+                                CSL.Value.from_json(stringify(utxo_input.output.amount))
                             );
                             let input_coin_amt;
                             try {
-                                input_coin_amt = parseInt(utxo_input.output.amount.coin);
+                                input_coin_amt = BigInt(utxo_input.output.amount.coin);
                             } catch (e) {
                                 console.error("Could not get input coin amount?", e);
                                 console.info(utxo_input);
-                                input_coin_amt = 0;
+                                input_coin_amt = BigInt(0);
                             }
                             this.ProposedUTxO.input_lovelace += input_coin_amt;
                         }
@@ -412,22 +442,23 @@ export default {
                 }
 
                 const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-                let estimated_fees = (tx_size * 52) + 155381;
+                let estimated_fees = BigInt((tx_size * 52) + 155381);
                 lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
             }
 
             if (lovelace_balance > 100000000 && this.settings.splitLovelace) {
-                const fee_increase = 420;
+                const fee_increase = BigInt(420);
                 estimated_fees += fee_increase;
                 lovelace_balance -= fee_increase;
+                const lovelace_to_split = parseInt(lovelace_balance);
                 const splits = [
-                    Math.floor(lovelace_balance * 0.5),
-                    Math.floor(lovelace_balance * 0.15),
-                    Math.floor(lovelace_balance * 0.1),
-                    Math.floor(lovelace_balance * 0.1),
-                    Math.floor(lovelace_balance * 0.05),
-                    Math.floor(lovelace_balance * 0.05),
-                    Math.floor(lovelace_balance * 0.05)
+                    Math.floor(lovelace_to_split * 0.5),
+                    Math.floor(lovelace_to_split * 0.15),
+                    Math.floor(lovelace_to_split * 0.1),
+                    Math.floor(lovelace_to_split * 0.1),
+                    Math.floor(lovelace_to_split * 0.05),
+                    Math.floor(lovelace_to_split * 0.05),
+                    Math.floor(lovelace_to_split * 0.05)
                 ];
 
                 let lovelace_split = 0;
@@ -436,7 +467,7 @@ export default {
                     lovelace_split += value;
                 }
 
-                const lovelace_remainder = lovelace_balance - lovelace_split;
+                const lovelace_remainder = lovelace_to_split - lovelace_split;
                 if (lovelace_remainder) {
                     splits[4] += lovelace_remainder;
                 }
@@ -454,7 +485,7 @@ export default {
                 }
 
             } else {
-                const fee_increase = 60;
+                const fee_increase = BigInt(60);
                 estimated_fees += fee_increase;
                 lovelace_balance -= fee_increase;
 
@@ -479,55 +510,80 @@ export default {
             } else {
                 unfrackit_address = 'addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv';
             }
-            if (this.ProposedUTxO.tip > 0) {
-                // Check if we already have a tip in the output sets... Don't want to add multiple tips!
-                const tip_amt = this.toLovelace(this.ProposedUTxO.tip);
-                let tip_found = false;
-                for (const output of this.ProposedUTxO.outputs_json) {
-                    if (output.address === unfrackit_address) {
-                        output.amount.coin = tip_amt;
-                        tip_found = true;
-                    }
-                }
-                if (!tip_found) {
-                    const output = CSL.TransactionOutputBuilder
-                        .new()
-                        .with_address(
-                            CSL.Address.from_bech32(unfrackit_address)
-                        ).next()
-                        .with_coin(
-                            CSL.BigNum.from_str(tip_amt.toString())
-                        ).build();
-                    this.ProposedUTxO.outputs.push(output);
-                    this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
-                } else {
-                    for (const i in this.ProposedUTxO.outputs) {
-                        const output = this.ProposedUTxO.outputs[i];
-                        if (output.address().to_bech32() === unfrackit_address) {
-                            output.amount().set_coin(CSL.BigNum.from_str(tip_amt.toString()));
+            if (this.network === 1) {
+                if (this.ProposedUTxO.tip > 0) {
+                    // Check if we already have a tip in the output sets... Don't want to add multiple tips!
+                    const tip_amt = this.toLovelace(this.ProposedUTxO.tip);
+                    let tip_found = false;
+                    for (const output of this.ProposedUTxO.outputs_json) {
+                        if (output.address === unfrackit_address) {
+                            output.amount.coin = tip_amt;
+                            tip_found = true;
                         }
                     }
-                }
+                    if (!tip_found) {
+                        const output = CSL.TransactionOutputBuilder
+                            .new()
+                            .with_address(
+                                CSL.Address.from_bech32(unfrackit_address)
+                            ).next()
+                            .with_coin(
+                                CSL.BigNum.from_str(tip_amt.toString())
+                            ).build();
+                        this.ProposedUTxO.outputs.push(output);
+                        this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
+                    } else {
+                        for (const i in this.ProposedUTxO.outputs) {
+                            const output = this.ProposedUTxO.outputs[i];
+                            if (output.address().to_bech32() === unfrackit_address) {
+                                output.amount().set_coin(CSL.BigNum.from_str(tip_amt.toString()));
+                            }
+                        }
+                    }
 
-                this.doBalanceTxn();
+                    this.doBalanceTxn();
+                } else {
+                    // Need to remove an output if we already added a tip previously
+                    for (const i in this.ProposedUTxO.outputs_json) {
+                        const output = this.ProposedUTxO.outputs_json[i];
+                        if (output.address === unfrackit_address) {
+                            this.ProposedUTxO.outputs_json.splice(i, 1);
+                        }
+                    }
+                    for (const j in this.ProposedUTxO.outputs) {
+                        const output = this.ProposedUTxO.outputs[j];
+                        if (output.address().to_bech32() === unfrackit_address) {
+                            this.ProposedUTxO.outputs.splice(j, 1);
+                        }
+                    }
+                    this.doBalanceTxn();
+                }
             } else {
-                // Need to remove an output if we already added a tip previously
-                for (const i in this.ProposedUTxO.outputs_json) {
-                    const output = this.ProposedUTxO.outputs_json[i];
-                    if (output.address === unfrackit_address) {
-                        this.ProposedUTxO.outputs_json.splice(i, 1);
-                    }
-                }
-                for (const j in this.ProposedUTxO.outputs) {
-                    const output = this.ProposedUTxO.outputs[j];
-                    if (output.address().to_bech32() === unfrackit_address) {
-                        this.ProposedUTxO.outputs.splice(j, 1);
-                    }
-                }
                 this.doBalanceTxn();
             }
 
             const txBuilder = await this.prepareTransaction();
+
+            const aux_data = CSL.AuxiliaryData.new();
+            const metadata = CSL.GeneralTransactionMetadata.new();
+            metadata.insert(
+                CSL.BigNum.from_str('674'),
+                CSL.encode_json_str_to_metadatum(stringify({
+                    msg: [
+                        "https://unfrack.it"
+                    ]
+                }))
+            );
+            aux_data.set_metadata(metadata);
+
+            txBuilder.add_json_metadatum(
+                CSL.BigNum.from_str('674'),
+                stringify({
+                    msg: [
+                        "https://unfrack.it"
+                    ]
+                })
+            );
 
             txBuilder.set_inputs(this.ProposedUTxO.inputs);
 
@@ -547,7 +603,7 @@ export default {
 
             const witnessSet = CSL.TransactionWitnessSet.new();
 
-            const tx = CSL.Transaction.new(txBuilt, witnessSet);
+            const tx = CSL.Transaction.new(txBuilt, witnessSet, aux_data);
 
             let witness;
             try {
@@ -570,7 +626,8 @@ export default {
             witnessSet.set_vkeys(totalVkeys);
             const signedTx = await CSL.Transaction.new(
                 tx.body(),
-                witnessSet
+                witnessSet,
+                tx.auxiliary_data()
             );
 
             try {
@@ -618,7 +675,7 @@ export default {
 
                     let quantity_diff = 0;
                     try {
-                        quantity_diff = parseInt(a.quantity) - parseInt(b.quantity);
+                        quantity_diff = BigInt(a.quantity.toString()) - BigInt(b.quantity.toString());
                     } catch (e) {
                         console.error("Could not generate quantity diff?", a.quantity, b.quantity);
                         throw e;
@@ -671,8 +728,8 @@ export default {
                                 continue;
                             }
 
-                            const input_amount = JSON.stringify(utxo_input.output.amount);
-                            const output_amount = JSON.stringify(JSON.parse(output.to_json()).amount);
+                            const input_amount = stringify(utxo_input.output.amount);
+                            const output_amount = stringify(JSON.parse(output.to_json()).amount);
 
                             if (input_amount === output_amount) {
                                 continue loopOutputs;
@@ -683,12 +740,12 @@ export default {
                                 this.ProposedUTxO.inputs_json[tx_id] = utxo_input;
                                 this.ProposedUTxO.inputs.add_input(
                                     this.changeAddress,
-                                    CSL.TransactionInput.from_json(JSON.stringify(utxo_input.input)),
-                                    CSL.Value.from_json(JSON.stringify(utxo_input.output.amount))
+                                    CSL.TransactionInput.from_json(stringify(utxo_input.input)),
+                                    CSL.Value.from_json(stringify(utxo_input.output.amount))
                                 );
                                 let input_coin_amt;
                                 try {
-                                    input_coin_amt = parseInt(utxo_input.output.amount.coin);
+                                    input_coin_amt = BigInt(utxo_input.output.amount.coin.toString());
                                 } catch (e) {
                                     console.error("Could not get input coin amount?", e);
                                     console.info(utxo_input);
@@ -733,8 +790,8 @@ export default {
             if (Object.entries(inputs).length === 1) {
                 const mock_input = Object.entries(inputs)[0][1];
 
-                const input_amount = JSON.stringify(mock_input.output.amount);
-                const output_amount = JSON.stringify(JSON.parse(mock_output.amount().to_json()));
+                const input_amount = stringify(mock_input.output.amount);
+                const output_amount = stringify(JSON.parse(mock_output.amount().to_json()));
 
                 if (input_amount === output_amount) {
                     console.log("UTxO already optimized...");
@@ -750,7 +807,10 @@ export default {
             for (let i = 0; i < this.UTxOSet.len(); i++) {
                 const UTxO = this.UTxOSet.get(i);
                 const JSONUTxO = JSON.parse(await UTxO.to_json());
-                this.analysis.lovelace += parseInt(JSONUTxO.output.amount.coin);
+                if (this.analysis.lovelace === undefined || typeof this.analysis.lovelace === "number") {
+                    this.analysis.lovelace = BigInt(0);
+                }
+                this.analysis.lovelace += BigInt(JSONUTxO.output.amount.coin.toString());
                 if (JSONUTxO.output.amount.multiasset !== null) {
                     for (const [policy, tokens] of Object.entries(JSONUTxO.output.amount.multiasset)) {
                         if (this.analysis.tokens[policy] === undefined) {
@@ -758,9 +818,9 @@ export default {
                         }
                         for (const [token_id, quantity] of Object.entries(tokens)) {
                             if (this.analysis.tokens[policy][token_id] === undefined) {
-                                this.analysis.tokens[policy][token_id] = 0;
+                                this.analysis.tokens[policy][token_id] = BigInt('0');
                             }
-                            this.analysis.tokens[policy][token_id] += parseInt(quantity);
+                            this.analysis.tokens[policy][token_id] += BigInt(quantity.toString());
                         }
                     }
                 }
@@ -847,6 +907,25 @@ export default {
                 }
             }
 
+            if (this.settings.rollupLovelace) {
+                for (const utxo_input of this.analyzedUTxO) {
+                    if (utxo_input.output.amount.multiasset === null) {
+                        // Is Lovelace-only UTxO
+                        const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
+                        if (mock.inputs[tx_id] === undefined) {
+                            mock.inputs[tx_id] = utxo_input;
+                        }
+                    }
+
+                    const size = this.calcTxSize(mock);
+
+                    if (size >= 15360) {
+                        console.log("Rolling up. Too large. We should stop now!", size);
+                        break;
+                    }
+
+                }
+            }
 
 
             this.calcTxSize(mock, true);
@@ -855,13 +934,17 @@ export default {
                     this.ProposedUTxO.inputs_json[txid] = input;
                     this.ProposedUTxO.inputs.add_input(
                         this.changeAddress,
-                        CSL.TransactionInput.from_json(JSON.stringify(input.input)),
-                        CSL.Value.from_json(JSON.stringify(input.output.amount))
+                        CSL.TransactionInput.from_json(stringify(input.input)),
+                        CSL.Value.from_json(stringify(input.output.amount))
                     );
-                    const input_coin_amt = parseInt(input.output.amount.coin);
+                    const input_coin_amt = BigInt(input.output.amount.coin);
+                    if (typeof this.ProposedUTxO.input_lovelace === "number") {
+                        this.ProposedUTxO.input_lovelace = BigInt(0);
+                    }
                     this.ProposedUTxO.input_lovelace += input_coin_amt;
                 }
             }
+            console.log(this.ProposedUTxO.input_lovelace);
             this.handleBundled(mock.outputs);
 
             if (this.ProposedUTxO.inputs.length === 0 || this.ProposedUTxO.outputs.length === 0) {
@@ -872,10 +955,13 @@ export default {
 
             this.ProposedUTxO.optimized = false;
 
+            if (typeof this.ProposedUTxO.token_keep === "number") {
+                this.ProposedUTxO.token_keep = BigInt(0);
+            }
 
             for (const output of this.ProposedUTxO.outputs_json) {
                 try {
-                    this.ProposedUTxO.token_keep += parseInt(output.amount.coin);
+                    this.ProposedUTxO.token_keep += BigInt(output.amount.coin);
                 } catch (e) {
                     console.error("Error attempting to add output coin amount!", e);
                 }
@@ -933,9 +1019,9 @@ export default {
                             backfill[policy_id] = {};
                         }
                         if (backfill[policy_id][token_id] === undefined) {
-                            backfill[policy_id][token_id] = 0;
+                            backfill[policy_id][token_id] = BigInt(0);
                         }
-                        backfill[policy_id][token_id] += parseInt(quantity);
+                        backfill[policy_id][token_id] += BigInt(quantity);
                     }
                     txn_size += policy_txn_size + policy_token_txn_size;
                 }
@@ -1161,7 +1247,7 @@ export default {
         if (localSettings !== null) {
             this.settings = localSettings;
         } else {
-            this.settings = JSON.parse(JSON.stringify(default_settings));
+            this.settings = JSON.parse(stringify(default_settings));
         }
         await this.checkForCardano();
     },
@@ -1178,7 +1264,7 @@ export default {
             if (newSettings === null) {
                 return;
             }
-            localStorage.setItem('UnFrackItSettings', JSON.stringify(newSettings));
+            localStorage.setItem('UnFrackItSettings', stringify(newSettings));
             if (this.cardano.status === 'connected') {
                 this.checkWalletBalance();
             }

@@ -124,9 +124,15 @@ export default {
           );
         },
         toAda(lovelace) {
+          if (typeof lovelace === "bigint") {
+            return lovelace / 1000000n;
+          }
           return lovelace / 1000000;
         },
         toLovelace(Ada) {
+          if (typeof Ada === "bigint") {
+            return Ada * 1000000n
+          }
           return Ada * 1000000;
         },
         toUint8Array(hexString) {

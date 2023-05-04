@@ -11,6 +11,7 @@
     "axios": "^1.4.0",
     "browserify-zlib": "^0.2.0",
     "core-js": "^3.8.3",
+    "fast-safe-stringify": "^2.1.1",
     "https-browserify": "^1.0.0",
     "lodash.debounce": "^4.0.8",
     "stream-http": "^3.2.0",
