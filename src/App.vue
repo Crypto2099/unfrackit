@@ -20,11 +20,12 @@
         <v-main>
             <v-container class="my-16">
                 <div class="mb-8 text-center text-md-start">
-                    <v-img :src="require('./assets/unfrackit.svg')" contain max-width="256" alt="UnFrack.It by DripDropz" class="mx-auto mx-md-0"></v-img>
-<!--                    <h1 class="display-2">UnFrack.It</h1>
-                    <h3>Powered By
-                        <v-img :src="require('./assets/dripdropz.svg')" contain width="128" alt="DripDropz" class="mx-auto mx-md-0"></v-img>
-                    </h3>-->
+                    <v-img :src="require('./assets/unfrackit.svg')" contain max-width="256"
+                           alt="UnFrack.It by DripDropz" class="mx-auto mx-md-0"></v-img>
+                    <!--                    <h1 class="display-2">UnFrack.It</h1>
+                                        <h3>Powered By
+                                            <v-img :src="require('./assets/dripdropz.svg')" contain width="128" alt="DripDropz" class="mx-auto mx-md-0"></v-img>
+                                        </h3>-->
                 </div>
                 <template v-if="cardano.status === `init`">
                     <p>
@@ -67,58 +68,61 @@
                         </v-btn>
                     </v-row>
                     <v-form :disabled="gettingUTxO || analyzingUTxO">
-                    <v-card class="mb-8">
-                        <v-card-title>UnFrack.It Settings</v-card-title>
-                        <v-card-text>
-                            <v-row align="start">
-                                <v-col cols="12" class="mb-4 mt-6">
-                                    <v-slider label="Bundle Size" min="1" max="60" thumb-label="always" persistent-hint
-                                              hint="Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens than bundle size will be split into multiple UTxO. Tokens from different policies will be collected up to 1/2 bundle size."
-                                              v-model="settings.bundleSize"></v-slider>
-                                </v-col>
-                                <v-col cols="12" md="6">
-                                    <v-switch v-model="settings.isolateFungible"
-                                              label="Isolate Fungible Tokens"></v-switch>
-                                    <p>
-                                        Should we place each fungible token (by Policy ID) on its own, individual UTxO?
-                                        This can decrease fees and make building transactions easier when interacting
-                                        with DEXes or paying with fungible tokens. </p>
-                                </v-col>
-                                <v-col cols="12" md="6">
-                                    <v-switch v-model="settings.isolateNonfungible"
-                                              label="Isolate Non-Fungible Tokens"></v-switch>
-                                    <p>
-                                        Should non-fungible tokens (NFTs) be grouped and separated onto policy-specific
-                                        UTxO? This can decrease fees when interacting with marketplaces, staking
-                                        platforms, or sending tokens between wallets. </p>
-                                </v-col>
-                                <v-col cols="12" md="6">
-                                    <v-switch v-model="settings.splitLovelace"
-                                              label="Subdivide ADA-Only UTxO"></v-switch>
-                                    <p>
-                                        If there is leftover ADA included in the transaction (greater than 100 &#8371;),
-                                        we will subdivide the remaining balance into several separate UTxO by percentage
-                                        (50, 15, 10, 10, 5, 5, 5). This helps the wallet have multiple options when
-                                        spending ADA only on transactions to decrease fees and increase
-                                        parallelism. </p>
-                                </v-col>
-                                <v-col cols="12" md="6">
-                                    <v-switch v-model="settings.rollupLovelace"
-                                              label="Roll Up ADA-Only UTxO"></v-switch>
-                                    <p>
-                                        By default we will only collect ADA-only UTxO when needed to make additional
-                                        change for UTxO rebalancing. When this is turned on we will intentionally
-                                        attempt to collect as many ADA-only UTxO as possible and either lump them
-                                        together or subdivide them per the previous setting. </p>
-                                </v-col>
-                            </v-row>
-                        </v-card-text>
-                    </v-card>
+                        <v-card class="mb-8">
+                            <v-card-title>UnFrack.It Settings</v-card-title>
+                            <v-card-text>
+                                <v-row align="start">
+                                    <v-col cols="12" class="mb-4 mt-6">
+                                        <v-slider label="Bundle Size" min="1" max="60" thumb-label="always"
+                                                  persistent-hint
+                                                  hint="Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens than bundle size will be split into multiple UTxO. Tokens from different policies will be collected up to 1/2 bundle size."
+                                                  v-model="settings.bundleSize"></v-slider>
+                                    </v-col>
+                                    <v-col cols="12" md="6">
+                                        <v-switch v-model="settings.isolateFungible"
+                                                  label="Isolate Fungible Tokens"></v-switch>
+                                        <p>
+                                            Should we place each fungible token (by Policy ID) on its own, individual
+                                            UTxO? This can decrease fees and make building transactions easier when
+                                            interacting with DEXes or paying with fungible tokens. </p>
+                                    </v-col>
+                                    <v-col cols="12" md="6">
+                                        <v-switch v-model="settings.isolateNonfungible"
+                                                  label="Isolate Non-Fungible Tokens"></v-switch>
+                                        <p>
+                                            Should non-fungible tokens (NFTs) be grouped and separated onto
+                                            policy-specific UTxO? This can decrease fees when interacting with
+                                            marketplaces, staking platforms, or sending tokens between wallets. </p>
+                                    </v-col>
+                                    <v-col cols="12" md="6">
+                                        <v-switch v-model="settings.splitLovelace"
+                                                  label="Subdivide ADA-Only UTxO"></v-switch>
+                                        <p>
+                                            If there is leftover ADA included in the transaction (greater than 100
+                                            &#8371;), we will subdivide the remaining balance into several separate UTxO
+                                            by percentage (50, 15, 10, 10, 5, 5, 5). This helps the wallet have multiple
+                                            options when spending ADA only on transactions to decrease fees and increase
+                                            parallelism. </p>
+                                    </v-col>
+                                    <v-col cols="12" md="6">
+                                        <v-switch v-model="settings.rollupLovelace"
+                                                  label="Roll Up ADA-Only UTxO"></v-switch>
+                                        <p>
+                                            By default we will only collect ADA-only UTxO when needed to make additional
+                                            change for UTxO rebalancing. When this is turned on we will intentionally
+                                            attempt to collect as many ADA-only UTxO as possible and either lump them
+                                            together or subdivide them per the previous setting. </p>
+                                    </v-col>
+                                </v-row>
+                            </v-card-text>
+                        </v-card>
                     </v-form>
                     <p v-if="stakeKey !== null">
-                        <strong>Connected Account:</strong> <span style="word-break: break-all">{{ stakeKey }}</span></p>
+                        <strong>Connected Account:</strong> <span style="word-break: break-all">{{ stakeKey }}</span>
+                    </p>
                     <p v-if="changeAddress !== null">
-                        <strong>Change Address:</strong> <span style="word-break: break-all">{{ changeAddress.to_bech32() }}</span></p>
+                        <strong>Change Address:</strong> <span
+                            style="word-break: break-all">{{ changeAddress.to_bech32() }}</span></p>
                     <template v-if="gettingUTxO">
                         <h3>Checking wallet UTxO balance...</h3>
                         <v-progress-linear indeterminate height="24" class="mb-4"></v-progress-linear>
@@ -170,11 +174,30 @@
 
         <v-footer>
             <v-container>
-                <p>
-                    Made with
-                    <v-icon color="red">mdi-heart</v-icon>
-                    by the team at <a href="https://dripdropz.io" target="_blank">DripDropz</a>
-                </p>
+                <v-row>
+                    <v-col>
+                        <p>
+                            Made with
+                            <v-icon color="red">mdi-heart</v-icon>
+                            by the team at <a href="https://dripdropz.io" target="_blank">DripDropz</a>
+                        </p>
+                    </v-col>
+                    <v-col class="text-start text-md-end">
+                        <p>
+                            Released without warranty as open source under <a
+                                href="https://creativecommons.org/licenses/by/4.0/" target="_blank"> CC-By-4.0
+                                                                                                     License</a> <br />
+                            <a href="https://github.com/crypto2099/unfrackit" target="_blank"> View Project on GitHub
+                                <v-icon>mdi-github</v-icon>
+                            </a>
+                        </p>
+                        <p>
+                            Version: {{ version.Major }}.{{ version.Minor }}.{{ version.Revision }}
+                            <v-chip small label color="primary">{{ version.Tag }}</v-chip>
+                        </p>
+                    </v-col>
+                </v-row>
+
             </v-container>
 
         </v-footer>
@@ -261,6 +284,7 @@ import debounce from "lodash.debounce";
 import * as CSL from "./lib/CardanoSerializationLib";
 import axios from "axios";
 import stringify from "fast-safe-stringify";
+import version from './version.json';
 
 const analysis_format = {
     lovelace: 0,
@@ -306,6 +330,7 @@ export default {
     components: {},
 
     data: () => ({
+        version: version,
         connectModal: false,
         analyzingUTxO: false,
         gettingUTxO: false,
@@ -905,6 +930,7 @@ export default {
             let size;
             const bail_size = 15360;
 
+            console.log("Parsing ideal fungibles...");
             for (const output of ideal_fungible_outputs) {
                 const inputs_needed = this.findNeededInputs(output);
                 if (inputs_needed === -1) {
@@ -927,8 +953,11 @@ export default {
                 }
 
             }
+            size = this.calcTxSize(mock);
+            console.log("Done parsing fungibles.", size);
 
             if (size < bail_size) {
+                console.log("Parsing Nonfungibles");
                 for (const output of ideal_nonfungible_outputs) {
                     const inputs_needed = this.findNeededInputs(output);
                     if (inputs_needed === -1) {
@@ -951,8 +980,11 @@ export default {
                     }
                 }
             }
+            size = this.calcTxSize(mock);
+            console.log("Done parsing nonfungibles.", size);
 
             if (size < bail_size) {
+                console.log("Rolling up ADA-only UTxO!");
                 if (this.settings.rollupLovelace) {
                     for (const utxo_input of this.analyzedUTxO) {
                         if (utxo_input.output.amount.multiasset === null) {
@@ -973,7 +1005,9 @@ export default {
                     }
                 }
             }
+            console.log("Done rolling up ADA-only UTxO!");
 
+            console.log("Back-filling any extra tokens included by inputs!");
             this.calcTxSize(mock, true);
 
             for (const [txid, input] of Object.entries(mock.inputs)) {
