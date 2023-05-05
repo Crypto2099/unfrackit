@@ -443,6 +443,7 @@ export default {
             while (lovelace_balance < 1000000n) {
                 console.log("Lovelace balance is less than 1A?");
                 if (iterations >= 100) {
+                    this.showError("Could not add enough free ADA to create a change balance!");
                     throw Error("Could not add enough change to balance!");
                 }
 
@@ -469,6 +470,10 @@ export default {
                         }
                     }
                 }
+                const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
+                estimated_fees = BigInt((tx_size * 52) + 155381);
+                lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+                iterations++;
             }
 
             if (lovelace_balance > 100000000 && this.settings.splitLovelace) {
