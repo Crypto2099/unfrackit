@@ -66,6 +66,7 @@
                             Disconnect
                         </v-btn>
                     </v-row>
+                    <v-form :disabled="gettingUTxO || analyzingUTxO">
                     <v-card class="mb-8">
                         <v-card-title>UnFrack.It Settings</v-card-title>
                         <v-card-text>
@@ -113,6 +114,7 @@
                             </v-row>
                         </v-card-text>
                     </v-card>
+                    </v-form>
                     <p v-if="stakeKey !== null">
                         <strong>Connected Account:</strong> <span style="word-break: break-all">{{ stakeKey }}</span></p>
                     <p v-if="changeAddress !== null">
@@ -346,12 +348,33 @@ export default {
             });
         },
         async connectTo(wallet) {
-            await this.connect(wallet);
-            this.stakeKey = await this.getStakeKey();
-            this.changeAddress = await this.getChangeAddress();
-            this.network = await this.getWalletNetwork();
-            if (this.network === 0) {
-                this.chooseTestnet = true;
+            try {
+                await this.connect(wallet);
+            } catch (e) {
+                this.showError(`Could not connect to your wallet? Make sure you have a dApp account selected!`);
+                return;
+            }
+
+            try {
+                this.stakeKey = await this.getStakeKey();
+            } catch (e) {
+                console.error("Could not fetch stake key?");
+            }
+
+            try {
+                this.changeAddress = await this.getChangeAddress();
+            } catch (e) {
+                console.error("Could not fetch the wallet's change address?");
+                return;
+            }
+
+            try {
+                this.network = await this.getWalletNetwork();
+                if (this.network === 0) {
+                    this.chooseTestnet = true;
+                }
+            } catch (e) {
+                console.error("Could not detect the wallet's connected network?");
             }
             this.connectModal = false;
             await this.checkWalletBalance();
@@ -408,11 +431,17 @@ export default {
 
             const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
             let estimated_fees = BigInt((tx_size * 52) + 155381);
+
+            console.log("Estimated fees are", estimated_fees);
+
             let lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+
+            console.log("Lovelace Balance", lovelace_balance);
 
             let iterations = 1;
 
-            while (lovelace_balance < 1000000) {
+            while (lovelace_balance < 1000000n) {
+                console.log("Lovelace balance is less than 1A?");
                 if (iterations >= 100) {
                     throw Error("Could not add enough change to balance!");
                 }
@@ -428,22 +457,18 @@ export default {
                                 CSL.TransactionInput.from_json(stringify(utxo_input.input)),
                                 CSL.Value.from_json(stringify(utxo_input.output.amount))
                             );
-                            let input_coin_amt;
-                            try {
-                                input_coin_amt = BigInt(utxo_input.output.amount.coin);
-                            } catch (e) {
-                                console.error("Could not get input coin amount?", e);
-                                console.info(utxo_input);
-                                input_coin_amt = BigInt(0);
-                            }
+                            const input_coin_amt = BigInt(utxo_input.output.amount.coin);
                             this.ProposedUTxO.input_lovelace += input_coin_amt;
+
+                            const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
+                            estimated_fees = BigInt((tx_size * 52) + 155381);
+                            lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+                            if (lovelace_balance >= 1000000n) {
+                                break;
+                            }
                         }
                     }
                 }
-
-                const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-                let estimated_fees = BigInt((tx_size * 52) + 155381);
-                lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
             }
 
             if (lovelace_balance > 100000000 && this.settings.splitLovelace) {
@@ -485,6 +510,7 @@ export default {
                 }
 
             } else {
+                console.log("Dumping all remaining lovelace...");
                 const fee_increase = BigInt(60);
                 estimated_fees += fee_increase;
                 lovelace_balance -= fee_increase;
@@ -522,6 +548,7 @@ export default {
                         }
                     }
                     if (!tip_found) {
+                        console.log("Adding new tip");
                         const output = CSL.TransactionOutputBuilder
                             .new()
                             .with_address(
@@ -533,6 +560,7 @@ export default {
                         this.ProposedUTxO.outputs.push(output);
                         this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
                     } else {
+                        console.log("Updating existing tip");
                         for (const i in this.ProposedUTxO.outputs) {
                             const output = this.ProposedUTxO.outputs[i];
                             if (output.address().to_bech32() === unfrackit_address) {
@@ -541,8 +569,8 @@ export default {
                         }
                     }
 
-                    this.doBalanceTxn();
                 } else {
+                    console.log("Removing existing tip");
                     // Need to remove an output if we already added a tip previously
                     for (const i in this.ProposedUTxO.outputs_json) {
                         const output = this.ProposedUTxO.outputs_json[i];
@@ -556,11 +584,11 @@ export default {
                             this.ProposedUTxO.outputs.splice(j, 1);
                         }
                     }
-                    this.doBalanceTxn();
                 }
-            } else {
-                this.doBalanceTxn();
             }
+
+            console.log("Attempting to balance transaction");
+            this.doBalanceTxn();
 
             const txBuilder = await this.prepareTransaction();
 
@@ -585,13 +613,21 @@ export default {
                 })
             );
 
+            console.log("Added metadata");
+
             txBuilder.set_inputs(this.ProposedUTxO.inputs);
+
+            console.log("Set inputs");
 
             for (const output of this.ProposedUTxO.outputs) {
                 txBuilder.add_output(output);
             }
 
+            console.log("Added outputs!");
+
             txBuilder.set_fee(CSL.BigNum.from_str(this.ProposedUTxO.fees.toString()));
+
+            console.log("Set fees");
 
             let txBuilt;
             try {
@@ -708,12 +744,12 @@ export default {
             loopOutputs: for (const output_tokens of token_outputs) {
                 const output = this.makeOutput(output_tokens);
 
-                const bail_out_level = 1024;
-                const tx_size = this.estimateSize(this.ProposedUTxO);
-                if (tx_size < bail_out_level) {
-                    console.log("We don't have room to process anymore! Bail out!");
-                    break;
-                }
+                // const bail_out_level = 1024;
+                // const tx_size = this.estimateSize(this.ProposedUTxO);
+                // if (tx_size < bail_out_level) {
+                //     console.log("We don't have room to process anymore! Bail out!");
+                //     break;
+                // }
 
                 if (add_inputs === true) {
                     for (const token of output_tokens) {
@@ -878,7 +914,7 @@ export default {
                 const size = this.calcTxSize(mock);
 
                 if (size >= 15360) {
-                    console.log("Size is too large, we should stop now!", size);
+                    console.log("Parsing Fungibles. Size is too large, we should stop now!", size);
                     break;
                 }
 
@@ -901,7 +937,7 @@ export default {
                 const size = this.calcTxSize(mock);
 
                 if (size >= 15360) {
-                    console.log("Size is too large, we should stop now!", size);
+                    console.log("Parsing Nonfungibles. Size is too large, we should stop now!", size);
                     // this.calcTxSize(mock, true);
                     break;
                 }
@@ -927,8 +963,8 @@ export default {
                 }
             }
 
-
             this.calcTxSize(mock, true);
+
             for (const [txid, input] of Object.entries(mock.inputs)) {
                 if (this.ProposedUTxO.inputs_json[txid] === undefined) {
                     this.ProposedUTxO.inputs_json[txid] = input;
@@ -944,7 +980,8 @@ export default {
                     this.ProposedUTxO.input_lovelace += input_coin_amt;
                 }
             }
-            console.log(this.ProposedUTxO.input_lovelace);
+
+            // console.log(this.ProposedUTxO.input_lovelace);
             this.handleBundled(mock.outputs);
 
             if (this.ProposedUTxO.inputs.length === 0 || this.ProposedUTxO.outputs.length === 0) {
@@ -1035,7 +1072,7 @@ export default {
 
                 for (const [policy_id, tokens] of Object.entries(backfill)) {
                     for (const [token_id, quantity] of Object.entries(tokens)) {
-                        if (quantity > 1) {
+                        if (quantity > 1n) {
                             if (backfill_fungible[policy_id] === undefined) {
                                 backfill_fungible[policy_id] = {};
                             }
