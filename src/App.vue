@@ -740,8 +740,8 @@ export default {
 
             return all_tokens;
         },
-        handleBundled(token_outputs, add_inputs) {
-            loopOutputs: for (const output_tokens of token_outputs) {
+        handleBundled(token_outputs) {
+            for (const output_tokens of token_outputs) {
                 const output = this.makeOutput(output_tokens);
 
                 // const bail_out_level = 1024;
@@ -751,48 +751,48 @@ export default {
                 //     break;
                 // }
 
-                if (add_inputs === true) {
-                    for (const token of output_tokens) {
-                        for (const utxo_input of this.analyzedUTxO) {
-                            if (utxo_input.output.amount.multiasset === null) {
-                                continue;
-                            }
-                            if (utxo_input.output.amount.multiasset[token.policy_id] === undefined) {
-                                continue;
-                            }
-                            if (utxo_input.output.amount.multiasset[token.policy_id][token.token_id] === undefined) {
-                                continue;
-                            }
-
-                            const input_amount = stringify(utxo_input.output.amount);
-                            const output_amount = stringify(JSON.parse(output.to_json()).amount);
-
-                            if (input_amount === output_amount) {
-                                continue loopOutputs;
-                            }
-
-                            const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
-                            if (this.ProposedUTxO.inputs_json[tx_id] === undefined) {
-                                this.ProposedUTxO.inputs_json[tx_id] = utxo_input;
-                                this.ProposedUTxO.inputs.add_input(
-                                    this.changeAddress,
-                                    CSL.TransactionInput.from_json(stringify(utxo_input.input)),
-                                    CSL.Value.from_json(stringify(utxo_input.output.amount))
-                                );
-                                let input_coin_amt;
-                                try {
-                                    input_coin_amt = BigInt(utxo_input.output.amount.coin.toString());
-                                } catch (e) {
-                                    console.error("Could not get input coin amount?", e);
-                                    console.info(utxo_input);
-                                    input_coin_amt = 0;
-                                }
-                                this.ProposedUTxO.input_lovelace += input_coin_amt;
-                            }
-
-                        }
-                    }
-                }
+                // if (add_inputs === true) {
+                //     for (const token of output_tokens) {
+                //         for (const utxo_input of this.analyzedUTxO) {
+                //             if (utxo_input.output.amount.multiasset === null) {
+                //                 continue;
+                //             }
+                //             if (utxo_input.output.amount.multiasset[token.policy_id] === undefined) {
+                //                 continue;
+                //             }
+                //             if (utxo_input.output.amount.multiasset[token.policy_id][token.token_id] === undefined) {
+                //                 continue;
+                //             }
+                //
+                //             const input_amount = stringify(utxo_input.output.amount);
+                //             const output_amount = stringify(JSON.parse(output.to_json()).amount);
+                //
+                //             if (input_amount === output_amount) {
+                //                 continue loopOutputs;
+                //             }
+                //
+                //             const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
+                //             if (this.ProposedUTxO.inputs_json[tx_id] === undefined) {
+                //                 this.ProposedUTxO.inputs_json[tx_id] = utxo_input;
+                //                 this.ProposedUTxO.inputs.add_input(
+                //                     this.changeAddress,
+                //                     CSL.TransactionInput.from_json(stringify(utxo_input.input)),
+                //                     CSL.Value.from_json(stringify(utxo_input.output.amount))
+                //                 );
+                //                 let input_coin_amt;
+                //                 try {
+                //                     input_coin_amt = BigInt(utxo_input.output.amount.coin.toString());
+                //                 } catch (e) {
+                //                     console.error("Could not get input coin amount?", e);
+                //                     console.info(utxo_input);
+                //                     input_coin_amt = 0;
+                //                 }
+                //                 this.ProposedUTxO.input_lovelace += input_coin_amt;
+                //             }
+                //
+                //         }
+                //     }
+                // }
 
                 this.ProposedUTxO.outputs.push(output);
                 this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
@@ -897,6 +897,9 @@ export default {
                 outputs: []
             };
 
+            let size;
+            const bail_size = 15360;
+
             for (const output of ideal_fungible_outputs) {
                 const inputs_needed = this.findNeededInputs(output);
                 if (inputs_needed === -1) {
@@ -911,55 +914,58 @@ export default {
                     }
                 }
 
-                const size = this.calcTxSize(mock);
+                size = this.calcTxSize(mock);
 
-                if (size >= 15360) {
+                if (size >= bail_size) {
                     console.log("Parsing Fungibles. Size is too large, we should stop now!", size);
                     break;
                 }
 
             }
 
-            for (const output of ideal_nonfungible_outputs) {
-                const inputs_needed = this.findNeededInputs(output);
-                if (inputs_needed === -1) {
-                    continue;
-                }
-
-                mock.outputs.push(output);
-
-                for (const [txid, input] of Object.entries(inputs_needed)) {
-                    if (mock.inputs[txid] === undefined) {
-                        mock.inputs[txid] = input;
+            if (size < bail_size) {
+                for (const output of ideal_nonfungible_outputs) {
+                    const inputs_needed = this.findNeededInputs(output);
+                    if (inputs_needed === -1) {
+                        continue;
                     }
-                }
 
-                const size = this.calcTxSize(mock);
+                    mock.outputs.push(output);
 
-                if (size >= 15360) {
-                    console.log("Parsing Nonfungibles. Size is too large, we should stop now!", size);
-                    // this.calcTxSize(mock, true);
-                    break;
-                }
-            }
-
-            if (this.settings.rollupLovelace) {
-                for (const utxo_input of this.analyzedUTxO) {
-                    if (utxo_input.output.amount.multiasset === null) {
-                        // Is Lovelace-only UTxO
-                        const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
-                        if (mock.inputs[tx_id] === undefined) {
-                            mock.inputs[tx_id] = utxo_input;
+                    for (const [txid, input] of Object.entries(inputs_needed)) {
+                        if (mock.inputs[txid] === undefined) {
+                            mock.inputs[txid] = input;
                         }
                     }
 
-                    const size = this.calcTxSize(mock);
+                    size = this.calcTxSize(mock);
 
-                    if (size >= 15360) {
-                        console.log("Rolling up. Too large. We should stop now!", size);
+                    if (size >= bail_size) {
+                        console.log("Parsing Nonfungibles. Size is too large, we should stop now!", size);
                         break;
                     }
+                }
+            }
 
+            if (size < bail_size) {
+                if (this.settings.rollupLovelace) {
+                    for (const utxo_input of this.analyzedUTxO) {
+                        if (utxo_input.output.amount.multiasset === null) {
+                            // Is Lovelace-only UTxO
+                            const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
+                            if (mock.inputs[tx_id] === undefined) {
+                                mock.inputs[tx_id] = utxo_input;
+                            }
+                        }
+
+                        size = this.calcTxSize(mock);
+
+                        if (size >= bail_size) {
+                            console.log("Rolling up. Too large. We should stop now!", size);
+                            break;
+                        }
+
+                    }
                 }
             }
 
