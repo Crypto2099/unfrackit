@@ -993,7 +993,7 @@ export default {
             size = this.calcTxSize(mock);
             console.log("Done parsing nonfungibles.", size);
 
-            if (size < (bail_size - 800)) {
+            if (size < (bail_size - 1000)) {
                 console.log("Rolling up ADA-only UTxO!");
                 if (this.settings.rollupLovelace) {
                     for (const utxo_input of this.analyzedUTxO) {
@@ -1007,7 +1007,7 @@ export default {
 
                         size = this.calcTxSize(mock);
 
-                        if (size >= (bail_size - 800)) {
+                        if (size >= (bail_size - 1000)) {
                             console.log("Rolling up. Too large. We should stop now!", size);
                             break;
                         }
