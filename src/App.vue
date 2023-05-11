@@ -420,7 +420,17 @@ export default {
             this.analyzedUTxO = [];
             this.analysis = JSON.parse(stringify(analysis_format));
             this.ProposedUTxO = JSON.parse(stringify(default_proposed));
-            this.UTxOSet = await this.getUTxO();
+            const page_max = 5;
+            let curr_page = 0;
+            this.UTxOSet = CSL.TransactionUnspentOutputs.new();
+            while (curr_page < page_max) {
+                const UTxOs = await this.cardano.Wallet.getUtxos(undefined, {
+                    page: curr_page,
+                    limit: 100
+                });
+                (UTxOs).map((utxo) => this.UTxOSet.add(CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo))));
+                curr_page++;
+            }
             this.gettingUTxO = false;
             await this.analyzeUTxO();
         },
@@ -983,7 +993,7 @@ export default {
             size = this.calcTxSize(mock);
             console.log("Done parsing nonfungibles.", size);
 
-            if (size < bail_size) {
+            if (size < (bail_size - 800)) {
                 console.log("Rolling up ADA-only UTxO!");
                 if (this.settings.rollupLovelace) {
                     for (const utxo_input of this.analyzedUTxO) {
@@ -997,7 +1007,7 @@ export default {
 
                         size = this.calcTxSize(mock);
 
-                        if (size >= bail_size) {
+                        if (size >= (bail_size - 800)) {
                             console.log("Rolling up. Too large. We should stop now!", size);
                             break;
                         }
@@ -1029,7 +1039,8 @@ export default {
             // console.log(this.ProposedUTxO.input_lovelace);
             this.handleBundled(mock.outputs);
 
-            if (this.ProposedUTxO.inputs.length === 0 || this.ProposedUTxO.outputs.length === 0) {
+            if (this.ProposedUTxO.inputs.len() === 0 && this.ProposedUTxO.outputs.length === 0) {
+                console.log("Wallet optimized?", this.ProposedUTxO.inputs.len(), this.ProposedUTxO.outputs.length);
                 this.ProposedUTxO.optimized = true;
                 this.analyzingUTxO = false;
                 return;

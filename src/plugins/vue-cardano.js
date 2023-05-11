@@ -335,9 +335,9 @@ export default {
 
           return this.cardano.protocol_parameters;
         },
-        async getUTxO() {
+        async getUTxO(pagination) {
           const UTxO = CSL.TransactionUnspentOutputs.new();
-          const walletUTxO = await this.cardano.Wallet.getUtxos();
+          const walletUTxO = await this.cardano.Wallet.getUtxos(undefined, pagination);
           walletUTxO.map((utxo) => {
             UTxO.add(
                 CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo))
