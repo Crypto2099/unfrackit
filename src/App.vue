@@ -286,6 +286,13 @@ import axios from "axios";
 import stringify from "fast-safe-stringify";
 import version from './version.json';
 
+class Paginate {
+    constructor(page, limit) {
+        this.page = page;
+        this.limit = limit;
+    }
+}
+
 const analysis_format = {
     lovelace: 0,
     total_tokens: 0,
@@ -421,15 +428,15 @@ export default {
             this.analysis = JSON.parse(stringify(analysis_format));
             this.ProposedUTxO = JSON.parse(stringify(default_proposed));
             const page_max = 5;
-            let curr_page = 0;
             this.UTxOSet = CSL.TransactionUnspentOutputs.new();
-            while (curr_page < page_max) {
-                const UTxOs = await this.cardano.Wallet.getUtxos(undefined, {
-                    page: curr_page,
-                    limit: 100
-                });
+            const page = new Paginate(0, 100);
+            while (page.page < page_max) {
+                const UTxOs = await this.cardano.Wallet.getUtxos(undefined, page);
+                if (UTxOs === null) {
+                    break;
+                }
                 (UTxOs).map((utxo) => this.UTxOSet.add(CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo))));
-                curr_page++;
+                page.page++;
             }
             this.gettingUTxO = false;
             await this.analyzeUTxO();
