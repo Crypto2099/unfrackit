@@ -2,11 +2,6 @@
     <v-app>
         <v-app-bar app color="primary" dark>
             <v-container class="d-flex">
-                <div class="d-flex align-center">
-                    <v-icon class="me-2">mdi-lan</v-icon>
-                    UnFrack.It
-                </div>
-
                 <v-spacer></v-spacer>
 
                 <v-btn href="https://github.com/crypto2099/unfrackit/releases/latest/" target="_blank" text>
@@ -20,12 +15,13 @@
         <v-main>
             <v-container class="my-16">
                 <div class="mb-8 text-center text-md-start">
-                    <v-img :src="require('./assets/unfrackit.svg')" contain max-width="256"
-                           alt="UnFrack.It by DripDropz" class="mx-auto mx-md-0"></v-img>
-                    <!--                    <h1 class="display-2">UnFrack.It</h1>
-                                        <h3>Powered By
-                                            <v-img :src="require('./assets/dripdropz.svg')" contain width="128" alt="DripDropz" class="mx-auto mx-md-0"></v-img>
-                                        </h3>-->
+                    <v-img :src="require('./assets/unfrackit.svg')" contain max-width="512"
+                           alt="UnFrack.It by DripDropz" class="mx-auto mx-md-0 mb-8"></v-img>
+                    <p class="text-start" style="font-family: 'Times New Roman', serif; font-size: 1.5rem; line-height: 1.5em;">
+                        <strong><em>(verb)</em></strong><br /><br />
+                        To modify and optimize your (Cardano) wallet so you get cheaper transactions and fewer errors.
+                        <br /><br />(see also: <strong>Unlock Peak Degeneracy</strong>)
+                    </p>
                 </div>
                 <template v-if="cardano.status === `init`">
                     <p>
