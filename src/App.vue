@@ -424,14 +424,18 @@ export default {
             this.analysis = JSON.parse(stringify(analysis_format));
             this.ProposedUTxO = JSON.parse(stringify(default_proposed));
             const page_max = 5;
+            const page_limit = 100;
             this.UTxOSet = CSL.TransactionUnspentOutputs.new();
-            const page = new Paginate(0, 100);
+            const page = new Paginate(0, page_limit);
             while (page.page < page_max) {
                 const UTxOs = await this.cardano.Wallet.getUtxos(undefined, page);
                 if (UTxOs === null) {
                     break;
                 }
                 (UTxOs).map((utxo) => this.UTxOSet.add(CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo))));
+                if (UTxOs.length < page_limit) {
+                    break;
+                }
                 page.page++;
             }
             this.gettingUTxO = false;
@@ -941,7 +945,7 @@ export default {
             };
 
             let size;
-            const bail_size = 15360;
+            const bail_size = 14336;
 
             console.log("Parsing ideal fungibles...");
             for (const output of ideal_fungible_outputs) {
