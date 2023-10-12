@@ -70,42 +70,52 @@
                 <v-btn color="primary" @click="resetSettings" small class="ms-2">Reset to Default</v-btn>
               </v-card-title>
               <v-card-text>
-                <v-row align="start">
-                  <v-col cols="12" class="mb-4 mt-6">
-                    <v-slider label="Bundle Size" min="1" max="60" thumb-label="always" persistent-hint
-                              hint="Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens than bundle size will be split into multiple UTxO. Tokens from different policies will be collected up to 1/2 bundle size."
-                              v-model="settings.bundleSize"></v-slider>
-                  </v-col>
-                  <v-col cols="12" md="6">
-                    <v-switch v-model="settings.isolateFungible" label="Isolate Fungible Tokens"></v-switch>
-                    <p>
-                      Should we place each fungible token (by Policy ID) on its own, individual UTxO? This can decrease
-                      fees and make building transactions easier when interacting with DEXes or paying with fungible
-                      tokens. </p>
-                  </v-col>
-                  <v-col cols="12" md="6">
-                    <v-switch v-model="settings.isolateNonfungible" label="Isolate Non-Fungible Tokens"></v-switch>
-                    <p>
-                      Should non-fungible tokens (NFTs) be grouped and separated onto policy-specific UTxO? This can
-                      decrease fees when interacting with marketplaces, staking platforms, or sending tokens between
-                      wallets. </p>
-                  </v-col>
-                  <v-col cols="12" md="6">
-                    <v-switch v-model="settings.splitLovelace" label="Subdivide ADA-Only UTxO"></v-switch>
-                    <p>
-                      If there is leftover ADA included in the transaction (greater than 100 &#8371;), we will subdivide
-                      the remaining balance into several separate UTxO by percentage (50, 15, 10, 10, 5, 5, 5). This
-                      helps the wallet have multiple options when spending ADA only on transactions to decrease fees and
-                      increase parallelism. </p>
-                  </v-col>
-                  <v-col cols="12" md="6">
-                    <v-switch v-model="settings.rollupLovelace" label="Roll Up ADA-Only UTxO"></v-switch>
-                    <p>
-                      By default we will only collect ADA-only UTxO when needed to make additional change for UTxO
-                      rebalancing. When this is turned on we will intentionally attempt to collect as many ADA-only UTxO
-                      as possible and either lump them together or subdivide them per the previous setting. </p>
-                  </v-col>
-                </v-row>
+                <v-form ref="settings" @submit.prevent="checkWalletBalance" :disabled="gettingUTxO || analyzingUTxO">
+                  <v-row align="start">
+                    <v-col cols="12" md="6" class=" mt-6">
+                      <v-slider label="Bundle Size" min="10" step="5" max="60" thumb-label="always"
+                                v-model="settings.bundleSize"></v-slider>
+                      <p>
+                        Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens
+                        than bundle size will be split into multiple UTxO. Tokens from different policies will be
+                        collected up to 1/2 bundle size. </p>
+                    </v-col>
+                    <v-col cols="12" md="6" class=""></v-col>
+                    <v-col cols="12" md="6" class="">
+                      <v-switch v-model="settings.isolateFungible" label="Isolate Fungible Tokens"></v-switch>
+                      <p>
+                        Should we place each fungible token (by Policy ID) on its own, individual UTxO? This can
+                        decrease fees and make building transactions easier when interacting with DEXes or paying with
+                        fungible tokens. </p>
+                    </v-col>
+                    <v-col cols="12" md="6" class="">
+                      <v-switch v-model="settings.isolateNonfungible" label="Isolate Non-Fungible Tokens"></v-switch>
+                      <p>
+                        Should non-fungible tokens (NFTs) be grouped and separated onto policy-specific UTxO? This can
+                        decrease fees when interacting with marketplaces, staking platforms, or sending tokens between
+                        wallets. </p>
+                    </v-col>
+                    <v-col cols="12" md="6" class="">
+                      <v-switch v-model="settings.splitLovelace" label="Subdivide ADA-Only UTxO"></v-switch>
+                      <p>
+                        If there is leftover ADA included in the transaction (greater than 100 &#8371;), we will
+                        subdivide the remaining balance into several separate UTxO by percentage (50, 15, 10, 10, 5, 5,
+                        5). This helps the wallet have multiple options when spending ADA only on transactions to
+                        decrease fees and increase parallelism. </p>
+                    </v-col>
+                    <v-col cols="12" md="6" class="">
+                      <v-switch v-model="settings.rollupLovelace" label="Roll Up ADA-Only UTxO"></v-switch>
+                      <p>
+                        By default we will only collect ADA-only UTxO when needed to make additional change for UTxO
+                        rebalancing. When this is turned on we will intentionally attempt to collect as many ADA-only
+                        UTxO as possible and either lump them together or subdivide them per the previous setting. </p>
+                    </v-col>
+                    <v-col cols="12" md="6" class="">
+                      <v-btn type="submit" color="primary" :disabled="gettingUTxO || analyzingUTxO">Update Settings
+                      </v-btn>
+                    </v-col>
+                  </v-row>
+                </v-form>
               </v-card-text>
             </v-card>
           </v-form>
@@ -282,7 +292,7 @@
 </template>
 
 <script>
-import debounce from "lodash.debounce";
+// import debounce from "lodash.debounce";
 import * as CSL from "./lib/CardanoSerializationLib";
 import axios from "axios";
 import stringify from "fast-safe-stringify";
@@ -351,6 +361,7 @@ export default {
     analyzedUTxO: [],
     analysis: JSON.parse(stringify(analysis_format)),
     ProposedUTxO: JSON.parse(stringify(default_proposed)),
+    inputs: [],
     inputTokens: [],
     pendingTx: null,
     pendingConfirmations: 0,
@@ -425,9 +436,11 @@ export default {
       this.changeWallet();
     },
     async checkWalletBalance() {
+      localStorage.setItem('UnFrackItSettings', stringify(this.settings));
       this.gettingUTxO = true;
       this.UTxOSet = null;
       this.analyzedUTxO = [];
+      this.inputs = [];
       this.analysis = JSON.parse(stringify(analysis_format));
       this.ProposedUTxO = JSON.parse(stringify(default_proposed));
       const page_max = 5;
@@ -441,7 +454,15 @@ export default {
           // console.log(`UTxOs is null somehow?`, UTxOs);
           break;
         }
-        (UTxOs).map((utxo) => this.UTxOSet.add(CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo))));
+        (UTxOs).map((utxo) => {
+          const UTxO = CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo));
+          const txin = UTxO.input().transaction_id().to_hex() + '#' + UTxO.input().index();
+          if (this.inputs.includes(txin)) {
+            return;
+          }
+          this.inputs.push(txin);
+          this.UTxOSet.add(UTxO);
+        });
         // console.log(`UTxO length? ${UTxOs.length}`);
         if (UTxOs.length < page_limit) {
           break;
@@ -482,9 +503,9 @@ export default {
       }
 
       const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-      let estimated_fees = BigInt((tx_size * 52) + 155381);
+      let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
 
-      console.log("Estimated fees are", estimated_fees);
+      console.log("Estimated fees are", estimated_fees, tx_size);
 
       let lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
 
@@ -513,7 +534,10 @@ export default {
               this.ProposedUTxO.input_lovelace += input_coin_amt;
 
               const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-              estimated_fees = BigInt((tx_size * 52) + 155381);
+              let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+
+              console.log("Estimated fees are", estimated_fees, tx_size);
+
               lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
               if (lovelace_balance >= 1000000n) {
                 break;
@@ -522,14 +546,16 @@ export default {
           }
         }
         const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-        estimated_fees = BigInt((tx_size * 52) + 155381);
+        let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+
+        console.log("Estimated fees are", estimated_fees, tx_size);
         lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
         iterations++;
       }
 
       if (lovelace_balance > 100000000 && this.settings.splitLovelace) {
         console.log(`Splitting lovelace balance... ${lovelace_balance}`);
-        const fee_increase = BigInt(420);
+        const fee_increase = BigInt(430);
         estimated_fees += fee_increase;
         lovelace_balance -= fee_increase;
         const lovelace_to_split = parseInt(lovelace_balance);
@@ -568,7 +594,7 @@ export default {
 
       } else {
         console.log("Dumping all remaining lovelace...");
-        const fee_increase = BigInt(60);
+        const fee_increase = BigInt(70);
         estimated_fees += fee_increase;
         lovelace_balance -= fee_increase;
 
@@ -966,6 +992,14 @@ export default {
           continue;
         }
 
+        const output_size = this.getOutputSize(output);
+        const input_size = Object.keys(inputs_needed).length * 37;
+
+        if (size + output_size + input_size > bail_size - 1024) {
+          console.log(`This output puts us over the limit, we should bail now!`);
+          break;
+        }
+
         mock.outputs.push(output);
 
         for (const [txid, input] of Object.entries(inputs_needed)) {
@@ -975,6 +1009,7 @@ export default {
         }
 
         size = this.calcTxSize(mock);
+        console.log(`Txn size is now ${size}`);
 
         if (size >= bail_size) {
           console.log("Parsing Fungibles. Size is too large, we should stop now!", size);
@@ -992,6 +1027,15 @@ export default {
           if (inputs_needed === -1) {
             continue;
           }
+
+          const output_size = this.getOutputSize(output);
+          const input_size = Object.keys(inputs_needed).length * 37;
+
+          if (size + output_size + input_size > bail_size - 1024) {
+            console.log(`This output puts us over the limit, we should bail now!`);
+            break;
+          }
+
 
           mock.outputs.push(output);
 
@@ -1012,7 +1056,7 @@ export default {
       size = this.calcTxSize(mock);
       console.log("Done parsing nonfungibles.", size);
 
-      if (size < (bail_size - 1075) && this.settings.rollupLovelace) {
+      if (size < (bail_size + 1024) && this.settings.rollupLovelace) {
         console.log("Rolling up ADA-only UTxO!");
         for (const utxo_input of this.analyzedUTxO) {
           if (utxo_input.output.amount.multiasset === null) {
@@ -1025,7 +1069,7 @@ export default {
 
           size = this.calcTxSize(mock);
 
-          if (size >= (bail_size - 1075)) {
+          if (size >= (bail_size + 1024)) {
             console.log("Rolling up. Too large. We should stop now!", size);
             break;
           }
@@ -1052,7 +1096,6 @@ export default {
         }
       }
 
-      // console.log(this.ProposedUTxO.input_lovelace);
       this.handleBundled(mock.outputs);
 
       console.log(`Checking if already optimized...`, this.ProposedUTxO);
@@ -1086,12 +1129,33 @@ export default {
 
       this.analyzingUTxO = false;
     },
+    getOutputSize(output) {
+      // console.log(`Getting output size!`, output);
+      let output_size = 64;
+      const token_policies = [];
+
+      output.forEach((token) => {
+        if (!token_policies.includes(token.policy_id)) {
+          output_size += token.policy_id.length / 2;
+          token_policies.push(token.policy_id);
+        }
+
+        output_size += token.token_id.length / 2;
+        output_size += token.quantity.toString().length;
+      });
+
+      console.log(`Output size is: ${output_size}`);
+
+      return output_size;
+    },
     calcTxSize(mock, doBackfill) {
       const max_tx = 16384;
-      const min_sig = 240;
-      const size_per_input = 33;
-      const size_per_output = 60;
+      const min_txn = 768;
+      const min_sig = 512;
+      const size_per_input = 37;
+      const size_per_output = 64;
       const fee_size = 6;
+      const meta_size = 32;
 
       const output_tokens = [];
       const balance_tokens = {};
@@ -1099,22 +1163,29 @@ export default {
 
       const input_ct = Object.entries(mock.inputs).length;
 
-      let txn_size = min_sig + fee_size;
+      let txn_size = min_txn + min_sig + fee_size + meta_size;
       txn_size += input_ct * size_per_input;
 
       for (const tokens of mock.outputs) {
+        const output_policies = [];
         txn_size += size_per_output;
         for (const token of tokens) {
+          let token_size = 0;
           const asset_id = token.policy_id + '.' + token.token_id;
-          txn_size += token.policy_id.length;
-          txn_size += token.token_id.length;
+          if (!output_policies.includes(token.policy_id)) {
+            token_size += token.policy_id.length / 2;
+            output_policies.push(token.policy_id);
+          }
+          token_size += token.token_id.length / 2;
           output_tokens.push(asset_id);
+          txn_size += token_size;
+          // console.log(`Adding token from outputs... ${asset_id} ${token_size} ${txn_size}`);
         }
       }
 
       for (const [txid, utxo] of Object.entries(mock.inputs)) {
         if (txid) {
-          //
+          // console.log(`Tx ID: ${txid}`);
         }
         if (utxo.output.amount.multiasset === null) {
           continue;
@@ -1140,7 +1211,7 @@ export default {
             }
             backfill[policy_id][token_id] += BigInt(quantity);
           }
-          txn_size += policy_txn_size + policy_token_txn_size;
+          txn_size += (policy_txn_size + policy_token_txn_size) / 2;
         }
       }
 
@@ -1179,21 +1250,25 @@ export default {
         return this.calcTxSize(mock);
       }
 
+      // console.log(`Done estimating size... ${txn_size}`);
+
       return txn_size;
     },
     estimateSize(analysis, count_input) {
       const max_tx = 16384;
       const max_utxo = 5000;
-      const min_sig = 240;
-      const size_per_input = 33;
-      const size_per_output = 60;
+      const min_sig = 500;
+      const size_per_input = 37;
+      const size_per_output = 64;
       const fee_size = 6;
+      const meta_size = 32;
+      const min_txn = 768;
 
       if (count_input !== true) {
         count_input = false;
       }
 
-      let txn_size = max_tx - fee_size - min_sig;
+      let txn_size = max_tx - min_txn - fee_size - min_sig - meta_size;
 
       let inputs_size = analysis.inputs.len() * size_per_input;
       txn_size -= inputs_size;
@@ -1206,9 +1281,9 @@ export default {
           }
           if (input.output.amount.multiasset !== null) {
             for (const [policy, tokens] of Object.entries(input.output.amount.multiasset)) {
-              input_token_size += policy.length;
+              input_token_size += policy.length / 2;
               for (const [token_id, quantity] of Object.entries(tokens)) {
-                input_token_size += token_id.length;
+                input_token_size += token_id.length / 2;
                 input_token_size += quantity.length;
               }
             }
@@ -1226,9 +1301,9 @@ export default {
         let output_size = size_per_output;
         if (output.amount.multiasset !== null) {
           for (const [policy, tokens] of Object.entries(output.amount.multiasset)) {
-            output_size += policy.length;
+            output_size += policy.length / 2;
             for (const [token_id, quantity] of Object.entries(tokens)) {
-              output_size += token_id.length;
+              output_size += token_id.length / 2;
               output_size += quantity.length;
             }
           }
@@ -1378,23 +1453,23 @@ export default {
     await this.checkForCardano();
   },
   watch: {
-    settings: {
-      async handler(newSettings) {
-        this.watchSettings(newSettings);
-      },
-      deep: true
-    }
+    // settings: {
+    //   async handler(newSettings) {
+    //     this.watchSettings(newSettings);
+    //   },
+    //   deep: true
+    // }
   },
   created() {
-    this.watchSettings = debounce((newSettings) => {
-      if (newSettings === null) {
-        return;
-      }
-      localStorage.setItem('UnFrackItSettings', stringify(newSettings));
-      if (this.cardano.status === 'connected') {
-        this.checkWalletBalance();
-      }
-    }, 500);
+    // this.watchSettings = debounce(async (newSettings) => {
+    //   if (newSettings === null) {
+    //     return;
+    //   }
+    //   localStorage.setItem('UnFrackItSettings', stringify(newSettings));
+    //   if (this.cardano.status === 'connected') {
+    //     await this.checkWalletBalance();
+    //   }
+    // }, 1000);
 
     this.watchingTx = setInterval(async () => {
       if (this.pendingTx !== null) {
