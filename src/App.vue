@@ -18,10 +18,10 @@
           <v-img :src="require('./assets/unfrackit.svg')" contain max-width="512" alt="UnFrack.It by DripDropz"
                  class="mx-auto mx-md-0 mb-8"></v-img>
           <p class="text-start" style="font-family: 'Times New Roman', serif; font-size: 1.5rem; line-height: 1.5em;">
-            <strong><em>(verb)</em></strong><br /><br /> To modify and optimize your (Cardano) wallet so you get cheaper
-                                                         transactions and fewer errors. <br /><br />(see also: <strong>Unlock
-                                                                                                                       Peak
-                                                                                                                       Degeneracy</strong>)
+            <strong><em>(verb)</em></strong><br/><br/> To modify and optimize your (Cardano) wallet so you get cheaper
+            transactions and fewer errors. <br/><br/>(see also: <strong>Unlock
+            Peak
+            Degeneracy</strong>)
           </p>
         </div>
         <template v-if="cardano.status === `init`">
@@ -141,10 +141,10 @@
             <template v-if="UTxOSet.len() === 500">
               <v-alert type="info">
                 <strong>* Note:</strong> By default, UnFrack.it will only analyze the first 500 UTxO of your wallet as
-                                         this is close to the theoretical maximum number of UTxO that we can operate on
-                                         with a single transaction. If your wallet contains greater than 500 UTxO then
-                                         the balance shown here will only reflect the first 500 UTxO returned and not
-                                         the full balance of your wallet.
+                this is close to the theoretical maximum number of UTxO that we can operate on
+                with a single transaction. If your wallet contains greater than 500 UTxO then
+                the balance shown here will only reflect the first 500 UTxO returned and not
+                the full balance of your wallet.
               </v-alert>
             </template>
             <p>
@@ -152,8 +152,8 @@
             <p>
               <strong>{{ analysis.total_policies }}</strong> token policies with <strong>{{
                 analysis.total_tokens
-                                                                                         }}</strong> total, discrete
-                                                             tokens present in wallet. </p>
+              }}</strong> total, discrete
+              tokens present in wallet. </p>
 
           </template>
           <template v-if="analyzingUTxO">
@@ -174,11 +174,11 @@
               </v-btn>
             </template>
             <v-alert class="my-4" dark color="primary" border="left" v-if="pendingTx !== null">
-              You have a current, pending transaction to UnFrack your wallet submitted!<br /> Please wait while we
+              You have a current, pending transaction to UnFrack your wallet submitted!<br/> Please wait while we
               confirm that your transaction has been confirmed on the blockchain before checking your wallet
-              again.<br /><br /> Transaction ID: {{ pendingTx }} <br /> On-Chain Confirmations: {{
+              again.<br/><br/> Transaction ID: {{ pendingTx }} <br/> On-Chain Confirmations: {{
                 pendingConfirmations
-              }} of 9 <br />
+              }} of 9 <br/>
               <v-progress-linear color="white" height="12px" indeterminate></v-progress-linear>
             </v-alert>
           </template>
@@ -199,7 +199,7 @@
           <v-col class="text-start text-md-end">
             <p>
               Released without warranty as open source under <a href="https://creativecommons.org/licenses/by/4.0/"
-                                                                target="_blank">CC-By-4.0 License</a> <br /> <a
+                                                                target="_blank">CC-By-4.0 License</a> <br/> <a
                 href="https://github.com/crypto2099/unfrackit" target="_blank"> View Project on GitHub
               <v-icon>mdi-github</v-icon>
             </a>
@@ -293,10 +293,13 @@
 
 <script>
 // import debounce from "lodash.debounce";
-import * as CSL from "./lib/CardanoSerializationLib";
+// import * as CSL from "./lib/CardanoSerializationLib";
+import * as CSL from "@emurgo/cardano-serialization-lib-asmjs"
 import axios from "axios";
 import stringify from "fast-safe-stringify";
 import version from './version.json';
+
+const koios_key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyIjoic3Rha2UxdXk1Nm5uN3c1OGRyNWsyOG1mcnhnaHBuZ25uNHo0N2pkcGdwOW1ldXZncDdrNXFtaHljbnAiLCJleHAiOjE3Njk1Mjg1MDAsInRpZXIiOjEsInByb2pJRCI6IlVuRnJhY2tJdCJ9.GrdvIKjkdDDFENR5a7Kypzt79UbuknjFAgq3SRv0oPw';
 
 class Paginate {
   constructor(page, limit) {
@@ -525,7 +528,7 @@ export default {
             const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
             if (this.ProposedUTxO.inputs_json[tx_id] === undefined) {
               this.ProposedUTxO.inputs_json[tx_id] = utxo_input;
-              this.ProposedUTxO.inputs.add_input(
+              this.ProposedUTxO.inputs.add_regular_input(
                   this.changeAddress,
                   CSL.TransactionInput.from_json(stringify(utxo_input.input)),
                   CSL.Value.from_json(stringify(utxo_input.output.amount))
@@ -1083,7 +1086,7 @@ export default {
       for (const [txid, input] of Object.entries(mock.inputs)) {
         if (this.ProposedUTxO.inputs_json[txid] === undefined) {
           this.ProposedUTxO.inputs_json[txid] = input;
-          this.ProposedUTxO.inputs.add_input(
+          this.ProposedUTxO.inputs.add_regular_input(
               this.changeAddress,
               CSL.TransactionInput.from_json(stringify(input.input)),
               CSL.Value.from_json(stringify(input.output.amount))
@@ -1479,9 +1482,14 @@ export default {
             subdomain = this.testnet;
           }
           const response = await axios.post(
-              `https://${subdomain}.koios.rest/api/v0/tx_status`,
+              `https://${subdomain}.koios.rest/api/v1/tx_status`,
               {
                 "_tx_hashes": [this.pendingTx]
+              },
+              {
+                headers: {
+                  authorization: `Bearer ${koios_key}`
+                }
               }
           );
 
