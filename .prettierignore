@@ -1,0 +1,11 @@
+node_modules
+dist
+package-lock.json
+src/lib/cardano-message-signing-web/**
+src/lib/cardano-serialization-lib-web/**
+src/lib/CardanoSerializationLib.js
+src/lib/CardanoSerializationLib.ts
+src/lib/CardanoMessageSigningLib.ts
+public/wasm/**
+*.svg
+*.wasm

@@ -9,24 +9,30 @@
           <v-icon>mdi-open-in-new</v-icon>
         </v-btn>
       </v-container>
-
     </v-app-bar>
 
     <v-main>
       <v-container class="my-16">
         <div class="mb-8 text-center text-md-start">
-          <v-img :src="require('./assets/unfrackit.svg')" contain max-width="512" alt="UnFrack.It by DripDropz"
-                 class="mx-auto mx-md-0 mb-8"></v-img>
-          <p class="text-start" style="font-family: 'Times New Roman', serif; font-size: 1.5rem; line-height: 1.5em;">
-            <strong><em>(verb)</em></strong><br/><br/> To modify and optimize your (Cardano) wallet so you get cheaper
-            transactions and fewer errors. <br/><br/>(see also: <strong>Unlock
-            Peak
-            Degeneracy</strong>)
+          <v-img
+            :src="require('./assets/unfrackit.svg')"
+            contain
+            max-width="512"
+            alt="UnFrack.It by DripDropz"
+            class="mx-auto mx-md-0 mb-8"
+          ></v-img>
+          <p
+            class="text-start"
+            style="font-family: 'Times New Roman', serif; font-size: 1.5rem; line-height: 1.5em"
+          >
+            <strong><em>(verb)</em></strong
+            ><br /><br />
+            To modify and optimize your (Cardano) wallet so you get cheaper transactions and fewer
+            errors. <br /><br />(see also: <strong>Unlock Peak Degeneracy</strong>)
           </p>
         </div>
         <template v-if="cardano.status === `init`">
-          <p>
-            Checking for Cardano wallets... </p>
+          <p>Checking for Cardano wallets...</p>
           <v-progress-linear indeterminate height="24" color="primary"></v-progress-linear>
         </template>
         <template v-if="cardano.status === `notfound`">
@@ -36,30 +42,42 @@
         </template>
         <template v-if="cardano.status === `found`">
           <div class="my-4 text-center text-md-start">
-            <v-btn color="primary" x-large @click="connectModal = true">
-              Connect Wallet
-            </v-btn>
+            <v-btn color="primary" x-large @click="connectModal = true"> Connect Wallet </v-btn>
           </div>
-
         </template>
         <template v-if="cardano.status === `connected`">
           <v-row align="center" justify="center" justify-md="start" class="mb-8">
             <v-chip label class="me-2 mb-2 text-capitalize py-2">
-              <v-img :src="cardano.ActiveWallet.icon" class="me-2" contain height="24" width="24"></v-img>
-              {{ cardano.ActiveWallet.name.replace(' Wallet', '') }} Connected
+              <v-img
+                :src="cardano.ActiveWallet.icon"
+                class="me-2"
+                contain
+                height="24"
+                width="24"
+              ></v-img>
+              {{ cardano.ActiveWallet.name.replace(" Wallet", "") }} Connected
             </v-chip>
             <template v-if="network === 1">
-              <v-chip label color="primary" class="me-2 mb-2">
-                MAINNET
-              </v-chip>
+              <v-chip label color="primary" class="me-2 mb-2"> MAINNET </v-chip>
             </template>
             <template v-else-if="network === 0">
-              <v-chip label color="red" dark class="me-2 mb-2 text-uppercase" @click="chooseTestnet = true">
+              <v-chip
+                label
+                color="red"
+                dark
+                class="me-2 mb-2 text-uppercase"
+                @click="chooseTestnet = true"
+              >
                 {{ testnet }} TESTNET
               </v-chip>
             </template>
-            <v-btn color="secondary" @click="disconnect" small class="mb-2"
-                   :disabled="gettingUTxO || analyzingUTxO || (pendingTx !== null)">
+            <v-btn
+              color="secondary"
+              @click="disconnect"
+              small
+              class="mb-2"
+              :disabled="gettingUTxO || analyzingUTxO || pendingTx !== null"
+            >
               Disconnect
             </v-btn>
           </v-row>
@@ -67,51 +85,83 @@
             <v-card class="mb-8">
               <v-card-title>
                 UnFrack.It Settings
-                <v-btn color="primary" @click="resetSettings" small class="ms-2">Reset to Default</v-btn>
+                <v-btn color="primary" @click="resetSettings" small class="ms-2"
+                  >Reset to Default</v-btn
+                >
               </v-card-title>
               <v-card-text>
-                <v-form ref="settings" @submit.prevent="checkWalletBalance" :disabled="gettingUTxO || analyzingUTxO">
+                <v-form
+                  ref="settings"
+                  @submit.prevent="checkWalletBalance"
+                  :disabled="gettingUTxO || analyzingUTxO"
+                >
                   <v-row align="start">
-                    <v-col cols="12" md="6" class=" mt-6">
-                      <v-slider label="Bundle Size" min="10" step="5" max="60" thumb-label="always"
-                                v-model="settings.bundleSize"></v-slider>
+                    <v-col cols="12" md="6" class="mt-6">
+                      <v-slider
+                        label="Bundle Size"
+                        min="10"
+                        step="5"
+                        max="60"
+                        thumb-label="always"
+                        v-model="settings.bundleSize"
+                      ></v-slider>
                       <p>
-                        Tokens from the same Policy ID will be collected up to bundle size. Policies with more tokens
-                        than bundle size will be split into multiple UTxO. Tokens from different policies will be
-                        collected up to 1/2 bundle size. </p>
+                        Tokens from the same Policy ID will be collected up to bundle size. Policies
+                        with more tokens than bundle size will be split into multiple UTxO. Tokens
+                        from different policies will be collected up to 1/2 bundle size.
+                      </p>
                     </v-col>
                     <v-col cols="12" md="6" class=""></v-col>
                     <v-col cols="12" md="6" class="">
-                      <v-switch v-model="settings.isolateFungible" label="Isolate Fungible Tokens"></v-switch>
+                      <v-switch
+                        v-model="settings.isolateFungible"
+                        label="Isolate Fungible Tokens"
+                      ></v-switch>
                       <p>
-                        Should we place each fungible token (by Policy ID) on its own, individual UTxO? This can
-                        decrease fees and make building transactions easier when interacting with DEXes or paying with
-                        fungible tokens. </p>
+                        Should we place each fungible token (by Policy ID) on its own, individual
+                        UTxO? This can decrease fees and make building transactions easier when
+                        interacting with DEXes or paying with fungible tokens.
+                      </p>
                     </v-col>
                     <v-col cols="12" md="6" class="">
-                      <v-switch v-model="settings.isolateNonfungible" label="Isolate Non-Fungible Tokens"></v-switch>
+                      <v-switch
+                        v-model="settings.isolateNonfungible"
+                        label="Isolate Non-Fungible Tokens"
+                      ></v-switch>
                       <p>
-                        Should non-fungible tokens (NFTs) be grouped and separated onto policy-specific UTxO? This can
-                        decrease fees when interacting with marketplaces, staking platforms, or sending tokens between
-                        wallets. </p>
+                        Should non-fungible tokens (NFTs) be grouped and separated onto
+                        policy-specific UTxO? This can decrease fees when interacting with
+                        marketplaces, staking platforms, or sending tokens between wallets.
+                      </p>
                     </v-col>
                     <v-col cols="12" md="6" class="">
-                      <v-switch v-model="settings.splitLovelace" label="Subdivide ADA-Only UTxO"></v-switch>
+                      <v-switch
+                        v-model="settings.splitLovelace"
+                        label="Subdivide ADA-Only UTxO"
+                      ></v-switch>
                       <p>
-                        If there is leftover ADA included in the transaction (greater than 100 &#8371;), we will
-                        subdivide the remaining balance into several separate UTxO by percentage (50, 15, 10, 10, 5, 5,
-                        5). This helps the wallet have multiple options when spending ADA only on transactions to
-                        decrease fees and increase parallelism. </p>
+                        If there is leftover ADA included in the transaction (greater than 100
+                        &#8371;), we will subdivide the remaining balance into several separate UTxO
+                        by percentage (50, 15, 10, 10, 5, 5, 5). This helps the wallet have multiple
+                        options when spending ADA only on transactions to decrease fees and increase
+                        parallelism.
+                      </p>
                     </v-col>
                     <v-col cols="12" md="6" class="">
-                      <v-switch v-model="settings.rollupLovelace" label="Roll Up ADA-Only UTxO"></v-switch>
+                      <v-switch
+                        v-model="settings.rollupLovelace"
+                        label="Roll Up ADA-Only UTxO"
+                      ></v-switch>
                       <p>
-                        By default we will only collect ADA-only UTxO when needed to make additional change for UTxO
-                        rebalancing. When this is turned on we will intentionally attempt to collect as many ADA-only
-                        UTxO as possible and either lump them together or subdivide them per the previous setting. </p>
+                        By default we will only collect ADA-only UTxO when needed to make additional
+                        change for UTxO rebalancing. When this is turned on we will intentionally
+                        attempt to collect as many ADA-only UTxO as possible and either lump them
+                        together or subdivide them per the previous setting.
+                      </p>
                     </v-col>
                     <v-col cols="12" md="6" class="">
-                      <v-btn type="submit" color="primary" :disabled="gettingUTxO || analyzingUTxO">Update Settings
+                      <v-btn type="submit" color="primary" :disabled="gettingUTxO || analyzingUTxO"
+                        >Update Settings
                       </v-btn>
                     </v-col>
                   </v-row>
@@ -120,10 +170,12 @@
             </v-card>
           </v-form>
           <p v-if="stakeKey !== null">
-            <strong>Connected Account:</strong> <span style="word-break: break-all">{{ stakeKey }}</span>
+            <strong>Connected Account:</strong>
+            <span style="word-break: break-all">{{ stakeKey }}</span>
           </p>
           <p v-if="changeAddress !== null">
-            <strong>Change Address:</strong> <span style="word-break: break-all">{{ changeAddress.to_bech32() }}</span>
+            <strong>Change Address:</strong>
+            <span style="word-break: break-all">{{ changeAddress.to_bech32() }}</span>
           </p>
           <template v-if="gettingUTxO">
             <h3>Checking wallet UTxO balance...</h3>
@@ -132,29 +184,33 @@
           <template v-if="UTxOSet !== null">
             <p>
               {{ UTxOSet.len() }} UTxO found on the address!
-              <v-btn color="primary" @click="checkWalletBalance" small class="ms-4"
-                     :disabled="gettingUTxO || analyzingUTxO || (pendingTx !== null)">
+              <v-btn
+                color="primary"
+                @click="checkWalletBalance"
+                small
+                class="ms-4"
+                :disabled="gettingUTxO || analyzingUTxO || pendingTx !== null"
+              >
                 <v-icon class="me-2">mdi-reload</v-icon>
                 Check Again
               </v-btn>
             </p>
             <template v-if="UTxOSet.len() === 500">
               <v-alert type="info">
-                <strong>* Note:</strong> By default, UnFrack.it will only analyze the first 500 UTxO of your wallet as
-                this is close to the theoretical maximum number of UTxO that we can operate on
-                with a single transaction. If your wallet contains greater than 500 UTxO then
-                the balance shown here will only reflect the first 500 UTxO returned and not
-                the full balance of your wallet.
+                <strong>* Note:</strong> By default, UnFrack.it will only analyze the first 500 UTxO
+                of your wallet as this is close to the theoretical maximum number of UTxO that we
+                can operate on with a single transaction. If your wallet contains greater than 500
+                UTxO then the balance shown here will only reflect the first 500 UTxO returned and
+                not the full balance of your wallet.
               </v-alert>
             </template>
             <p>
-              <strong>{{ formatAda(toAda(analysis.lovelace)) }}</strong> present in wallet. </p>
+              <strong>{{ formatAda(toAda(analysis.lovelace)) }}</strong> present in wallet.
+            </p>
             <p>
-              <strong>{{ analysis.total_policies }}</strong> token policies with <strong>{{
-                analysis.total_tokens
-              }}</strong> total, discrete
-              tokens present in wallet. </p>
-
+              <strong>{{ analysis.total_policies }}</strong> token policies with
+              <strong>{{ analysis.total_tokens }}</strong> total, discrete tokens present in wallet.
+            </p>
           </template>
           <template v-if="analyzingUTxO">
             <h3>Analyzing UTxO Set...</h3>
@@ -164,21 +220,28 @@
             <template v-if="ProposedUTxO.optimized === true">
               <h2>Analysis Complete.</h2>
               <v-alert color="primary" border="left" dark>
-                Your wallet is already optimized! We can't find any additional UTxO changes to make at this time!
+                Your wallet is already optimized! We can't find any additional UTxO changes to make
+                at this time!
               </v-alert>
             </template>
             <template v-else>
               <h2>Analysis Complete.</h2>
-              <v-btn x-large color="primary" @click="unfrack = true" class="my-4" :disabled="(pendingTx !== null)">
+              <v-btn
+                x-large
+                color="primary"
+                @click="unfrack = true"
+                class="my-4"
+                :disabled="pendingTx !== null"
+              >
                 Click here to UnFrack Your Wallet
               </v-btn>
             </template>
             <v-alert class="my-4" dark color="primary" border="left" v-if="pendingTx !== null">
-              You have a current, pending transaction to UnFrack your wallet submitted!<br/> Please wait while we
-              confirm that your transaction has been confirmed on the blockchain before checking your wallet
-              again.<br/><br/> Transaction ID: {{ pendingTx }} <br/> On-Chain Confirmations: {{
-                pendingConfirmations
-              }} of 9 <br/>
+              You have a current, pending transaction to UnFrack your wallet submitted!<br />
+              Please wait while we confirm that your transaction has been confirmed on the
+              blockchain before checking your wallet again.<br /><br />
+              Transaction ID: {{ pendingTx }} <br />
+              On-Chain Confirmations: {{ pendingConfirmations }} of 9 <br />
               <v-progress-linear color="white" height="12px" indeterminate></v-progress-linear>
             </v-alert>
           </template>
@@ -198,11 +261,15 @@
           </v-col>
           <v-col class="text-start text-md-end">
             <p>
-              Released without warranty as open source under <a href="https://creativecommons.org/licenses/by/4.0/"
-                                                                target="_blank">CC-By-4.0 License</a> <br/> <a
-                href="https://github.com/crypto2099/unfrackit" target="_blank"> View Project on GitHub
-              <v-icon>mdi-github</v-icon>
-            </a>
+              Released without warranty as open source under
+              <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank"
+                >CC-By-4.0 License</a
+              >
+              <br />
+              <a href="https://github.com/crypto2099/unfrackit" target="_blank">
+                View Project on GitHub
+                <v-icon>mdi-github</v-icon>
+              </a>
             </p>
             <p>
               Version: {{ version.Major }}.{{ version.Minor }}.{{ version.Revision }}
@@ -210,17 +277,29 @@
             </p>
           </v-col>
         </v-row>
-
       </v-container>
-
     </v-footer>
     <v-dialog v-model="connectModal" max-width="512">
       <v-card>
         <v-card-title>Connect Your Wallet</v-card-title>
         <v-card-text>
-          <v-btn v-for="wallet in cardano.Wallets" :key="wallet.name" block class="wallet-btn mb-2 text-start" x-large
-                 @click="connectTo(wallet)" :loading="!!walletLoading[wallet.name]">
-            <v-img :src="wallet.icon" max-width="24" height="24" class="me-2" contain :alt="wallet.name"></v-img>
+          <v-btn
+            v-for="wallet in cardano.Wallets"
+            :key="wallet.name"
+            block
+            class="wallet-btn mb-2 text-start"
+            x-large
+            @click="connectTo(wallet)"
+            :loading="!!walletLoading[wallet.name]"
+          >
+            <v-img
+              :src="wallet.icon"
+              max-width="24"
+              height="24"
+              class="me-2"
+              contain
+              :alt="wallet.name"
+            ></v-img>
             Connect {{ wallet.name.replace(" Wallet", "") }}
           </v-btn>
         </v-card-text>
@@ -230,32 +309,39 @@
       <v-card>
         <v-card-text class="text-center pt-4">
           <h3>UnFrackIt is brought to you by the team at</h3>
-          <v-img class="mx-auto" :src="require('./assets/dripdropz.svg')" alt="DripDropz" contain
-                 max-width="256"></v-img>
+          <v-img
+            class="mx-auto"
+            :src="require('./assets/dripdropz.svg')"
+            alt="DripDropz"
+            contain
+            max-width="256"
+          ></v-img>
         </v-card-text>
         <v-card-text>
-          If you appreciate this service and would like to support our team there are three ways you can help!
+          If you appreciate this service and would like to support our team there are three ways you
+          can help!
         </v-card-text>
         <v-card-text>
           <ul class="body-1">
             <li>
-              Visit and use <a href="https://dripdropz.io" target="_blank">DripDropz.io</a> and claim your free tokens
-              every epoch!
+              Visit and use <a href="https://dripdropz.io" target="_blank">DripDropz.io</a> and
+              claim your free tokens every epoch!
             </li>
             <li>
-              Mint a Drippyz NFT from <a href="https://drippyz.buffybot.io"
-                                         target="_blank">https://drippyz.buffybot.io</a>!
+              Mint a Drippyz NFT from
+              <a href="https://drippyz.buffybot.io" target="_blank">https://drippyz.buffybot.io</a>!
             </li>
             <li>
-              Include a tip in your transaction by clicking the button below or sending it to <a
-                href="https://handle.me/unfrackit" target="_blank" class="font-weight-bold">$unfrackit</a>
+              Include a tip in your transaction by clicking the button below or sending it to
+              <a href="https://handle.me/unfrackit" target="_blank" class="font-weight-bold"
+                >$unfrackit</a
+              >
             </li>
           </ul>
         </v-card-text>
         <v-card-text class="text-center" v-if="network === 1">
           <template v-if="ProposedUTxO.addTip">
-            <p class="body-1">
-              Please choose a tip amount: </p>
+            <p class="body-1">Please choose a tip amount:</p>
             <v-btn-toggle v-model="ProposedUTxO.tip" tile group color="primary">
               <v-btn value="1">1 &#8371;</v-btn>
               <v-btn value="5">5 &#8371;</v-btn>
@@ -264,16 +350,21 @@
             </v-btn-toggle>
           </template>
           <template v-else>
-            <v-btn large color="primary" @click="ProposedUTxO.addTip = true; ProposedUTxO.tip = '1'">
+            <v-btn
+              large
+              color="primary"
+              @click="
+                ProposedUTxO.addTip = true;
+                ProposedUTxO.tip = '1';
+              "
+            >
               Add a Tip!
             </v-btn>
           </template>
         </v-card-text>
         <v-card-actions class="justify-space-between">
           <v-btn large color="secondary" @click="unfrack = false">Cancel</v-btn>
-          <v-btn large color="primary" @click="doUnFrack">
-            LFG! UnFrack My Wallet!
-          </v-btn>
+          <v-btn large color="primary" @click="doUnFrack"> LFG! UnFrack My Wallet! </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -281,8 +372,16 @@
       <v-card>
         <v-card-title>Choose Your Testnet</v-card-title>
         <v-card-text>
-          <v-btn v-for="(label, name) in testnets" :key="name" block class="mb-2 text-start"
-                 @click="testnet = name; chooseTestnet = false;">
+          <v-btn
+            v-for="(label, name) in testnets"
+            :key="name"
+            block
+            class="mb-2 text-start"
+            @click="
+              testnet = name;
+              chooseTestnet = false;
+            "
+          >
             {{ label }}
           </v-btn>
         </v-card-text>
@@ -294,12 +393,13 @@
 <script>
 // import debounce from "lodash.debounce";
 // import * as CSL from "./lib/CardanoSerializationLib";
-import * as CSL from "@emurgo/cardano-serialization-lib-asmjs"
+import * as CSL from "@emurgo/cardano-serialization-lib-asmjs";
 import axios from "axios";
 import stringify from "fast-safe-stringify";
-import version from './version.json';
+import version from "./version.json";
 
-const koios_key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyIjoic3Rha2UxdXk1Nm5uN3c1OGRyNWsyOG1mcnhnaHBuZ25uNHo0N2pkcGdwOW1ldXZncDdrNXFtaHljbnAiLCJleHAiOjE3Njk1Mjg1MDAsInRpZXIiOjEsInByb2pJRCI6IlVuRnJhY2tJdCJ9.GrdvIKjkdDDFENR5a7Kypzt79UbuknjFAgq3SRv0oPw';
+const koios_key =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyIjoic3Rha2UxdXk1Nm5uN3c1OGRyNWsyOG1mcnhnaHBuZ25uNHo0N2pkcGdwOW1ldXZncDdrNXFtaHljbnAiLCJleHAiOjE3Njk1Mjg1MDAsInRpZXIiOjEsInByb2pJRCI6IlVuRnJhY2tJdCJ9.GrdvIKjkdDDFENR5a7Kypzt79UbuknjFAgq3SRv0oPw";
 
 class Paginate {
   constructor(page, limit) {
@@ -314,7 +414,7 @@ const analysis_format = {
   total_policies: 0,
   fungible: {},
   nonfungible: {},
-  tokens: {}
+  tokens: {},
 };
 
 const default_settings = {
@@ -343,8 +443,8 @@ const default_proposed = {
   staging: {
     inputs: {},
     outputs: [],
-    balance_tokens: []
-  }
+    balance_tokens: [],
+  },
 };
 export default {
   name: "App",
@@ -371,12 +471,12 @@ export default {
     pendingConfirmations: 0,
     watchingTx: null,
     network: null,
-    testnet: 'preprod',
+    testnet: "preprod",
     chooseTestnet: false,
     testnets: {
-      preprod: 'Pre-Production',
-      preview: 'Preview'
-    }
+      preprod: "Pre-Production",
+      preview: "Preview",
+    },
   }),
   methods: {
     showError(msg, title) {
@@ -385,7 +485,7 @@ export default {
         title: title || "Error",
         html: msg,
         showConfirmButton: true,
-        allowOutsideClick: false
+        allowOutsideClick: false,
       });
     },
     showSuccess(msg, title) {
@@ -394,7 +494,7 @@ export default {
         title: title || "Success",
         html: msg,
         showConfirmButton: true,
-        allowOutsideClick: false
+        allowOutsideClick: false,
       });
     },
     describeConnectError(e) {
@@ -460,7 +560,7 @@ export default {
       this.changeWallet();
     },
     async checkWalletBalance() {
-      localStorage.setItem('UnFrackItSettings', stringify(this.settings));
+      localStorage.setItem("UnFrackItSettings", stringify(this.settings));
       this.gettingUTxO = true;
       this.UTxOSet = null;
       this.analyzedUTxO = [];
@@ -478,9 +578,9 @@ export default {
           // console.log(`UTxOs is null somehow?`, UTxOs);
           break;
         }
-        (UTxOs).map((utxo) => {
+        UTxOs.map((utxo) => {
           const UTxO = CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo));
-          const txin = UTxO.input().transaction_id().to_hex() + '#' + UTxO.input().index();
+          const txin = UTxO.input().transaction_id().to_hex() + "#" + UTxO.input().index();
           if (this.inputs.includes(txin)) {
             return;
           }
@@ -501,7 +601,10 @@ export default {
       for (const i in this.ProposedUTxO.outputs) {
         const output = this.ProposedUTxO.outputs[i];
 
-        if (output.address().to_bech32() === this.changeAddress.to_bech32() && (output.amount().multiasset() === undefined || output.amount().multiasset() === null)) {
+        if (
+          output.address().to_bech32() === this.changeAddress.to_bech32() &&
+          (output.amount().multiasset() === undefined || output.amount().multiasset() === null)
+        ) {
           console.log("Removing pure Lovelace UTXO from outputs!");
           this.ProposedUTxO.outputs.splice(parseInt(i), 1);
         }
@@ -510,7 +613,10 @@ export default {
       for (const j in this.ProposedUTxO.outputs_json) {
         const output = this.ProposedUTxO.outputs_json[j];
 
-        if (output.address === this.changeAddress.to_bech32() && (output.amount.multiasset === null || output.amount.multiasset === undefined)) {
+        if (
+          output.address === this.changeAddress.to_bech32() &&
+          (output.amount.multiasset === null || output.amount.multiasset === undefined)
+        ) {
           console.log("Removing pure lovelace UTXO from outputs JSON!");
           this.ProposedUTxO.outputs_json.splice(parseInt(j), 1);
         }
@@ -527,11 +633,12 @@ export default {
       }
 
       const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-      let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+      let estimated_fees = BigInt((tx_size + 636) * 44 + 155381);
 
       console.log("Estimated fees are", estimated_fees, tx_size);
 
-      let lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+      let lovelace_balance =
+        this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
 
       console.log("Lovelace Balance", lovelace_balance);
 
@@ -546,23 +653,24 @@ export default {
         for (const utxo_input of this.analyzedUTxO) {
           if (utxo_input.output.amount.multiasset === null) {
             // Lovelace-only input, let's grab it!
-            const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
+            const tx_id = utxo_input.input.transaction_id + "#" + utxo_input.input.index;
             if (this.ProposedUTxO.inputs_json[tx_id] === undefined) {
               this.ProposedUTxO.inputs_json[tx_id] = utxo_input;
               this.ProposedUTxO.inputs.add_regular_input(
-                  this.changeAddress,
-                  CSL.TransactionInput.from_json(stringify(utxo_input.input)),
-                  CSL.Value.from_json(stringify(utxo_input.output.amount))
+                this.changeAddress,
+                CSL.TransactionInput.from_json(stringify(utxo_input.input)),
+                CSL.Value.from_json(stringify(utxo_input.output.amount))
               );
               const input_coin_amt = BigInt(utxo_input.output.amount.coin);
               this.ProposedUTxO.input_lovelace += input_coin_amt;
 
               const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-              let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+              let estimated_fees = BigInt((tx_size + 636) * 44 + 155381);
 
               console.log("Estimated fees are", estimated_fees, tx_size);
 
-              lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+              lovelace_balance =
+                this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
               if (lovelace_balance >= 1000000n) {
                 break;
               }
@@ -570,10 +678,11 @@ export default {
           }
         }
         const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-        let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+        let estimated_fees = BigInt((tx_size + 636) * 44 + 155381);
 
         console.log("Estimated fees are", estimated_fees, tx_size);
-        lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+        lovelace_balance =
+          this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
         iterations++;
       }
 
@@ -590,7 +699,7 @@ export default {
           Math.floor(lovelace_to_split * 0.1),
           Math.floor(lovelace_to_split * 0.05),
           Math.floor(lovelace_to_split * 0.05),
-          Math.floor(lovelace_to_split * 0.05)
+          Math.floor(lovelace_to_split * 0.05),
         ];
 
         let lovelace_split = 0;
@@ -605,30 +714,25 @@ export default {
         }
 
         for (const value of splits) {
-          const output = CSL.TransactionOutputBuilder
-              .new()
-              .with_address(this.changeAddress)
-              .next()
-              .with_coin(
-                  CSL.BigNum.from_str(value.toString())
-              ).build();
+          const output = CSL.TransactionOutputBuilder.new()
+            .with_address(this.changeAddress)
+            .next()
+            .with_coin(CSL.BigNum.from_str(value.toString()))
+            .build();
           this.ProposedUTxO.outputs.push(output);
           this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
         }
-
       } else {
         console.log("Dumping all remaining lovelace...");
         const fee_increase = BigInt(70);
         estimated_fees += fee_increase;
         lovelace_balance -= fee_increase;
 
-        const output = CSL.TransactionOutputBuilder
-            .new()
-            .with_address(this.changeAddress)
-            .next()
-            .with_coin(
-                CSL.BigNum.from_str(lovelace_balance.toString())
-            ).build();
+        const output = CSL.TransactionOutputBuilder.new()
+          .with_address(this.changeAddress)
+          .next()
+          .with_coin(CSL.BigNum.from_str(lovelace_balance.toString()))
+          .build();
         this.ProposedUTxO.outputs.push(output);
         this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
       }
@@ -636,14 +740,13 @@ export default {
       this.ProposedUTxO.fees = estimated_fees;
 
       console.log(`Done balancing transaction... estimated fees are... ${estimated_fees}`);
-
     },
     async doUnFrack() {
       let unfrackit_address;
       if (this.network === 0) {
-        unfrackit_address = 'addr_test1vz4ajuum47atvtf0vh0y9754cnryuzpa0h5lq8cgp5ml4lshrl9ch';
+        unfrackit_address = "addr_test1vz4ajuum47atvtf0vh0y9754cnryuzpa0h5lq8cgp5ml4lshrl9ch";
       } else {
-        unfrackit_address = 'addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv';
+        unfrackit_address = "addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv";
       }
       if (this.network === 1) {
         if (this.ProposedUTxO.tip > 0) {
@@ -658,14 +761,11 @@ export default {
           }
           if (!tip_found) {
             console.log("Adding new tip");
-            const output = CSL.TransactionOutputBuilder
-                .new()
-                .with_address(
-                    CSL.Address.from_bech32(unfrackit_address)
-                ).next()
-                .with_coin(
-                    CSL.BigNum.from_str(tip_amt.toString())
-                ).build();
+            const output = CSL.TransactionOutputBuilder.new()
+              .with_address(CSL.Address.from_bech32(unfrackit_address))
+              .next()
+              .with_coin(CSL.BigNum.from_str(tip_amt.toString()))
+              .build();
             this.ProposedUTxO.outputs.push(output);
             this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
           } else {
@@ -677,7 +777,6 @@ export default {
               }
             }
           }
-
         } else {
           console.log("Removing existing tip");
           // Need to remove an output if we already added a tip previously
@@ -704,22 +803,20 @@ export default {
       const aux_data = CSL.AuxiliaryData.new();
       const metadata = CSL.GeneralTransactionMetadata.new();
       metadata.insert(
-          CSL.BigNum.from_str('674'),
-          CSL.encode_json_str_to_metadatum(stringify({
-            msg: [
-              "https://unfrack.it"
-            ]
-          }))
+        CSL.BigNum.from_str("674"),
+        CSL.encode_json_str_to_metadatum(
+          stringify({
+            msg: ["https://unfrack.it"],
+          })
+        )
       );
       aux_data.set_metadata(metadata);
 
       txBuilder.add_json_metadatum(
-          CSL.BigNum.from_str('674'),
-          stringify({
-            msg: [
-              "https://unfrack.it"
-            ]
-          })
+        CSL.BigNum.from_str("674"),
+        stringify({
+          msg: ["https://unfrack.it"],
+        })
       );
 
       console.log("Added metadata");
@@ -769,20 +866,17 @@ export default {
       }
 
       witnessSet.set_vkeys(totalVkeys);
-      const signedTx = await CSL.Transaction.new(
-          tx.body(),
-          witnessSet,
-          tx.auxiliary_data()
-      );
+      const signedTx = await CSL.Transaction.new(tx.body(), witnessSet, tx.auxiliary_data());
 
       try {
-        const response = await this.cardano.Wallet.submitTx(
-            this.toHex(signedTx.to_bytes())
-        );
+        const response = await this.cardano.Wallet.submitTx(this.toHex(signedTx.to_bytes()));
         // Response === TX ID
         console.log("Result", response);
         if (response) {
-          this.showSuccess(`Transaction ID ${response} has been submitted to the blockchain.<br />Please allow a few minutes for the transaction to be confirmed.`, `You UnFracked It!`);
+          this.showSuccess(
+            `Transaction ID ${response} has been submitted to the blockchain.<br />Please allow a few minutes for the transaction to be confirmed.`,
+            `You UnFracked It!`
+          );
           this.pendingTx = response;
           this.unfrack = false;
         }
@@ -796,13 +890,13 @@ export default {
       for (const [policy, tokens] of Object.entries(entry_tokens)) {
         const policy_tokens = {
           policy_id: policy,
-          tokens: []
+          tokens: [],
         };
         for (const [token_id, quantity] of Object.entries(tokens)) {
           policy_tokens.tokens.push({
             policy_id: policy,
             token_id: token_id,
-            quantity: quantity
+            quantity: quantity,
           });
         }
 
@@ -910,7 +1004,6 @@ export default {
     findNeededInputs(output) {
       const inputs = {};
 
-
       const mock_output = this.makeOutput(output);
 
       for (const token of output) {
@@ -925,7 +1018,7 @@ export default {
             continue;
           }
 
-          const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
+          const tx_id = utxo_input.input.transaction_id + "#" + utxo_input.input.index;
           if (inputs[tx_id] === undefined) {
             inputs[tx_id] = utxo_input;
           }
@@ -963,7 +1056,7 @@ export default {
             }
             for (const [token_id, quantity] of Object.entries(tokens)) {
               if (this.analysis.tokens[policy][token_id] === undefined) {
-                this.analysis.tokens[policy][token_id] = BigInt('0');
+                this.analysis.tokens[policy][token_id] = BigInt("0");
               }
               this.analysis.tokens[policy][token_id] += BigInt(quantity.toString());
             }
@@ -979,9 +1072,9 @@ export default {
             this.analysis.total_tokens++;
             let token_type;
             if (quantity > 1) {
-              token_type = 'fungible';
+              token_type = "fungible";
             } else {
-              token_type = 'nonfungible';
+              token_type = "nonfungible";
             }
             if (this.analysis[token_type][policy] === undefined) {
               this.analysis[token_type][policy] = {};
@@ -998,12 +1091,12 @@ export default {
       const all_fungibles = this.getAllTokensSorted(this.analysis.fungible);
       const all_nonfungible = this.getAllTokensSorted(this.analysis.nonfungible);
 
-      let ideal_fungible_outputs = this.process('fungible', all_fungibles);
-      let ideal_nonfungible_outputs = this.process('nonfungible', all_nonfungible);
+      let ideal_fungible_outputs = this.process("fungible", all_fungibles);
+      let ideal_nonfungible_outputs = this.process("nonfungible", all_nonfungible);
 
       let mock = {
         inputs: {},
-        outputs: []
+        outputs: [],
       };
 
       let size;
@@ -1039,7 +1132,6 @@ export default {
           console.log("Parsing Fungibles. Size is too large, we should stop now!", size);
           break;
         }
-
       }
       size = this.calcTxSize(mock);
       console.log("Done parsing fungibles.", size);
@@ -1060,7 +1152,6 @@ export default {
             break;
           }
 
-
           mock.outputs.push(output);
 
           for (const [txid, input] of Object.entries(inputs_needed)) {
@@ -1080,12 +1171,12 @@ export default {
       size = this.calcTxSize(mock);
       console.log("Done parsing nonfungibles.", size);
 
-      if (size < (bail_size + 1024) && this.settings.rollupLovelace) {
+      if (size < bail_size + 1024 && this.settings.rollupLovelace) {
         console.log("Rolling up ADA-only UTxO!");
         for (const utxo_input of this.analyzedUTxO) {
           if (utxo_input.output.amount.multiasset === null) {
             // Is Lovelace-only UTxO
-            const tx_id = utxo_input.input.transaction_id + '#' + utxo_input.input.index;
+            const tx_id = utxo_input.input.transaction_id + "#" + utxo_input.input.index;
             if (mock.inputs[tx_id] === undefined) {
               mock.inputs[tx_id] = utxo_input;
             }
@@ -1093,7 +1184,7 @@ export default {
 
           size = this.calcTxSize(mock);
 
-          if (size >= (bail_size + 1024)) {
+          if (size >= bail_size + 1024) {
             console.log("Rolling up. Too large. We should stop now!", size);
             break;
           }
@@ -1108,9 +1199,9 @@ export default {
         if (this.ProposedUTxO.inputs_json[txid] === undefined) {
           this.ProposedUTxO.inputs_json[txid] = input;
           this.ProposedUTxO.inputs.add_regular_input(
-              this.changeAddress,
-              CSL.TransactionInput.from_json(stringify(input.input)),
-              CSL.Value.from_json(stringify(input.output.amount))
+            this.changeAddress,
+            CSL.TransactionInput.from_json(stringify(input.input)),
+            CSL.Value.from_json(stringify(input.output.amount))
           );
           const input_coin_amt = BigInt(input.output.amount.coin);
           if (typeof this.ProposedUTxO.input_lovelace === "number") {
@@ -1123,7 +1214,12 @@ export default {
       this.handleBundled(mock.outputs);
 
       console.log(`Checking if already optimized...`, this.ProposedUTxO);
-      if (this.ProposedUTxO.inputs.len() === 7 && this.ProposedUTxO.outputs.length === 0 && this.settings.rollupLovelace && this.settings.splitLovelace) {
+      if (
+        this.ProposedUTxO.inputs.len() === 7 &&
+        this.ProposedUTxO.outputs.length === 0 &&
+        this.settings.rollupLovelace &&
+        this.settings.splitLovelace
+      ) {
         console.log("Wallet optimized and only split ADA-only UTxO remain?");
         this.ProposedUTxO.optimized = true;
         this.analyzingUTxO = false;
@@ -1131,7 +1227,11 @@ export default {
       }
 
       if (this.ProposedUTxO.inputs.len() === 0 && this.ProposedUTxO.outputs.length === 0) {
-        console.log("Wallet optimized?", this.ProposedUTxO.inputs.len(), this.ProposedUTxO.outputs.length);
+        console.log(
+          "Wallet optimized?",
+          this.ProposedUTxO.inputs.len(),
+          this.ProposedUTxO.outputs.length
+        );
         this.ProposedUTxO.optimized = true;
         this.analyzingUTxO = false;
         return;
@@ -1195,7 +1295,7 @@ export default {
         txn_size += size_per_output;
         for (const token of tokens) {
           let token_size = 0;
-          const asset_id = token.policy_id + '.' + token.token_id;
+          const asset_id = token.policy_id + "." + token.token_id;
           if (!output_policies.includes(token.policy_id)) {
             token_size += token.policy_id.length / 2;
             output_policies.push(token.policy_id);
@@ -1215,12 +1315,11 @@ export default {
           continue;
         }
 
-
         for (const [policy_id, tokens] of Object.entries(utxo.output.amount.multiasset)) {
           let policy_txn_size = policy_id.length;
           let policy_token_txn_size = 0;
           for (const [token_id, quantity] of Object.entries(tokens)) {
-            const asset_id = policy_id + '.' + token_id;
+            const asset_id = policy_id + "." + token_id;
             if (output_tokens.includes(asset_id)) {
               continue;
             }
@@ -1243,7 +1342,8 @@ export default {
         const backfill_fungible = {};
         const backfill_nonfungible = {};
 
-        let fungible_ct = 0, nonfungible_ct = 0;
+        let fungible_ct = 0,
+          nonfungible_ct = 0;
 
         for (const [policy_id, tokens] of Object.entries(backfill)) {
           for (const [token_id, quantity] of Object.entries(tokens)) {
@@ -1264,11 +1364,15 @@ export default {
         }
 
         if (fungible_ct) {
-          mock.outputs = mock.outputs.concat(this.process('fungible', this.getAllTokensSorted(backfill_fungible)));
+          mock.outputs = mock.outputs.concat(
+            this.process("fungible", this.getAllTokensSorted(backfill_fungible))
+          );
         }
 
         if (nonfungible_ct) {
-          mock.outputs = mock.outputs.concat(this.process('nonfungible', this.getAllTokensSorted(backfill_nonfungible)));
+          mock.outputs = mock.outputs.concat(
+            this.process("nonfungible", this.getAllTokensSorted(backfill_nonfungible))
+          );
         }
 
         return this.calcTxSize(mock);
@@ -1347,22 +1451,16 @@ export default {
         const ScriptHash = CSL.ScriptHash.from_hex(token.policy_id);
         const AssetName = CSL.AssetName.new(this.fromHex(token.token_id));
         const AssetQuantity = CSL.BigNum.from_str(token.quantity.toString());
-        MultiAsset.set_asset(
-            ScriptHash,
-            AssetName,
-            AssetQuantity
-        );
+        MultiAsset.set_asset(ScriptHash, AssetName, AssetQuantity);
       }
-      return CSL.TransactionOutputBuilder
-          .new()
-          .with_address(this.changeAddress)
-          .next()
-          .with_asset_and_min_required_coin_by_utxo_cost(
-              MultiAsset,
-              CSL.DataCost.new_coins_per_byte(
-                  CSL.BigNum.from_str('4310')
-              )
-          ).build();
+      return CSL.TransactionOutputBuilder.new()
+        .with_address(this.changeAddress)
+        .next()
+        .with_asset_and_min_required_coin_by_utxo_cost(
+          MultiAsset,
+          CSL.DataCost.new_coins_per_byte(CSL.BigNum.from_str("4310"))
+        )
+        .build();
     },
     packIn(tokens, outputs, skip_limits) {
       if (outputs === undefined) {
@@ -1416,7 +1514,7 @@ export default {
         if (carry_tokens.length) {
           repack.push({
             policy_id: policy.policy_id,
-            tokens: carry_tokens
+            tokens: carry_tokens,
           });
         }
       }
@@ -1434,7 +1532,7 @@ export default {
     process(token_type, tokens) {
       let ideal_outputs = [];
       switch (token_type) {
-        case 'fungible':
+        case "fungible":
           if (this.settings.isolateFungible) {
             for (const policy of tokens) {
               const policy_outputs = this.packIn([policy]);
@@ -1446,7 +1544,7 @@ export default {
             ideal_outputs = this.packIn(tokens);
           }
           break;
-        case 'nonfungible':
+        case "nonfungible":
           if (this.settings.isolateNonfungible) {
             for (const policy of tokens) {
               const policy_outputs = this.packIn([policy]);
@@ -1465,10 +1563,10 @@ export default {
     },
     resetSettings() {
       this.settings = JSON.parse(stringify(default_settings));
-    }
+    },
   },
   async mounted() {
-    const localSettings = JSON.parse(localStorage.getItem('UnFrackItSettings'));
+    const localSettings = JSON.parse(localStorage.getItem("UnFrackItSettings"));
     if (localSettings !== null) {
       this.settings = localSettings;
     } else {
@@ -1498,20 +1596,20 @@ export default {
     this.watchingTx = setInterval(async () => {
       if (this.pendingTx !== null) {
         try {
-          let subdomain = 'api';
+          let subdomain = "api";
           if (this.network === 0) {
             subdomain = this.testnet;
           }
           const response = await axios.post(
-              `https://${subdomain}.koios.rest/api/v1/tx_status`,
-              {
-                "_tx_hashes": [this.pendingTx]
+            `https://${subdomain}.koios.rest/api/v1/tx_status`,
+            {
+              _tx_hashes: [this.pendingTx],
+            },
+            {
+              headers: {
+                authorization: `Bearer ${koios_key}`,
               },
-              {
-                headers: {
-                  authorization: `Bearer ${koios_key}`
-                }
-              }
+            }
           );
 
           if (response.status === 200) {
@@ -1529,7 +1627,7 @@ export default {
         }
       }
     }, 15000);
-  }
+  },
 };
 </script>
 
