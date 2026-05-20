@@ -4,11 +4,7 @@ module.exports = {
     es2020: true,
     node: true,
   },
-  extends: [
-    "plugin:vue/essential",
-    "eslint:recommended",
-    // "plugin:prettier/recommended",
-  ],
+  extends: ["plugin:vue/essential", "eslint:recommended", "plugin:prettier/recommended"],
   parserOptions: {
     parser: "@babel/eslint-parser",
   },

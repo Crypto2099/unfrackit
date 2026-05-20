@@ -1,0 +1,7 @@
+# Reformat-only commits — ignored by `git blame` so real authorship is preserved.
+#
+# GitHub's blame view honors this file automatically.
+# Locally, enable once with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Add the full 40-char SHA of each reformat commit below.
