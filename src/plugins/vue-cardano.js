@@ -211,7 +211,6 @@ export default {
                     });
                 },
                 async connect(wallet) {
-                    wallet.loading = true;
                     try {
                         this.cardano.ActiveWallet = wallet;
                         this.cardano.Wallet = await wallet.enable();
@@ -219,9 +218,7 @@ export default {
                         await this.getChangeAddress();
                         this.cardano.stake_key = await this.getStakeKey();
                         this.$emit("connected");
-                        wallet.loading = false;
                     } catch (e) {
-                        wallet.loading = false;
                         console.error("Connection Error:", e);
                         throw e;
                     }
