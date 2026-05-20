@@ -219,7 +219,7 @@
         <v-card-title>Connect Your Wallet</v-card-title>
         <v-card-text>
           <v-btn v-for="wallet in cardano.Wallets" :key="wallet.name" block class="wallet-btn mb-2 text-start" x-large
-                 @click="connectTo(wallet)" :loading="wallet.loading">
+                 @click="connectTo(wallet)" :loading="!!walletLoading[wallet.name]">
             <v-img :src="wallet.icon" max-width="24" height="24" class="me-2" contain :alt="wallet.name"></v-img>
             Connect {{ wallet.name.replace(" Wallet", "") }}
           </v-btn>
@@ -354,6 +354,7 @@ export default {
   data: () => ({
     version: version,
     connectModal: false,
+    walletLoading: {},
     analyzingUTxO: false,
     gettingUTxO: false,
     stakeKey: null,
@@ -396,11 +397,29 @@ export default {
         allowOutsideClick: false
       });
     },
+    describeConnectError(e) {
+      const msg = (e && (e.info || e.message)) || String(e);
+      // Wallets that freeze their CIP-30 API object (e.g. Lace) throw a TypeError
+      // when the dApp tries to write a property onto the wallet handle.
+      if (/not extensible|frozen|read.?only/i.test(msg)) {
+        return `This wallet's API is locked down and rejected the connection. Try reloading the page; if the problem persists, please report it.`;
+      }
+      // CIP-30 APIError codes: -1 InvalidRequest, -2 InternalError, -3 Refused, -4 AccountChange
+      if (e && e.code === -3) {
+        return `The wallet declined the connection request. Please approve it in the wallet popup and try again.`;
+      }
+      if (e && e.code === -1) {
+        return `The wallet reported an invalid connection request.`;
+      }
+      return `Could not connect: ${msg}. Make sure a dApp account is selected and the wallet is unlocked.`;
+    },
     async connectTo(wallet) {
+      this.$set(this.walletLoading, wallet.name, true);
       try {
         await this.connect(wallet);
       } catch (e) {
-        this.showError(`Could not connect to your wallet? Make sure you have a dApp account selected!`);
+        this.$set(this.walletLoading, wallet.name, false);
+        this.showError(this.describeConnectError(e));
         return;
       }
 
@@ -414,6 +433,7 @@ export default {
         this.changeAddress = await this.getChangeAddress();
       } catch (e) {
         console.error("Could not fetch the wallet's change address?");
+        this.$set(this.walletLoading, wallet.name, false);
         return;
       }
 
@@ -425,6 +445,7 @@ export default {
       } catch (e) {
         console.error("Could not detect the wallet's connected network?");
       }
+      this.$set(this.walletLoading, wallet.name, false);
       this.connectModal = false;
       await this.checkWalletBalance();
     },
