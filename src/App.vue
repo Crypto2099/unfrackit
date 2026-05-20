@@ -398,8 +398,11 @@ import axios from "axios";
 import stringify from "fast-safe-stringify";
 import version from "./version.json";
 
+// Injected at build time via VUE_APP_KOIOS_JWT (see deploy.yaml / ci.yaml).
+// Fallback keeps `npm run serve` working without an .env.local override.
 const koios_key =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyIjoic3Rha2UxdXk1Nm5uN3c1OGRyNWsyOG1mcnhnaHBuZ25uNHo0N2pkcGdwOW1ldXZncDdrNXFtaHljbnAiLCJleHAiOjE3Njk1Mjg1MDAsInRpZXIiOjEsInByb2pJRCI6IlVuRnJhY2tJdCJ9.GrdvIKjkdDDFENR5a7Kypzt79UbuknjFAgq3SRv0oPw";
+  process.env.VUE_APP_KOIOS_JWT ||
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyIjoic3Rha2UxdTlxdDV2dWo3OHdoZm1zMzhjc2Q3NzVraGV0OGd1cWV0M3hsODJsaG1rbXl0cHEya3R6aGMiLCJleHAiOjE4MTA4NDQwMTAsInRpZXIiOjEsInByb2pJRCI6InVuZnJhY2suaXQifQ.rvAHYjwdN8XQVS_JO68QxsHwO8hYj6j6MHLAiNcxtVg";
 
 class Paginate {
   constructor(page, limit) {

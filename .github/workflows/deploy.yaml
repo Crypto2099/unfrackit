@@ -20,6 +20,7 @@ jobs:
         run: npm run build
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          VUE_APP_KOIOS_JWT: ${{ secrets.KOIOS_JWT }}
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}

@@ -21,6 +21,7 @@ jobs:
         run: npm run build
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          VUE_APP_KOIOS_JWT: ${{ secrets.KOIOS_JWT }}
       # Once smoke tests exist (modernization task A4), add:
       # - run: npx playwright install --with-deps
       # - run: npm run test:e2e
