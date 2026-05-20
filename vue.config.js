@@ -4,8 +4,8 @@ module.exports = defineConfig({
   configureWebpack: {
     resolve: {
       fallback: {
-        url: require.resolve("url")
-      }
-    }
-  }
+        url: require.resolve("url"),
+      },
+    },
+  },
 });
