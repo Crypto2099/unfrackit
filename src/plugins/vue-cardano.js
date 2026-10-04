@@ -112,6 +112,7 @@ export default {
                             "vespr",
                             "begin",
                             "lace",
+                            "1am",
                         ],
                         Wallets: [],
                         Wallet: null,
