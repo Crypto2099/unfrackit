@@ -16,11 +16,9 @@ jobs:
           node-version-file: ".nvmrc"
           cache: "npm"
       - run: npm ci
-      - run: npm run lint
+      - run: npx vue-cli-service lint --no-fix
+      - run: npm test
       - name: Build
         run: npm run build
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-      # Once smoke tests exist (modernization task A4), add:
-      # - run: npx playwright install --with-deps
-      # - run: npm run test:e2e

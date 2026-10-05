@@ -21,3 +21,6 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Protocol parameters written by scripts/publish-protocol-parameters.mjs
+/public/protocol-parameters/

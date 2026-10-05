@@ -30,9 +30,11 @@
           <v-progress-linear indeterminate height="24" color="primary"></v-progress-linear>
         </template>
         <template v-if="cardano.status === `notfound`">
+          <h2 class="mb-4">No Cardano Wallets Found</h2>
           <v-alert color="red" outlined border="left">
             Sorry, we could not detect any Cardano light wallets installed in your browser.
           </v-alert>
+          <v-btn color="primary" @click="checkForCardano">Check again</v-btn>
         </template>
         <template v-if="cardano.status === `found`">
           <div class="my-4 text-center text-md-start">
@@ -46,7 +48,7 @@
           <v-row align="center" justify="center" justify-md="start" class="mb-8">
             <v-chip label class="me-2 mb-2 text-capitalize py-2">
               <v-img :src="cardano.ActiveWallet.icon" class="me-2" contain height="24" width="24"></v-img>
-              {{ cardano.ActiveWallet.name.replace(' Wallet', '') }} Connected
+              {{ cardano.ActiveWallet.displayName }} Connected
             </v-chip>
             <template v-if="network === 1">
               <v-chip label color="primary" class="me-2 mb-2">
@@ -138,15 +140,6 @@
                 Check Again
               </v-btn>
             </p>
-            <template v-if="UTxOSet.len() === 500">
-              <v-alert type="info">
-                <strong>* Note:</strong> By default, UnFrack.it will only analyze the first 500 UTxO of your wallet as
-                this is close to the theoretical maximum number of UTxO that we can operate on
-                with a single transaction. If your wallet contains greater than 500 UTxO then
-                the balance shown here will only reflect the first 500 UTxO returned and not
-                the full balance of your wallet.
-              </v-alert>
-            </template>
             <p>
               <strong>{{ formatAda(toAda(analysis.lovelace)) }}</strong> present in wallet. </p>
             <p>
@@ -154,8 +147,15 @@
                 analysis.total_tokens
               }}</strong> total, discrete
               tokens present in wallet. </p>
+            <p v-if="parametersNote !== null" class="caption text--secondary">{{ parametersNote }}</p>
 
           </template>
+          <p v-else-if="!gettingUTxO">
+            <v-btn color="primary" @click="checkWalletBalance" small :disabled="analyzingUTxO || (pendingTx !== null)">
+              <v-icon class="me-2">mdi-reload</v-icon>
+              Check Again
+            </v-btn>
+          </p>
           <template v-if="analyzingUTxO">
             <h3>Analyzing UTxO Set...</h3>
             <v-progress-linear indeterminate height="24" class="mb-4"></v-progress-linear>
@@ -174,12 +174,17 @@
               </v-btn>
             </template>
             <v-alert class="my-4" dark color="primary" border="left" v-if="pendingTx !== null">
-              You have a current, pending transaction to UnFrack your wallet submitted!<br/> Please wait while we
-              confirm that your transaction has been confirmed on the blockchain before checking your wallet
-              again.<br/><br/> Transaction ID: {{ pendingTx }} <br/> On-Chain Confirmations: {{
-                pendingConfirmations
-              }} of 9 <br/>
+              You have a current, pending transaction to UnFrack your wallet submitted!<br/> Waiting for your
+              wallet to show the new UTxOs. This usually takes one to three minutes.<br/><br/> Transaction ID:
+              {{ pendingTx }} <br/> Waiting for: {{ pendingElapsed }} <br/>
               <v-progress-linear color="white" height="12px" indeterminate></v-progress-linear>
+              <template v-if="pendingLong">
+                <p class="mt-4 mb-2">
+                  This is taking longer than usual. We will keep checking until the transaction lands or its time
+                  to live runs out.
+                </p>
+                <v-btn color="white" light small @click="checkWalletNow">Check my wallet now</v-btn>
+              </template>
             </v-alert>
           </template>
         </template>
@@ -218,10 +223,10 @@
       <v-card>
         <v-card-title>Connect Your Wallet</v-card-title>
         <v-card-text>
-          <v-btn v-for="wallet in cardano.Wallets" :key="wallet.name" block class="wallet-btn mb-2 text-start" x-large
-                 @click="connectTo(wallet)" :loading="!!walletLoading[wallet.name]">
-            <v-img :src="wallet.icon" max-width="24" height="24" class="me-2" contain :alt="wallet.name"></v-img>
-            Connect {{ wallet.name.replace(" Wallet", "") }}
+          <v-btn v-for="wallet in cardano.Wallets" :key="wallet.key" block class="wallet-btn mb-2 text-start" x-large
+                 @click="connectTo(wallet)" :loading="!!walletLoading[wallet.key]">
+            <v-img :src="wallet.icon" max-width="24" height="24" class="me-2" contain :alt="wallet.displayName"></v-img>
+            Connect {{ wallet.displayName }}
           </v-btn>
         </v-card-text>
       </v-card>
@@ -271,7 +276,7 @@
         </v-card-text>
         <v-card-actions class="justify-space-between">
           <v-btn large color="secondary" @click="unfrack = false">Cancel</v-btn>
-          <v-btn large color="primary" @click="doUnFrack">
+          <v-btn large color="primary" @click="doUnFrack" :loading="building">
             LFG! UnFrack My Wallet!
           </v-btn>
         </v-card-actions>
@@ -292,14 +297,81 @@
 </template>
 
 <script>
-// import debounce from "lodash.debounce";
 // import * as CSL from "./lib/CardanoSerializationLib";
 import * as CSL from "@emurgo/cardano-serialization-lib-asmjs"
-import axios from "axios";
 import stringify from "fast-safe-stringify";
 import version from './version.json';
+import {DEFAULT_PARAMETERS, loadProtocolParameters} from './protocol-parameters.js';
+import {currentSlot, ttlFor} from './slots.js';
 
-const koios_key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyIjoic3Rha2UxdXk1Nm5uN3c1OGRyNWsyOG1mcnhnaHBuZ25uNHo0N2pkcGdwOW1ldXZncDdrNXFtaHljbnAiLCJleHAiOjE3Njk1Mjg1MDAsInRpZXIiOjEsInByb2pJRCI6IlVuRnJhY2tJdCJ9.GrdvIKjkdDDFENR5a7Kypzt79UbuknjFAgq3SRv0oPw';
+const SETTINGS_KEY = 'UnFrackItSettings';
+// Listing ends at the wallet's end signals; this ceiling (100,000 UTxOs) only stops a
+// wallet that never sends one.
+const PAGE_LIMIT = 100;
+const MAX_PAGES = 1000;
+// Polling for a submitted transaction: every 30 s; after 30 min a "check now" button
+// appears; the pending state ends 120 slots after the transaction's TTL at the latest.
+const PENDING_POLL_MS = 30000;
+const PENDING_NOTICE_MS = 30 * 60 * 1000;
+const TTL_GRACE_SLOTS = 120;
+// The clock check blocks building when the device clock is this far behind fetched_at.
+const CLOCK_BEHIND_LIMIT_S = 1800;
+
+function escapeHtml(text) {
+  return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+}
+
+// The reason a wallet gave: CIP-30 errors carry `info`, Error objects `message`.
+function errorText(e) {
+  if (e && typeof e === 'object') {
+    if (typeof e.info === 'string' && e.info !== '') {
+      return e.info;
+    }
+    if (typeof e.message === 'string' && e.message !== '') {
+      return e.message;
+    }
+  }
+  return String(e);
+}
+
+// CIP-30 PaginateError: {maxSize}. One wallet rejects with the JSON string of it.
+function isPaginateError(e) {
+  if (e && typeof e === 'object' && typeof e.maxSize === 'number') {
+    return true;
+  }
+  const text = typeof e === 'string' ? e : (e && typeof e.message === 'string' ? e.message : null);
+  if (text === null) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return !!parsed && typeof parsed === 'object' && typeof parsed.maxSize === 'number';
+  } catch (err) {
+    return false;
+  }
+}
+
+// The key that signs for an input: its payment credential, or the whole address for
+// Byron addresses.
+function signingKeyOf(bech32) {
+  try {
+    const address = CSL.Address.from_bech32(bech32);
+    for (const kind of [CSL.BaseAddress, CSL.EnterpriseAddress, CSL.PointerAddress]) {
+      const typed = kind.from_address(address);
+      if (typed) {
+        return typed.payment_cred().to_hex();
+      }
+    }
+  } catch (e) {
+    // Not a Shelley address.
+  }
+  return bech32;
+}
 
 class Paginate {
   constructor(page, limit) {
@@ -319,7 +391,6 @@ const analysis_format = {
 
 const default_settings = {
   bundleSize: 30,
-  extraADA: 5,
   isolateFungible: false,
   splitLovelace: true,
   isolateNonfungible: false,
@@ -365,11 +436,16 @@ export default {
     analyzedUTxO: [],
     analysis: JSON.parse(stringify(analysis_format)),
     ProposedUTxO: JSON.parse(stringify(default_proposed)),
-    inputs: [],
     inputTokens: [],
+    building: false,
     pendingTx: null,
-    pendingConfirmations: 0,
+    pendingInputs: [],
+    pendingSince: null,
+    pendingTtl: null,
+    clockNow: Date.now(),
     watchingTx: null,
+    protocolParameters: null,
+    parametersStatus: null,
     network: null,
     testnet: 'preprod',
     chooseTestnet: false,
@@ -378,6 +454,41 @@ export default {
       preview: 'Preview'
     }
   }),
+  computed: {
+    networkName() {
+      if (this.network === 0) {
+        return this.testnet;
+      }
+      return 'mainnet';
+    },
+    // The parameters every fee and size calculation reads.
+    parameters() {
+      return this.protocolParameters || DEFAULT_PARAMETERS[this.networkName];
+    },
+    parametersNote() {
+      const status = this.parametersStatus;
+      if (status === null) {
+        return null;
+      }
+      if (status.source === 'default') {
+        return 'Fee parameters: built-in defaults.';
+      }
+      if (status.stale) {
+        return `Fee parameters: epoch ${this.parameters.epoch}, loaded from ${status.source}.`;
+      }
+      return null;
+    },
+    pendingElapsed() {
+      if (this.pendingSince === null) {
+        return '';
+      }
+      const seconds = Math.max(0, Math.floor((this.clockNow - this.pendingSince) / 1000));
+      return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')} s`;
+    },
+    pendingLong() {
+      return this.pendingSince !== null && this.clockNow - this.pendingSince >= PENDING_NOTICE_MS;
+    }
+  },
   methods: {
     showError(msg, title) {
       this.$swal.fire({
@@ -414,40 +525,65 @@ export default {
       return `Could not connect: ${msg}. Make sure a dApp account is selected and the wallet is unlocked.`;
     },
     async connectTo(wallet) {
-      this.$set(this.walletLoading, wallet.name, true);
+      this.$set(this.walletLoading, wallet.key, true);
       try {
         await this.connect(wallet);
       } catch (e) {
-        this.$set(this.walletLoading, wallet.name, false);
-        this.showError(this.describeConnectError(e));
+        this.$set(this.walletLoading, wallet.key, false);
+        this.showError(escapeHtml(this.describeConnectError(e)));
         return;
       }
 
+      let connected;
       try {
-        this.stakeKey = await this.getStakeKey();
-      } catch (e) {
-        console.error("Could not fetch stake key?");
+        connected = await this.readWallet(true);
+      } finally {
+        this.$set(this.walletLoading, wallet.key, false);
       }
-
-      try {
-        this.changeAddress = await this.getChangeAddress();
-      } catch (e) {
-        console.error("Could not fetch the wallet's change address?");
-        this.$set(this.walletLoading, wallet.name, false);
+      if (!connected) {
         return;
       }
+      this.connectModal = false;
+      await this.checkWalletBalance();
+    },
+    // Read what the app needs from a newly enabled wallet: stake address (display
+    // only), destination address and network. Returns false, after showing why,
+    // when the wallet has no address to send to.
+    async readWallet(firstConnect) {
+      this.stakeKey = await this.getStakeKey();
+
+      const address = await this.getChangeAddress();
+      if (address === null) {
+        this.showError("This wallet has no address to send to.");
+        this.disconnect();
+        return false;
+      }
+      this.changeAddress = address;
 
       try {
         this.network = await this.getWalletNetwork();
-        if (this.network === 0) {
+        if (this.network === 0 && firstConnect) {
           this.chooseTestnet = true;
         }
       } catch (e) {
-        console.error("Could not detect the wallet's connected network?");
+        console.error("Could not detect the wallet's connected network?", e);
       }
-      this.$set(this.walletLoading, wallet.name, false);
-      this.connectModal = false;
-      await this.checkWalletBalance();
+      await this.refreshParameters(this.networkName);
+      return true;
+    },
+    async refreshParameters(network) {
+      try {
+        const result = await loadProtocolParameters(network, {baseUrl: process.env.BASE_URL});
+        // A slower load for another network must not replace the current one.
+        if (network !== this.networkName) {
+          return;
+        }
+        this.protocolParameters = result.parameters;
+        this.parametersStatus = {source: result.source, stale: result.stale, fetchedAt: result.fetchedAt};
+        console.info(`Protocol parameters for ${network}: epoch ${result.parameters.epoch}, source ${result.source}${result.stale ? ', stale' : ''}`);
+      } catch (e) {
+        console.error("Could not load protocol parameters:", e);
+      }
     },
     disconnect() {
       this.stakeKey = null;
@@ -459,62 +595,126 @@ export default {
       this.ProposedUTxO = JSON.parse(stringify(default_proposed));
       this.changeWallet();
     },
+    loadSettings() {
+      let stored = null;
+      try {
+        stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+      } catch (e) {
+        console.info("Ignoring unreadable settings:", e);
+      }
+      const settings = JSON.parse(stringify(default_settings));
+      if (stored !== null && typeof stored === 'object' && !Array.isArray(stored)) {
+        for (const key of Object.keys(default_settings)) {
+          if (typeof stored[key] === typeof default_settings[key]) {
+            settings[key] = stored[key];
+          }
+        }
+      }
+      this.settings = settings;
+    },
+    saveSettings() {
+      try {
+        localStorage.setItem(SETTINGS_KEY, stringify(this.settings));
+      } catch (e) {
+        console.info("Settings not saved:", e);
+      }
+    },
+    // Every UTxO the wallet lists, paging from 0 until the wallet signals the end:
+    // null, an empty page, a page that is not exactly full, a page with nothing new,
+    // or a PaginateError (any page, including page 0). Calls onUtxo(utxo, id) once per
+    // distinct UTxO and returns the set of "txhash#index" ids.
+    async listWalletUtxos(onUtxo) {
+      const ids = new Set();
+      for (let page = 0; ; page++) {
+        if (page >= MAX_PAGES) {
+          throw new Error(`Your wallet listed more than ${(MAX_PAGES * PAGE_LIMIT).toLocaleString('en-US')} UTxOs without reaching the end of its list.`);
+        }
+        let batch;
+        try {
+          batch = await this.cardano.Wallet.getUtxos(undefined, new Paginate(page, PAGE_LIMIT));
+        } catch (e) {
+          if (isPaginateError(e)) {
+            break;
+          }
+          throw e;
+        }
+        if (!Array.isArray(batch) || batch.length === 0) {
+          break;
+        }
+        let added = 0;
+        for (const hex of batch) {
+          const utxo = CSL.TransactionUnspentOutput.from_bytes(this.fromHex(hex));
+          const input = utxo.input();
+          const id = input.transaction_id().to_hex() + '#' + input.index();
+          if (!ids.has(id)) {
+            ids.add(id);
+            added++;
+            if (onUtxo) {
+              onUtxo(utxo, id);
+            }
+          }
+          utxo.free();
+        }
+        if (added === 0 || batch.length !== PAGE_LIMIT) {
+          break;
+        }
+      }
+      return ids;
+    },
     async checkWalletBalance() {
-      localStorage.setItem('UnFrackItSettings', stringify(this.settings));
+      this.saveSettings();
       this.gettingUTxO = true;
       this.UTxOSet = null;
       this.analyzedUTxO = [];
-      this.inputs = [];
       this.analysis = JSON.parse(stringify(analysis_format));
       this.ProposedUTxO = JSON.parse(stringify(default_proposed));
-      const page_max = 5;
-      const page_limit = 100;
-      this.UTxOSet = CSL.TransactionUnspentOutputs.new();
-      const page = new Paginate(0, page_limit);
-      while (page.page < page_max) {
-        // console.log(`Checking UTxO balance... ${page.page} ${page_max}`);
-        const UTxOs = await this.cardano.Wallet.getUtxos(undefined, page);
-        if (UTxOs === null) {
-          // console.log(`UTxOs is null somehow?`, UTxOs);
-          break;
-        }
-        (UTxOs).map((utxo) => {
-          const UTxO = CSL.TransactionUnspentOutput.from_bytes(this.fromHex(utxo));
-          const txin = UTxO.input().transaction_id().to_hex() + '#' + UTxO.input().index();
-          if (this.inputs.includes(txin)) {
-            return;
+      let stage = 'read';
+      try {
+        let reconnected = false;
+        for (; ;) {
+          try {
+            const UTxOSet = CSL.TransactionUnspentOutputs.new();
+            await this.listWalletUtxos((utxo) => UTxOSet.add(utxo));
+            this.UTxOSet = UTxOSet;
+            break;
+          } catch (e) {
+            // CIP-30 AccountChange: enable() again (the wallet does not ask) and
+            // read the new account, once.
+            if (e && e.code === -4 && !reconnected) {
+              reconnected = true;
+              await this.connect(this.cardano.ActiveWallet);
+              if (!(await this.readWallet(false))) {
+                return;
+              }
+              continue;
+            }
+            throw e;
           }
-          this.inputs.push(txin);
-          this.UTxOSet.add(UTxO);
-        });
-        // console.log(`UTxO length? ${UTxOs.length}`);
-        if (UTxOs.length < page_limit) {
-          break;
         }
-        page.page++;
+        this.gettingUTxO = false;
+        stage = 'analyze';
+        await this.analyzeUTxO();
+      } catch (e) {
+        console.error(`Wallet ${stage} error:`, e);
+        if (stage === 'read') {
+          this.showError(`Couldn't read your wallet: ${escapeHtml(errorText(e))}`);
+        } else {
+          this.showError(`Couldn't analyze your wallet: ${escapeHtml(errorText(e))}`);
+        }
+      } finally {
+        this.gettingUTxO = false;
+        this.analyzingUTxO = false;
       }
-      this.gettingUTxO = false;
-      await this.analyzeUTxO();
     },
     doBalanceTxn() {
       // Remove any ADA-only UTXO Outputs
-      for (const i in this.ProposedUTxO.outputs) {
-        const output = this.ProposedUTxO.outputs[i];
-
-        if (output.address().to_bech32() === this.changeAddress.to_bech32() && (output.amount().multiasset() === undefined || output.amount().multiasset() === null)) {
-          console.log("Removing pure Lovelace UTXO from outputs!");
-          this.ProposedUTxO.outputs.splice(parseInt(i), 1);
-        }
-      }
-
-      for (const j in this.ProposedUTxO.outputs_json) {
-        const output = this.ProposedUTxO.outputs_json[j];
-
-        if (output.address === this.changeAddress.to_bech32() && (output.amount.multiasset === null || output.amount.multiasset === undefined)) {
-          console.log("Removing pure lovelace UTXO from outputs JSON!");
-          this.ProposedUTxO.outputs_json.splice(parseInt(j), 1);
-        }
-      }
+      const change_address = this.changeAddress.to_bech32();
+      this.ProposedUTxO.outputs = this.ProposedUTxO.outputs.filter((output) => {
+        return !(output.address().to_bech32() === change_address && (output.amount().multiasset() === undefined || output.amount().multiasset() === null));
+      });
+      this.ProposedUTxO.outputs_json = this.ProposedUTxO.outputs_json.filter((output) => {
+        return !(output.address === change_address && (output.amount.multiasset === null || output.amount.multiasset === undefined));
+      });
 
       this.ProposedUTxO.token_keep = BigInt(0);
 
@@ -526,8 +726,10 @@ export default {
         }
       }
 
-      const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-      let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+      // The 636 bytes added before the fee formula assume the Babbage limits (16384-byte transactions).
+      const {minFeeA, minFeeB, maxTxSize} = this.parameters;
+      const tx_size = maxTxSize - this.estimateSize(this.ProposedUTxO);
+      let estimated_fees = BigInt(((tx_size + 636) * minFeeA) + minFeeB);
 
       console.log("Estimated fees are", estimated_fees, tx_size);
 
@@ -535,14 +737,16 @@ export default {
 
       console.log("Lovelace Balance", lovelace_balance);
 
+      const not_enough_ada = "Not enough ADA to make change. Add some ADA to the wallet and try again.";
+      let iterations = 1;
       while (lovelace_balance < 1000000n) {
-        let iterations = 1;
         console.log("Lovelace balance is less than 1A?");
         if (iterations >= 100) {
-          this.showError("Could not add enough free ADA to create a change balance!");
-          throw Error("Could not add enough change to balance!");
+          this.showError(not_enough_ada);
+          return false;
         }
 
+        let inputs_added = 0;
         for (const utxo_input of this.analyzedUTxO) {
           if (utxo_input.output.amount.multiasset === null) {
             // Lovelace-only input, let's grab it!
@@ -556,9 +760,10 @@ export default {
               );
               const input_coin_amt = BigInt(utxo_input.output.amount.coin);
               this.ProposedUTxO.input_lovelace += input_coin_amt;
+              inputs_added++;
 
-              const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-              let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+              const tx_size = maxTxSize - this.estimateSize(this.ProposedUTxO);
+              estimated_fees = BigInt(((tx_size + 636) * minFeeA) + minFeeB);
 
               console.log("Estimated fees are", estimated_fees, tx_size);
 
@@ -569,11 +774,16 @@ export default {
             }
           }
         }
-        const tx_size = 16384 - this.estimateSize(this.ProposedUTxO);
-        let estimated_fees = BigInt(((tx_size + 636) * 44) + 155381);
+        const tx_size = maxTxSize - this.estimateSize(this.ProposedUTxO);
+        estimated_fees = BigInt(((tx_size + 636) * minFeeA) + minFeeB);
 
         console.log("Estimated fees are", estimated_fees, tx_size);
         lovelace_balance = this.ProposedUTxO.input_lovelace - this.ProposedUTxO.token_keep - estimated_fees;
+        if (inputs_added === 0 && lovelace_balance < 1000000n) {
+          // No ADA-only input is left to add, so change can never reach 1 ADA.
+          this.showError(not_enough_ada);
+          return false;
+        }
         iterations++;
       }
 
@@ -636,159 +846,248 @@ export default {
       this.ProposedUTxO.fees = estimated_fees;
 
       console.log(`Done balancing transaction... estimated fees are... ${estimated_fees}`);
-
+      return true;
     },
     async doUnFrack() {
-      let unfrackit_address;
-      if (this.network === 0) {
-        unfrackit_address = 'addr_test1vz4ajuum47atvtf0vh0y9754cnryuzpa0h5lq8cgp5ml4lshrl9ch';
-      } else {
-        unfrackit_address = 'addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv';
+      if (this.building || this.pendingTx !== null) {
+        return;
       }
-      if (this.network === 1) {
-        if (this.ProposedUTxO.tip > 0) {
-          // Check if we already have a tip in the output sets... Don't want to add multiple tips!
-          const tip_amt = this.toLovelace(this.ProposedUTxO.tip);
-          let tip_found = false;
-          for (const output of this.ProposedUTxO.outputs_json) {
-            if (output.address === unfrackit_address) {
-              output.amount.coin = tip_amt;
-              tip_found = true;
-            }
-          }
-          if (!tip_found) {
-            console.log("Adding new tip");
-            const output = CSL.TransactionOutputBuilder
-                .new()
-                .with_address(
-                    CSL.Address.from_bech32(unfrackit_address)
-                ).next()
-                .with_coin(
-                    CSL.BigNum.from_str(tip_amt.toString())
-                ).build();
-            this.ProposedUTxO.outputs.push(output);
-            this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
-          } else {
-            console.log("Updating existing tip");
-            for (const i in this.ProposedUTxO.outputs) {
-              const output = this.ProposedUTxO.outputs[i];
-              if (output.address().to_bech32() === unfrackit_address) {
-                output.amount().set_coin(CSL.BigNum.from_str(tip_amt.toString()));
+      this.building = true;
+      try {
+        await this.buildSignSubmit();
+      } finally {
+        this.building = false;
+      }
+    },
+    async buildSignSubmit() {
+      await this.refreshParameters(this.networkName);
+
+      // The parameters file's fetched_at is never later than the real time, so a
+      // device clock far behind it would give a TTL that is already in the past.
+      const status = this.parametersStatus;
+      if (status !== null && status.fetchedAt !== null) {
+        const behind = status.fetchedAt - Date.now() / 1000;
+        if (behind > CLOCK_BEHIND_LIMIT_S) {
+          this.showError(`Your device clock is about ${Math.round(behind / 60)} minutes behind. Fix it before signing, or the network will reject the transaction.`);
+          this.unfrack = false;
+          return;
+        }
+      }
+
+      let tx;
+      let ttl;
+      try {
+        let unfrackit_address;
+        if (this.network === 0) {
+          unfrackit_address = 'addr_test1vz4ajuum47atvtf0vh0y9754cnryuzpa0h5lq8cgp5ml4lshrl9ch';
+        } else {
+          unfrackit_address = 'addr1v8v7p3truluykd2jy2g5a55h4rgt50q0lk89tfjtwqe9tggg5jenv';
+        }
+        if (this.network === 1) {
+          if (this.ProposedUTxO.tip > 0) {
+            // Check if we already have a tip in the output sets... Don't want to add multiple tips!
+            const tip_amt = this.toLovelace(this.ProposedUTxO.tip);
+            let tip_found = false;
+            for (const output of this.ProposedUTxO.outputs_json) {
+              if (output.address === unfrackit_address) {
+                output.amount.coin = tip_amt;
+                tip_found = true;
               }
             }
-          }
+            if (!tip_found) {
+              console.log("Adding new tip");
+              const output = CSL.TransactionOutputBuilder
+                  .new()
+                  .with_address(
+                      CSL.Address.from_bech32(unfrackit_address)
+                  ).next()
+                  .with_coin(
+                      CSL.BigNum.from_str(tip_amt.toString())
+                  ).build();
+              this.ProposedUTxO.outputs.push(output);
+              this.ProposedUTxO.outputs_json.push(JSON.parse(output.to_json()));
+            } else {
+              console.log("Updating existing tip");
+              for (const output of this.ProposedUTxO.outputs) {
+                if (output.address().to_bech32() === unfrackit_address) {
+                  output.amount().set_coin(CSL.BigNum.from_str(tip_amt.toString()));
+                }
+              }
+            }
 
-        } else {
-          console.log("Removing existing tip");
-          // Need to remove an output if we already added a tip previously
-          for (const i in this.ProposedUTxO.outputs_json) {
-            const output = this.ProposedUTxO.outputs_json[i];
-            if (output.address === unfrackit_address) {
-              this.ProposedUTxO.outputs_json.splice(i, 1);
-            }
-          }
-          for (const j in this.ProposedUTxO.outputs) {
-            const output = this.ProposedUTxO.outputs[j];
-            if (output.address().to_bech32() === unfrackit_address) {
-              this.ProposedUTxO.outputs.splice(j, 1);
-            }
+          } else {
+            console.log("Removing existing tip");
+            // Need to remove an output if we already added a tip previously
+            this.ProposedUTxO.outputs_json = this.ProposedUTxO.outputs_json.filter((output) => output.address !== unfrackit_address);
+            this.ProposedUTxO.outputs = this.ProposedUTxO.outputs.filter((output) => output.address().to_bech32() !== unfrackit_address);
           }
         }
-      }
 
-      console.log("Attempting to balance transaction");
-      this.doBalanceTxn();
+        console.log("Attempting to balance transaction");
+        if (!this.doBalanceTxn()) {
+          this.unfrack = false;
+          return;
+        }
 
-      const txBuilder = await this.prepareTransaction();
+        const txBuilder = this.prepareTransaction(this.parameters);
 
-      const aux_data = CSL.AuxiliaryData.new();
-      const metadata = CSL.GeneralTransactionMetadata.new();
-      metadata.insert(
-          CSL.BigNum.from_str('674'),
-          CSL.encode_json_str_to_metadatum(stringify({
-            msg: [
-              "https://unfrack.it"
-            ]
-          }))
-      );
-      aux_data.set_metadata(metadata);
+        const aux_data = CSL.AuxiliaryData.new();
+        const metadata = CSL.GeneralTransactionMetadata.new();
+        metadata.insert(
+            CSL.BigNum.from_str('674'),
+            CSL.encode_json_str_to_metadatum(stringify({
+              msg: [
+                "https://unfrack.it"
+              ]
+            }))
+        );
+        aux_data.set_metadata(metadata);
 
-      txBuilder.add_json_metadatum(
-          CSL.BigNum.from_str('674'),
-          stringify({
-            msg: [
-              "https://unfrack.it"
-            ]
-          })
-      );
+        txBuilder.add_json_metadatum(
+            CSL.BigNum.from_str('674'),
+            stringify({
+              msg: [
+                "https://unfrack.it"
+              ]
+            })
+        );
 
-      console.log("Added metadata");
+        console.log("Added metadata");
 
-      txBuilder.set_inputs(this.ProposedUTxO.inputs);
+        txBuilder.set_inputs(this.ProposedUTxO.inputs);
 
-      console.log("Set inputs");
+        console.log("Set inputs");
 
-      for (const output of this.ProposedUTxO.outputs) {
-        txBuilder.add_output(output);
-      }
+        for (const output of this.ProposedUTxO.outputs) {
+          txBuilder.add_output(output);
+        }
 
-      console.log("Added outputs!");
+        console.log("Added outputs!");
 
-      txBuilder.set_fee(CSL.BigNum.from_str(this.ProposedUTxO.fees.toString()));
+        txBuilder.set_fee(CSL.BigNum.from_str(this.ProposedUTxO.fees.toString()));
 
-      console.log("Set fees");
+        console.log("Set fees");
 
-      let txBuilt;
-      try {
-        txBuilt = await txBuilder.build();
+        // Valid for one hour: after that slot the transaction can never land.
+        ttl = ttlFor(this.networkName);
+        txBuilder.set_ttl_bignum(CSL.BigNum.from_str(String(ttl)));
+
+        const txBuilt = txBuilder.build();
+        tx = CSL.Transaction.new(txBuilt, CSL.TransactionWitnessSet.new(), aux_data);
       } catch (e) {
         console.error("Error Building Transaction", e);
+        this.showError(`Couldn't build the transaction: ${escapeHtml(errorText(e))}`);
+        this.unfrack = false;
         return;
       }
 
-      const witnessSet = CSL.TransactionWitnessSet.new();
-
-      const tx = CSL.Transaction.new(txBuilt, witnessSet, aux_data);
-
+      // partialSign false: every input belongs to this wallet, so a wallet that cannot
+      // sign them all must say so before anything is submitted.
       let witness;
       try {
-        witness = await this.cardano.Wallet.signTx(tx.to_hex(), true);
+        witness = await this.cardano.Wallet.signTx(tx.to_hex(), false);
       } catch (e) {
         console.error("Failed to sign?", e);
+        if (e && e.code === 2) {
+          this.showError("Your wallet said no. Nothing was sent; your UTxOs are exactly as fracked as before.");
+        } else if (e && e.code === 1) {
+          this.showError(`Your wallet couldn't sign every input: ${escapeHtml(errorText(e))}. Nothing was sent. Some UTxOs may belong to a script or another account.`);
+        } else {
+          this.showError(`Your wallet couldn't sign the transaction: ${escapeHtml(errorText(e))}. Nothing was sent.`);
+        }
+        this.unfrack = false;
         return;
       }
 
-      const totalVkeys = CSL.Vkeywitnesses.new();
+      let signedTx;
+      let txHash;
+      try {
+        const witnessSet = CSL.TransactionWitnessSet.new();
+        const totalVkeys = CSL.Vkeywitnesses.new();
 
-      const addWitness = CSL.TransactionWitnessSet.from_bytes(this.fromHex(witness));
-      const addVkeys = addWitness.vkeys();
-      if (addVkeys) {
-        for (let i = 0; i < addVkeys.len(); i++) {
-          totalVkeys.add(addVkeys.get(i));
+        const addWitness = CSL.TransactionWitnessSet.from_bytes(this.fromHex(witness));
+        const addVkeys = addWitness.vkeys();
+        if (addVkeys) {
+          for (let i = 0; i < addVkeys.len(); i++) {
+            totalVkeys.add(addVkeys.get(i));
+          }
         }
+
+        witnessSet.set_vkeys(totalVkeys);
+        signedTx = CSL.Transaction.new(
+            tx.body(),
+            witnessSet,
+            tx.auxiliary_data()
+        );
+        txHash = CSL.FixedTransaction.from_bytes(signedTx.to_bytes()).transaction_hash().to_hex();
+      } catch (e) {
+        console.error("Witness Error", e);
+        this.showError(`Couldn't read the signature your wallet returned: ${escapeHtml(errorText(e))}. Nothing was sent.`);
+        this.unfrack = false;
+        return;
       }
 
-      witnessSet.set_vkeys(totalVkeys);
-      const signedTx = await CSL.Transaction.new(
-          tx.body(),
-          witnessSet,
-          tx.auxiliary_data()
-      );
-
+      const spent = Object.keys(this.ProposedUTxO.inputs_json);
       try {
         const response = await this.cardano.Wallet.submitTx(
             this.toHex(signedTx.to_bytes())
         );
         // Response === TX ID
-        console.log("Result", response);
-        if (response) {
-          this.showSuccess(`Transaction ID ${response} has been submitted to the blockchain.<br />Please allow a few minutes for the transaction to be confirmed.`, `You UnFracked It!`);
-          this.pendingTx = response;
-          this.unfrack = false;
-        }
+        console.log("Result", response, txHash);
+        this.showSuccess(`Transaction ID ${escapeHtml(txHash)} has been submitted to the blockchain.<br />Please allow a few minutes for the transaction to be confirmed.`, `You UnFracked It!`);
+        this.pendingTx = txHash;
+        this.pendingInputs = spent;
+        this.pendingSince = Date.now();
+        this.pendingTtl = ttl;
+        this.clockNow = Date.now();
+        this.unfrack = false;
       } catch (e) {
         console.error("Submit Error", e);
-        this.showError(`Sorry, we couldn't submit your transaction.<br />Please try again later!`);
+        this.showError(`Sorry, we couldn't submit your transaction: ${escapeHtml(errorText(e))}<br />Please try again later!`);
+        this.unfrack = false;
+      }
+    },
+    clearPending() {
+      this.pendingTx = null;
+      this.pendingInputs = [];
+      this.pendingSince = null;
+      this.pendingTtl = null;
+    },
+    async checkWalletNow() {
+      this.clearPending();
+      await this.checkWalletBalance();
+    },
+    // Runs every 30 s while a transaction is pending. It has landed when the wallet no
+    // longer lists any of its inputs and lists one of its outputs. Once the TTL (plus
+    // 120 slots for wallet backend lag) has passed it can never land: if an input is
+    // still listed it expired; if none is, it landed and its outputs are already spent
+    // or not shown, so the wallet is read again either way.
+    async pollPending() {
+      if (this.pendingTx === null || this.pollingPending) {
+        return;
+      }
+      this.pollingPending = true;
+      const txHash = this.pendingTx;
+      try {
+        const ids = await this.listWalletUtxos();
+        if (this.pendingTx !== txHash) {
+          return;
+        }
+        const inputsGone = this.pendingInputs.every((id) => !ids.has(id));
+        const outputSeen = [...ids].some((id) => id.startsWith(txHash + '#'));
+        const pastTtl = currentSlot(this.networkName) >= this.pendingTtl + TTL_GRACE_SLOTS;
+        if (inputsGone && (outputSeen || pastTtl)) {
+          this.clearPending();
+          await this.checkWalletBalance();
+        } else if (pastTtl) {
+          this.clearPending();
+          this.showError("The transaction expired without landing (its time to live was one hour). Nothing was spent. Check again to start over.");
+        }
+      } catch (e) {
+        // Wallets can throw while busy; the next tick tries again.
+        console.info("Pending transaction check skipped:", e);
+      } finally {
+        this.pollingPending = false;
       }
     },
     getAllTokensSorted(entry_tokens) {
@@ -1006,8 +1305,9 @@ export default {
         outputs: []
       };
 
-      let size;
-      const bail_size = 14336;
+      let size = this.calcTxSize(mock);
+      // The 2048- and 1024-byte margins below assume the Babbage limits (16384-byte transactions).
+      const bail_size = this.parameters.maxTxSize - 2048;
 
       console.log("Parsing ideal fungibles...");
       for (const output of ideal_fungible_outputs) {
@@ -1173,7 +1473,7 @@ export default {
       return output_size;
     },
     calcTxSize(mock, doBackfill) {
-      const max_tx = 16384;
+      const max_tx = this.parameters.maxTxSize;
       const min_txn = 768;
       const min_sig = 512;
       const size_per_input = 37;
@@ -1279,9 +1579,15 @@ export default {
       return txn_size;
     },
     estimateSize(analysis, count_input) {
-      const max_tx = 16384;
-      const max_utxo = 5000;
-      const min_sig = 500;
+      const max_tx = this.parameters.maxTxSize;
+      const max_utxo = this.parameters.maxValSize;
+      // One vkey witness per distinct payment credential over the inputs (101 bytes
+      // each) plus the witness set's own framing.
+      const signing_keys = new Set();
+      for (const input of Object.values(analysis.inputs_json)) {
+        signing_keys.add(signingKeyOf(input.output.address));
+      }
+      const min_sig = 101 * Math.max(1, signing_keys.size) + 8;
       const size_per_input = 37;
       const size_per_output = 64;
       const fee_size = 6;
@@ -1360,7 +1666,7 @@ export default {
           .with_asset_and_min_required_coin_by_utxo_cost(
               MultiAsset,
               CSL.DataCost.new_coins_per_byte(
-                  CSL.BigNum.from_str('4310')
+                  CSL.BigNum.from_str(String(this.parameters.coinsPerUtxoByte))
               )
           ).build();
     },
@@ -1467,68 +1773,33 @@ export default {
       this.settings = JSON.parse(stringify(default_settings));
     }
   },
-  async mounted() {
-    const localSettings = JSON.parse(localStorage.getItem('UnFrackItSettings'));
-    if (localSettings !== null) {
-      this.settings = localSettings;
-    } else {
-      this.settings = JSON.parse(stringify(default_settings));
-    }
-    await this.checkForCardano();
+  mounted() {
+    this.loadSettings();
+    // Not awaited: page load does not wait for the parameters file.
+    this.refreshParameters('mainnet');
+    this.checkForCardano();
   },
   watch: {
-    // settings: {
-    //   async handler(newSettings) {
-    //     this.watchSettings(newSettings);
-    //   },
-    //   deep: true
-    // }
+    // The preprod/preview choice is made after connecting; it selects the parameters
+    // file and the slot origin for the TTL.
+    testnet() {
+      if (this.network === 0) {
+        this.refreshParameters(this.networkName);
+      }
+    }
   },
   created() {
-    // this.watchSettings = debounce(async (newSettings) => {
-    //   if (newSettings === null) {
-    //     return;
-    //   }
-    //   localStorage.setItem('UnFrackItSettings', stringify(newSettings));
-    //   if (this.cardano.status === 'connected') {
-    //     await this.checkWalletBalance();
-    //   }
-    // }, 1000);
-
-    this.watchingTx = setInterval(async () => {
+    this.watchingTx = setInterval(() => this.pollPending(), PENDING_POLL_MS);
+    this.clockTimer = setInterval(() => {
       if (this.pendingTx !== null) {
-        try {
-          let subdomain = 'api';
-          if (this.network === 0) {
-            subdomain = this.testnet;
-          }
-          const response = await axios.post(
-              `https://${subdomain}.koios.rest/api/v1/tx_status`,
-              {
-                "_tx_hashes": [this.pendingTx]
-              },
-              {
-                headers: {
-                  authorization: `Bearer ${koios_key}`
-                }
-              }
-          );
-
-          if (response.status === 200) {
-            const data = response.data;
-            this.pendingConfirmations = data[0].num_confirmations;
-            if (data[0].num_confirmations >= 9) {
-              // console.log(`Have ${data[0].num_confirmations} confirmations of the transaction!`);
-              this.pendingTx = null;
-              this.pendingConfirmations = 0;
-              await this.checkWalletBalance();
-            }
-          }
-        } catch (e) {
-          console.error("Axios Error:", e);
-        }
+        this.clockNow = Date.now();
       }
-    }, 15000);
+    }, 1000);
+  },
+  beforeDestroy() {
+    clearInterval(this.watchingTx);
+    clearInterval(this.clockTimer);
+    clearTimeout(this.discoveryTimer);
   }
 };
 </script>

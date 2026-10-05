@@ -1,0 +1,26 @@
+name: Publish protocol parameters
+
+# Epoch boundaries: mainnet 21:44:51 UTC every five days, preprod 00:00 UTC every
+# five days, preview 00:00 UTC daily. Runs at 22:15 and 00:15 UTC land within
+# 30 minutes after each of them.
+on:
+  schedule:
+    - cron: "15 0,22 * * *"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+      - name: Publish
+        run: node scripts/publish-protocol-parameters.mjs --out "$RUNNER_TEMP/protocol-parameters" --upload "s3://${{ secrets.AWS_S3_BUCKET }}"
