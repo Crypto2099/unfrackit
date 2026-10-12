@@ -118,6 +118,11 @@ async function waitFor(koios, hashes, label) {
 
 // Submit in order. A transaction that spends an unconfirmed output can be
 // refused while its parent is still propagating, so that case is retried.
+// A resubmission of a transaction the node already holds (after a lost
+// response, or on resuming a journal) is refused because its inputs are
+// spent; only the journal's own transactions spend these inputs, so that
+// refusal counts as submitted, and the confirmation wait or `verify` that
+// follows shows whether it landed.
 async function submitAll(koios, txs) {
   const st = await koios.status(txs.map((t) => t.hash));
   for (let i = 0; i < txs.length; i++) {
@@ -129,6 +134,7 @@ async function submitAll(koios, txs) {
         if (id !== t.hash) throw new Error(`submitted ${t.hash} but the node returned ${id}`);
         break;
       } catch (e) {
+        if (/All inputs are spent|already been included/i.test(e.message)) break;
         if (attempt < 6 && /BadInputs|UTxO|unknown|not found/i.test(e.message)) await sleep(5000);
         else throw e;
       }
