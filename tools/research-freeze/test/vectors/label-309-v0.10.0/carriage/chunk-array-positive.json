@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "primitive": "label309-chunk-array-reassembly",
+  "source": "Label 309 whole-body chunk-array transport",
+  "description": "Positive reassembly vectors. The label-309 value is a definite-length CBOR array of definite-length byte strings of 1 to 64 bytes (zero-length tolerated on read); in-order byte concatenation of the elements is the record body. Two transport arrays whose concatenations are byte-identical denote the same record.",
+  "vectors": [
+    {
+      "name": "single-chunk-63-byte-body",
+      "label_309_value_cbor_hex": "81583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected_record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "note": "A body of 64 bytes or fewer is still carried as a chunk array \u2014 here one element. The chunk-array form is required regardless of body length."
+    },
+    {
+      "name": "minimal-split-32-31",
+      "label_309_value_cbor_hex": "825820a2617601656974656d7381a166686173686573a168736861322d323536582011581f11111111111111111111111111111111111111111111111111111111111111",
+      "expected_record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "note": "An arbitrary split; chunk boundaries carry no semantic meaning."
+    },
+    {
+      "name": "zero-length-chunks-tolerated",
+      "label_309_value_cbor_hex": "85405820a2617601656974656d7381a166686173686573a168736861322d32353658201140581f1111111111111111111111111111111111111111111111111111111111111140",
+      "expected_record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "note": "Zero-length chunks contribute no bytes and MUST NOT be rejected: chunk boundaries are semantics-free, including degenerate ones."
+    },
+    {
+      "name": "one-byte-chunks",
+      "label_309_value_cbor_hex": "983f41a24161417641014165416941744165416d4173418141a1416641684161417341684165417341a141684173416841614132412d4132413541364158412041114111411141114111411141114111411141114111411141114111411141114111411141114111411141114111411141114111411141114111411141114111",
+      "expected_record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "note": "Maximal over-chunking (63 one-byte chunks) reassembles identically; producers SHOULD use the minimal split but verifiers accept any."
+    }
+  ]
+}
