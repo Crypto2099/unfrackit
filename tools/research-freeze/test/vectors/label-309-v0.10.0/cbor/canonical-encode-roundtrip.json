@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "primitive": "canonical-cbor-encode",
+  "source": "project-internal — anticipates the Label 309 record encoder consumer",
+  "vectors": [
+    {
+      "name": "map-ab-out-of-order-ac1",
+      "input_json": "{\"b\": 1, \"a\": 2}",
+      "expected_cbor_hex": "a2616102616201"
+    },
+    {
+      "name": "cardano-poe-record-shaped",
+      "input_json": "{\"v\":1}",
+      "expected_cbor_hex": "a1617601"
+    },
+    {
+      "name": "ed25519-pubkey-as-bytes",
+      "input_json": "\"placeholder\"",
+      "input_value_spec": {
+        "type": "bytes",
+        "hex": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+      },
+      "expected_cbor_hex": "5820deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    },
+    {
+      "name": "sha256-hash-as-bytes",
+      "input_json": "\"placeholder\"",
+      "input_value_spec": {
+        "type": "bytes",
+        "hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "expected_cbor_hex": "58200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "name": "nested-deep",
+      "input_json": "{\"a\": {\"b\": {\"c\": 1}}}",
+      "expected_cbor_hex": "a16161a16162a1616301"
+    },
+    {
+      "name": "empty-array",
+      "input_json": "[]",
+      "expected_cbor_hex": "80"
+    },
+    {
+      "name": "empty-map",
+      "input_json": "{}",
+      "expected_cbor_hex": "a0"
+    },
+    {
+      "name": "empty-text",
+      "input_json": "\"\"",
+      "expected_cbor_hex": "60"
+    },
+    {
+      "name": "uint-boundary-2pow32",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bigint",
+        "decimal": "4294967296"
+      },
+      "expected_cbor_hex": "1b0000000100000000"
+    },
+    {
+      "name": "uint-boundary-2pow32-minus-1",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bigint",
+        "decimal": "4294967295"
+      },
+      "expected_cbor_hex": "1affffffff"
+    },
+    {
+      "name": "uint-boundary-2pow63-minus-1",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bigint",
+        "decimal": "9223372036854775807"
+      },
+      "expected_cbor_hex": "1b7fffffffffffffff"
+    },
+    {
+      "name": "uint-boundary-2pow63",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bigint",
+        "decimal": "9223372036854775808"
+      },
+      "expected_cbor_hex": "1b8000000000000000"
+    }
+  ]
+}

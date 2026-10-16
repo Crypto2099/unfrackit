@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "primitive": "cardano-confirmation-depth",
+  "source": "Label 309 chain facts \u2014 confirmation-depth definition",
+  "description": "depth = (resolving explorer's tip height) - (height of the block including the transaction) + 1, counted in blocks; a transaction in the tip block has depth exactly 1. A depth below the verifier's threshold is reported INSUFFICIENT_CONFIRMATIONS with verdict pending (never failed), and the pipeline SHOULD halt there. Both heights are explorer-asserted.",
+  "vectors": [
+    {
+      "name": "tip-block-depth-1",
+      "tip_height": 1000,
+      "block_height": 1000,
+      "threshold": 15,
+      "expected_depth": 1,
+      "expected": {
+        "status": "pending",
+        "code": "INSUFFICIENT_CONFIRMATIONS"
+      },
+      "note": "A transaction in the explorer's tip block has depth exactly 1."
+    },
+    {
+      "name": "one-below-threshold",
+      "tip_height": 1013,
+      "block_height": 1000,
+      "threshold": 15,
+      "expected_depth": 14,
+      "expected": {
+        "status": "pending",
+        "code": "INSUFFICIENT_CONFIRMATIONS"
+      }
+    },
+    {
+      "name": "exactly-at-threshold",
+      "tip_height": 1014,
+      "block_height": 1000,
+      "threshold": 15,
+      "expected_depth": 15,
+      "expected": {
+        "status": "confirmed"
+      },
+      "note": "depth == threshold satisfies the threshold; only depth < threshold is pending."
+    },
+    {
+      "name": "deep-confirmation",
+      "tip_height": 2000,
+      "block_height": 1000,
+      "threshold": 15,
+      "expected_depth": 1001,
+      "expected": {
+        "status": "confirmed"
+      }
+    },
+    {
+      "name": "threshold-1-tip-block",
+      "tip_height": 5000,
+      "block_height": 5000,
+      "threshold": 1,
+      "expected_depth": 1,
+      "expected": {
+        "status": "confirmed"
+      },
+      "note": "Under a depth-1 threshold the tip block itself satisfies the check; the recommended deployment threshold is >= 15."
+    }
+  ]
+}
