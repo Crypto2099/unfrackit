@@ -1,0 +1,140 @@
+{
+  "source": "Draft list of the pre-registration, section 5.4 (read 2026-10-05); rows in table order. Rows marked not verified there are checked against each project's own source before the freeze, and the frozen list replaces this file.",
+  "rows": [
+    {
+      "project": "Clay Nation",
+      "stratum": "Clay Nation",
+      "class": "NFT",
+      "policy": "40fa2aa67258b4ce7b5782f74831d46a84c59a0ff0c28262fab21728",
+      "nft_top_exclude": true
+    },
+    {
+      "project": "SpaceBudz",
+      "stratum": "SpaceBudz (CIP-68)",
+      "group": "SpaceBudz",
+      "class": "NFT",
+      "policy": "4523c5e21d409b81c95b45b0aea275b8ea1406e6cafea5583b9f8a5f",
+      "nft_top_exclude": true
+    },
+    {
+      "project": "SpaceBudz",
+      "stratum": "SpaceBudz (CIP-25)",
+      "group": "SpaceBudz",
+      "class": "NFT",
+      "policy": "d5e6bf0500378d4f0da4e8dde6becec7621cd8cbf5cbb9b87013d4cc",
+      "nft_top_exclude": true
+    },
+    {
+      "project": "NIGHT (Midnight)",
+      "stratum": "NIGHT (Midnight)",
+      "class": "FT",
+      "policy": "0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa",
+      "asset_name": "4e49474854",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "IAG (Iagon)",
+      "stratum": "IAG (Iagon)",
+      "class": "FT",
+      "policy": "5d16cc1a177b5d9ba9cfa9793b07e60f1fb70fea1f8aef064415d114",
+      "asset_name": "494147",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "HOSKY",
+      "stratum": "HOSKY",
+      "class": "FT",
+      "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235",
+      "asset_name": "484f534b59",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "SNEK",
+      "stratum": "SNEK",
+      "class": "FT",
+      "policy": "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f",
+      "asset_name": "534e454b",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "World Mobile Token X (WMTX)",
+      "stratum": "World Mobile Token X (WMTX)",
+      "class": "FT",
+      "policy": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a",
+      "asset_name": "576f726c644d6f62696c65546f6b656e58",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Strike (STRIKE)",
+      "stratum": "Strike (STRIKE)",
+      "class": "FT",
+      "policy": "f13ac4d66b3ee19a6aa0f2a22298737bd907cc95121662fc971b5275",
+      "asset_name": "535452494b45",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Liqwid (LQ)",
+      "stratum": "Liqwid (LQ)",
+      "class": "FT",
+      "policy": "da8c30857834c6ae7203935b89278c532b3995245295456f993e1d24",
+      "asset_name": "4c51",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Minswap (MIN)",
+      "stratum": "Minswap (MIN)",
+      "class": "FT",
+      "policy": "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c6",
+      "asset_name": "4d494e",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Infinity Rising (RISE)",
+      "stratum": "Infinity Rising (RISE)",
+      "class": "FT",
+      "policy": "31bdb2d8ed6e2623e121b6db134a1491f4252b9ea87d928eb5290026",
+      "asset_name": "496e66696e69747920526973696e67",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Ascend (ASCEND)",
+      "stratum": "Ascend (ASCEND)",
+      "class": "FT",
+      "policy": "eb7a93ebc321647673490810f618b548d7c24aa64d30ae342dba7076",
+      "asset_name": "0014df10415343454e44",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Indigo (INDY)",
+      "stratum": "Indigo (INDY)",
+      "class": "FT",
+      "policy": "533bb94a8850ee3ccbe483106489399112b74c905342cb1792a797a0",
+      "asset_name": "494e4459",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Nuvola Digital (NVL)",
+      "stratum": "Nuvola Digital (NVL)",
+      "class": "FT",
+      "policy": "5b26e685cc5c9ad630bde3e3cd48c694436671f3d25df53777ca60ef",
+      "asset_name": "4e564c",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "STUFF.io (asset named BOOK)",
+      "stratum": "STUFF.io (asset named BOOK)",
+      "class": "FT",
+      "policy": "51a5e236c4de3af2b8020442e2a26f454fda3b04cb621c1294a0ef34",
+      "asset_name": "424f4f4b",
+      "nft_top_exclude": false
+    },
+    {
+      "project": "Kinka Gold (XNK)",
+      "stratum": "Kinka Gold (XNK)",
+      "class": "FT",
+      "policy": "2c5c6ca6f993e198bc9ac859ffb624dd291ec50b4d361544bd01e3ac",
+      "asset_name": "584e4b",
+      "nft_top_exclude": false
+    }
+  ]
+}
