@@ -1,0 +1,10 @@
+{
+  "source": "Preprod test list: an S3 policy and the M2 policy of the seeded wallets (NFT rows, marked as named so the NFT top ten drops them), the preprod NIGHT and USDr tokens (fungible rows matched by policy and name), and the mainnet HOSKY row, which has no holders on preprod and so gives no stratum.",
+  "rows": [
+    { "project": "Seeded S3", "stratum": "S3 policy", "class": "NFT", "policy": "0a3ead9936b1a36a0d2dc81278a18a69f33e71d17d1fe0a63e551743", "nft_top_exclude": true },
+    { "project": "Seeded M2", "stratum": "M2 policy", "class": "NFT", "policy": "0b437e11d46c0bfa15edf92a774d505fac461c74d17661d0ffbec202", "nft_top_exclude": true },
+    { "project": "NIGHT (preprod)", "stratum": "NIGHT preprod", "class": "FT", "policy": "387c0fb50b54d3e1edca3eb80c7efafd72c1e1a9f3362e7d88f8ccf8", "asset_name": "4e49474854", "nft_top_exclude": false },
+    { "project": "USDr (preprod)", "stratum": "USDr preprod", "class": "FT", "policy": "0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b", "asset_name": "55534472", "nft_top_exclude": false },
+    { "project": "HOSKY", "stratum": "HOSKY", "class": "FT", "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235", "asset_name": "484f534b59", "nft_top_exclude": false }
+  ]
+}
