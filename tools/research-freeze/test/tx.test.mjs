@@ -89,3 +89,48 @@ test('the unfrack.it scanner matches every letter case and nothing else', () => 
   for (const s of ['unfrack.it', 'UNFRACK.IT', 'UnFrack.It', 'xxunFRACK.itxx']) assert.ok(containsMarker(enc(s)), s);
   for (const s of ['unfrack it', 'unfrackit', 'unfrack.i', 'nfrack.it']) assert.ok(!containsMarker(enc(s)), s);
 });
+
+test('a record string that straddles two 64-byte chunks is caught in the reassembled record, not only in the transaction bytes', async () => {
+  // Find a prefix length that puts "unfrack.it" across a chunk boundary, where
+  // the chunk header bytes split it in the serialized transaction.
+  let found = null;
+  for (let n = 0; n < 80 && !found; n++) {
+    const hashed = [{ digest: d(1), hex: hex(d(1)), name: 'doc', type: 'StudyRegistration', ids: [{ id: '10.5281/zenodo.1', id_type: 'DOI', relation: 'Other', relation_info: `${'x'.repeat(n)}see unfrack.it` }] }];
+    const s = await signRecord(buildRecord({ kind: 'freeze', hashed }), id.signing);
+    const { chunks } = carry(s.body);
+    const lines = messageLines(hashed, [0]);
+    const built = buildTransaction({ utxos: [utxo('a', 9000000n)], outputAddress: id.payment.address('preprod'), signer: id.payment.privateKey, networkId: 0, params, ttl: 9000, aux: auxiliaryData(chunks, lines) });
+    if (containsMarker(s.body) && !containsMarker(built.bytes)) found = { s, chunks, lines, built };
+  }
+  assert.ok(found, 'some prefix splits the string across a chunk boundary');
+  const f = { s: found.s, chunks: found.chunks, lines: found.lines, networkId: 0 };
+  assert.throws(() => assertTransaction(found.built.bytes, expectFor(f, found.built, id.payment.address('preprod').to_bech32())), /reassembled record/);
+});
+
+test('the manifest refuses "unfrack.it" in any string that goes on chain', async () => {
+  const { parseManifest, MANIFEST_FORMAT } = await import('../src/manifest.mjs');
+  const base = { format: MANIFEST_FORMAT, kind: 'scripts', items: [{ path: '/x/a.mjs', type: 'Software', message: true }] };
+  const uri = `web+cardano://transaction/${'ab'.repeat(32)}/metadata/309`;
+  assert.throws(() => parseManifest({ ...base, related: [{ uri, relation: 'Other', relation_info: 'see UnFrack.It' }] }, '/'), /unfrack\.it/);
+  assert.throws(() => parseManifest({ ...base, related: [{ uri, relation: 'IsSupplementTo' }], items: [{ path: '/x/a.mjs', type: 'Software', message: true, ids: [{ id: 'https://unfrack.it/x', id_type: 'URL', relation: 'IsPartOf' }] }] }, '/'), /unfrack\.it/);
+});
+
+test('sweep bytes: one output to the target, no auxiliary data, exact fee, one payment witness', async () => {
+  const { buildSweep } = await import('../src/ops.mjs');
+  const { assertSweep } = await import('../src/tx.mjs');
+  const CSL = (await import('@emurgo/cardano-serialization-lib-nodejs')).default;
+  const target = 'addr_test1vqcjne9p3m0urs6m928jh82knxcw0hsd4r4hpv6n29nt43swclamr';
+  const utxos = [utxo('a', 3000000n), utxo('b', 2500000n), utxo('c', 5000000n, { assets: [1] })];
+  const tx = buildSweep({ utxos, target: CSL.Address.from_bech32(target), signer: id.payment.privateKey, networkId: 0, params, ttl: 9000 });
+  const expect = { txHash: tx.hash, maxTxSize: params.maxTxSize, networkId: 0, ttl: 9000, params, inputs: tx.inputs, outputAddress: target, paymentKeyHash: hex(id.payment.keyHash) };
+  const r = assertSweep(tx.bytes, expect);
+  assert.equal(r.txHash, tx.hash);
+  assert.ok(r.checks.includes('the transaction carries no auxiliary data'));
+  assert.throws(() => assertSweep(tx.bytes, { ...expect, outputAddress: id.payment.address('preprod').to_bech32() }), /expected address/);
+  assert.throws(() => assertSweep(tx.bytes, { ...expect, inputs: tx.inputs.slice(1) }), /inputs/);
+  assert.throws(() => assertSweep(tx.bytes, { ...expect, networkId: 1 }), /network id/);
+  // A record transaction is not a sweep.
+  const f = await fixture(3);
+  const built = buildTransaction({ utxos: [utxo('a', 9000000n)], outputAddress: id.payment.address('preprod'), signer: id.payment.privateKey, networkId: 0, params, ttl: 9000, aux: f.aux });
+  assert.throws(() => assertSweep(built.bytes, { ...expect, txHash: built.hash, inputs: built.inputs, outputAddress: id.payment.address('preprod').to_bech32() }), /no auxiliary data/);
+});

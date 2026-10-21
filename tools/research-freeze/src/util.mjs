@@ -56,9 +56,16 @@ export function tada(lovelace) {
   return `${neg ? '-' : ''}${(a / ADA).toLocaleString('en-US')}.${(a % ADA).toString().padStart(6, '0')}`;
 }
 
-// The study classifies prior users of the app by this string, so no byte this
-// tool puts on chain may contain it in any letter case.
+// The study classifies prior users of the app by this string, so nothing this
+// tool puts on chain may contain it in any letter case: no byte of the
+// transaction, no byte of the reassembled record (a string can straddle two
+// 64-byte chunks, whose headers break a scan of the transaction bytes), and no
+// text string in it.
 export const FORBIDDEN_MARKER = 'unfrack.it';
+
+export function stringContainsMarker(s) {
+  return String(s).toLowerCase().includes(FORBIDDEN_MARKER);
+}
 
 export function containsMarker(bytes) {
   const needle = Buffer.from(FORBIDDEN_MARKER, 'ascii');

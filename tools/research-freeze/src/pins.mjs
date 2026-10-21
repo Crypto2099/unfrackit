@@ -32,6 +32,7 @@ export function versions(cli) {
     'crypto-core': pkgVersion('@cardanowall/crypto-core'),
     bip39: pkgVersion('bip39'),
     cardanowall: cli ? cli.version : 'not available',
+    cardanowall_sha256: cli ? cli.sha256 : null,
     pins: PINS
   };
 }

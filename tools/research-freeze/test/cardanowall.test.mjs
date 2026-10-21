@@ -72,3 +72,50 @@ test('cardanowall verify --record over the poe-record vectors', { skip }, () => 
     assert.deepEqual(sigs, v.expected_signer_verdicts, v.name);
   }
 });
+
+test('a binary that reports the right version but is not the release binary is refused', () => {
+  const dir = tempDir();
+  const fake = path.join(dir, 'cardanowall');
+  fs.writeFileSync(fake, '#!/bin/sh\necho "cardanowall 0.12.0 (git 5400a64a7834, built 2026-07-28)"\n', { mode: 0o755 });
+  assert.throws(() => new Cardanowall(fake), /SHA-256 is [0-9a-f]{64}, not the ac43f67e/);
+});
+
+test('the CLI runs with a minimal environment: no CARDANOWALL_* setting and no config file of the operator reaches it', async () => {
+  const { cliEnv } = await import('../src/cardanowall.mjs');
+  process.env.CARDANOWALL_CONFIRMATION_DEPTH_THRESHOLD = '1';
+  process.env.CARDANOWALL_CARDANO_GATEWAY = 'https://example.invalid/api/v1';
+  try {
+    const env = cliEnv();
+    assert.deepEqual(Object.keys(env).sort(), ['CARDANOWALL_CONFIG_PATH', 'HOME', 'PATH']);
+    assert.deepEqual(fs.readdirSync(env.HOME), ['config.toml']);
+    assert.equal(fs.readFileSync(env.CARDANOWALL_CONFIG_PATH, 'utf8'), '');
+  } finally {
+    delete process.env.CARDANOWALL_CONFIRMATION_DEPTH_THRESHOLD;
+    delete process.env.CARDANOWALL_CARDANO_GATEWAY;
+  }
+});
+
+test('a threshold of 1 in the operator\'s environment does not lower the CLI\'s confirmation gate', { skip }, () => {
+  const cli = new Cardanowall(bin);
+  const dir = tempDir();
+  const max = vector('validator/validator-positive.json').vectors.find((v) => !v.validator_options);
+  const f = path.join(dir, 'r.hex');
+  fs.writeFileSync(f, max.cbor_hex);
+  process.env.CARDANOWALL_CONFIRMATION_DEPTH_THRESHOLD = '1';
+  try {
+    // A caller-asserted depth of 1: valid under a threshold of 1, pending
+    // under the default 15. The CLI must not see the variable.
+    const r = cli.json(['verify', '--record', f, '--json', '--profile', 'core', '--confirmations', '1']);
+    assert.equal(r.json.verdict, 'pending');
+    assert.equal(r.status, 3);
+  } finally {
+    delete process.env.CARDANOWALL_CONFIRMATION_DEPTH_THRESHOLD;
+  }
+});
+
+test('verify passes the signed profile and the 15-block threshold explicitly', async () => {
+  const { VERIFY_FLAGS } = await import('../src/cardanowall.mjs');
+  assert.deepEqual([...VERIFY_FLAGS], ['--profile', 'signed', '--threshold', '15']);
+  const src = fs.readFileSync(new URL('../src/verify.mjs', import.meta.url), 'utf8') + fs.readFileSync(new URL('../src/checks.mjs', import.meta.url), 'utf8');
+  assert.equal((src.match(/\.\.\.VERIFY_FLAGS/g) || []).length, 2, 'both verify calls carry the flags');
+});

@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readManifest, recordUri } from './manifest.mjs';
-import { hashItems, documentChecks } from './hashing.mjs';
+import { hashItems, documentChecks, DOCUMENT_CHECKED_KINDS } from './hashing.mjs';
 import { deriveIdentity } from './keys.mjs';
 import { buildRecord, signRecord, carry, messageLines, auxiliaryData, detailedMetadataJson, topLevelKeys } from './record.mjs';
 import { buildTransaction, TTL_SLOTS } from './tx.mjs';
@@ -37,7 +37,7 @@ export function hashManifest({ manifestPath, signingPublicKeyHex }) {
   const manifest = readManifest(manifestPath);
   const hashed = hashItems(manifest);
   let doc = null;
-  if (manifest.kind === 'freeze') {
+  if (DOCUMENT_CHECKED_KINDS.has(manifest.kind)) {
     doc = documentChecks(manifest, hashed, signingPublicKeyHex);
   }
   return { manifest, hashed, doc };
@@ -62,7 +62,7 @@ function checkSuperseded(store, network, manifest, hashed, publicKeyHex) {
 }
 
 export async function build({ store, koios, cli, manifestPath, network, identityName, coreOnly = false, log = () => {} }) {
-  const net = networkOf(network);
+  networkOf(network);
   const name = identityName || defaultIdentity(network);
   const pub = store.readPublic(name);
   assertIdentityNetwork(pub, network);
@@ -83,17 +83,42 @@ export async function build({ store, koios, cli, manifestPath, network, identity
     throw new UserError(`identity "${name}": the public file does not match the keys its mnemonics derive; refusing`);
   }
 
+  koios.addresses.add(address);
+  const utxos = await koios.addressUtxos(address);
+  const p = await prepareRun({ manifest, hashed, coreOnly, id, utxos, params, network, ttl: params.tip.slot + TTL_SLOTS, paymentKeyHash: pub.payment_key_hash });
+  const checks = checkArtifacts(
+    {
+      body: p.signed.body,
+      bodyNoSigs: p.signed.bodyNoSigs,
+      sigStructure: p.signed.sigStructure,
+      coseSign1: p.signed.coseSign1,
+      txBytes: p.tx.bytes,
+      txExpect: p.txExpect,
+      digests: hashed.map((h) => h.hex),
+      publicKeyHex: pub.signing_public_key
+    },
+    { cli, store, rehearsalSeed: name === 'rehearsal' ? id.signingSeed : null }
+  );
+  requireAllPass(checks);
+
+  const report = runReport({ network, name, pub, manifest, coreOnly, hashed, doc, p, params, checks, cli });
+  const dir = store.writeRun(network, p.tx.hash, runFiles(p, report));
+  log(`run directory: ${dir}`);
+  return { dir, report, tx: p.tx, signed: p.signed };
+}
+
+// From hashed files, keys, UTxOs and parameters to the signed record and the
+// signed transaction, with what the post-build assertions expect of them. No
+// I/O.
+export async function prepareRun({ manifest, hashed, coreOnly, id, utxos, params, network, ttl, paymentKeyHash }) {
+  const net = networkOf(network);
+  const address = id.payment.address(network).to_bech32();
   const record = buildRecord({ kind: manifest.kind, hashed, coreOnly, supersedes: manifest.supersedes, related: manifest.related });
   const signed = await signRecord(record, id.signing);
   const { chunks, valueBytes } = carry(signed.body);
   const lines = messageLines(hashed, manifest.messageItems);
   const aux = auxiliaryData(chunks, lines);
-
-  koios.addresses.add(address);
-  const utxos = await koios.addressUtxos(address);
-  const ttl = params.tip.slot + TTL_SLOTS;
   const tx = buildTransaction({ utxos, outputAddress: id.payment.address(network), signer: id.payment.privateKey, networkId: net.networkId, params, ttl, aux });
-
   const txExpect = {
     txHash: tx.hash,
     chunks,
@@ -105,68 +130,59 @@ export async function build({ store, koios, cli, manifestPath, network, identity
     params,
     inputs: tx.inputs,
     outputAddress: address,
-    paymentKeyHash: pub.payment_key_hash
+    paymentKeyHash
   };
-  const checks = checkArtifacts(
-    {
-      body: signed.body,
-      bodyNoSigs: signed.bodyNoSigs,
-      sigStructure: signed.sigStructure,
-      coseSign1: signed.coseSign1,
-      txBytes: tx.bytes,
-      txExpect,
-      digests: hashed.map((h) => h.hex),
-      publicKeyHex: pub.signing_public_key
-    },
-    { cli, store, rehearsalSeed: name === 'rehearsal' ? id.signingSeed : null }
-  );
-  requireAllPass(checks);
+  return { signed, chunks, valueBytes, lines, tx, txExpect, ttl, address };
+}
 
-  const report = {
+export function runReport({ network, name, pub, manifest, coreOnly, hashed, doc, p, params, checks, cli, extra = {} }) {
+  return {
     format: 'research-freeze-run-v1',
     created: new Date().toISOString(),
     network,
     identity: name,
     signing_public_key: pub.signing_public_key,
-    payment_address: address,
+    payment_address: p.address,
     kind: manifest.kind,
+    ...extra,
     core_only: coreOnly,
     supersedes: manifest.supersedes || null,
     related: manifest.related || null,
-    tx_hash: tx.hash,
-    uri: recordUri(tx.hash),
-    record_bytes: signed.body.length,
-    record_top_level_keys: topLevelKeys(signed.body),
-    label_309_chunks: chunks.length,
-    label_309_value_bytes: valueBytes.length,
-    message: lines,
-    tx_size: tx.size,
-    fee: tx.fee.toString(),
-    ttl,
+    tx_hash: p.tx.hash,
+    uri: recordUri(p.tx.hash),
+    record_bytes: p.signed.body.length,
+    record_top_level_keys: topLevelKeys(p.signed.body),
+    label_309_chunks: p.chunks.length,
+    label_309_value_bytes: p.valueBytes.length,
+    message: p.lines,
+    tx_size: p.tx.size,
+    fee: p.tx.fee.toString(),
+    ttl: p.ttl,
     tip_at_build: params.tip,
     protocol: { epoch: params.epoch, major: params.protocolMajor, minor: params.protocolMinor, min_fee_a: params.minFeeA.toString(), min_fee_b: params.minFeeB.toString(), max_tx_size: params.maxTxSize, coins_per_utxo_size: params.coinsPerUtxoByte.toString() },
-    inputs: tx.inputs.map((u) => ({ tx_hash: u.txHash, index: u.index, coin: u.coin.toString() })),
-    output_coin: tx.outCoin.toString(),
+    inputs: p.tx.inputs.map((u) => ({ tx_hash: u.txHash, index: u.index, coin: u.coin.toString() })),
+    output_coin: p.tx.outCoin.toString(),
     items: hashed.map((h) => ({ name: h.name, sha256: h.hex, size: h.size, type: h.type || null, ids: h.ids || null, document: h.document })),
     document_checks: doc,
     checks,
     versions: versions(cli)
   };
-  const dir = store.writeRun(network, tx.hash, {
-    'body.cbor': signed.body,
-    'body-without-sigs.cbor': signed.bodyNoSigs,
-    'sig-structure.cbor': signed.sigStructure,
-    'cose-sign1.cbor': signed.coseSign1,
-    'label-309-value.cbor': valueBytes,
-    'metadata.json': JSON.stringify(detailedMetadataJson(chunks, lines), null, 2) + '\n',
-    'tx.signed.cbor': tx.bytes,
-    'tx.hash': tx.hash + '\n',
-    'uri.txt': recordUri(tx.hash) + '\n',
-    'expect.json': stringify({ ...txExpect, recordBody: undefined, chunks: chunks.map(toHex), inputs: tx.inputs }, 2) + '\n',
+}
+
+export function runFiles(p, report) {
+  return {
+    'body.cbor': p.signed.body,
+    'body-without-sigs.cbor': p.signed.bodyNoSigs,
+    'sig-structure.cbor': p.signed.sigStructure,
+    'cose-sign1.cbor': p.signed.coseSign1,
+    'label-309-value.cbor': p.valueBytes,
+    'metadata.json': JSON.stringify(detailedMetadataJson(p.chunks, p.lines), null, 2) + '\n',
+    'tx.signed.cbor': p.tx.bytes,
+    'tx.hash': p.tx.hash + '\n',
+    'uri.txt': recordUri(p.tx.hash) + '\n',
+    'expect.json': stringify({ ...p.txExpect, recordBody: undefined, chunks: p.chunks.map(toHex), inputs: p.tx.inputs }, 2) + '\n',
     'report.json': stringify(report, 2) + '\n'
-  });
-  log(`run directory: ${dir}`);
-  return { dir, report, tx, signed };
+  };
 }
 
 export function loadRun(dir) {

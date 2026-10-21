@@ -178,3 +178,18 @@ test('the payment key from the payment mnemonic alone matches a CSL restore of t
   const again = CSL.Bip32PrivateKey.from_bip39_entropy(entropy, new Uint8Array(0)).derive(H + 1852).derive(H + 1815).derive(H).derive(0).derive(0).to_raw_key().to_public();
   assert.equal(hex(k.publicKey), hex(again.as_bytes()));
 });
+
+// An independent implementation at 24 words, where CIP-3 Icarus.md ("Trezor")
+// says derivations diverge. The mnemonic is a throwaway made from the
+// SHA-256 of a label; the public key was computed by cardano-signer 1.32.0,
+// `keygen --path 1852H/1815H/0H/0/0 --mnemonics "<mnemonic>"`, which reports
+// derivation type "icarus".
+test('a 24-word payment key matches cardano-signer at m/1852\'/1815\'/0\'/0/0', () => {
+  const mnemonic = bip39.entropyToMnemonic(crypto.createHash('sha256').update('research-freeze cardano-signer payment vector').digest('hex'));
+  assert.equal(mnemonic.split(' ').length, 24);
+  assert.equal(mnemonic, 'antenna live position asthma ability spatial fringe case version test endorse truth roast exclude thank proud neglect link glare soup wing hammer load move');
+  const k = paymentKeyFromEntropy(entropyFromMnemonic(mnemonic));
+  assert.equal(hex(k.publicKey), '78bceb923ad8aa673ae7dfdd78a3140f3200011316b977795214cf8ff3eabce2');
+  assert.equal(hex(k.keyHash), '3129e4a18edfc1c35b2a8f2b9d5699b0e7de0da8eb70b3535166bac6');
+  assert.equal(k.address('preprod').to_bech32(), 'addr_test1vqcjne9p3m0urs6m928jh82knxcw0hsd4r4hpv6n29nt43swclamr');
+});

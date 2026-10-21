@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { RELATED_IDENTIFIER_TYPE, RELATION_TYPE, RESOURCE_TYPE_GENERAL } from './vocab.mjs';
-import { UserError } from './util.mjs';
+import { stringContainsMarker, UserError } from './util.mjs';
 
 export const MANIFEST_FORMAT = 'research-freeze-manifest-v1';
 export const KINDS = ['freeze', 'scripts', 'results', 'retype', 'amend'];
@@ -35,6 +35,20 @@ function closed(obj, allowed, where) {
   for (const k of Object.keys(obj)) if (!allowed.includes(k)) fail(`${where} has an unknown field "${k}"`);
 }
 
+// Every manifest string that goes on chain: nothing this tool puts on chain
+// may contain the string the study classifies prior users by.
+function onChainText(s, where) {
+  if (stringContainsMarker(s)) fail(`${where} contains "unfrack.it", which nothing on chain may carry`);
+  return s;
+}
+
+// DataCite 4.7 (relationType "Other"; the companion's research-items and
+// research-related keys): relation_info SHOULD be present when the relation
+// is Other. This tool requires it.
+function checkRelationInfo(r, where) {
+  if (r.relation === 'Other' && r.relation_info === undefined) fail(`${where}.relation is Other, which needs relation_info to say what the relation is`);
+}
+
 function checkDoi(doi, where) {
   if (typeof doi !== 'string' || !DOI_RE.test(doi)) fail(`${where} is not a bare DOI name (10.<prefix>/<suffix>): ${doi}`);
   if (doi !== doi.toLowerCase()) fail(`${where} must be written in lowercase: ${doi}`);
@@ -47,6 +61,9 @@ function parseIdentifier(id, where) {
   if (!RELATION_TYPE.has(id.relation)) fail(`${where}.relation "${id.relation}" is not a DataCite 4.7 relationType`);
   if (id.relation_info !== undefined && (typeof id.relation_info !== 'string' || !id.relation_info)) fail(`${where}.relation_info must be a non-empty string`);
   if (id.id_type === 'DOI') checkDoi(id.id, `${where}.id`);
+  checkRelationInfo(id, where);
+  onChainText(id.id, `${where}.id`);
+  if (id.relation_info !== undefined) onChainText(id.relation_info, `${where}.relation_info`);
   const out = { id: id.id, id_type: id.id_type, relation: id.relation };
   if (id.relation_info !== undefined) out.relation_info = id.relation_info;
   return out;
@@ -59,6 +76,8 @@ export function parseRelated(r, where) {
   }
   if (!RELATION_TYPE.has(r.relation)) fail(`${where}.relation "${r.relation}" is not a DataCite 4.7 relationType`);
   if (r.relation_info !== undefined && (typeof r.relation_info !== 'string' || !r.relation_info)) fail(`${where}.relation_info must be a non-empty string`);
+  checkRelationInfo(r, where);
+  if (r.relation_info !== undefined) onChainText(r.relation_info, `${where}.relation_info`);
   const out = { uri: r.uri, relation: r.relation };
   if (r.relation_info !== undefined) out.relation_info = r.relation_info;
   return out;
@@ -104,9 +123,13 @@ export function parseManifest(raw, baseDir) {
   const messageItems = documents.length === 1 ? documents : items.filter((x) => x.message);
   if (messageItems.length === 0) fail(`a ${kind} record needs at least one item flagged "message": true (its digest is the CIP-20 line)`);
 
+  // A freeze, and an amendment whose document is a study registration (a new
+  // version of the pre-registration), name the document's DOI; the document
+  // must carry it, and so must the document item's identifiers.
   let doi;
-  if (kind === 'freeze') {
-    if (raw.doi === undefined) fail('a freeze record needs the reserved DOI ("doi")');
+  const needsDoi = kind === 'freeze' || (kind === 'amend' && documents[0].type === 'StudyRegistration');
+  if (needsDoi) {
+    if (raw.doi === undefined) fail(kind === 'freeze' ? 'a freeze record needs the reserved DOI ("doi")' : 'an amend record whose document is a StudyRegistration needs the new version\'s DOI ("doi")');
     checkDoi(raw.doi, 'doi');
     doi = raw.doi;
     const docIds = documents[0].ids || [];

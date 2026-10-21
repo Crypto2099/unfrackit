@@ -147,3 +147,21 @@ test('a short body still travels as a one-element chunk array', () => {
   assert.equal(chunks.length, 1);
   assert.equal(hex(valueBytes).slice(0, 4), '8158');
 });
+
+test('record: each research-items typing sits under its own item\'s digest', async () => {
+  const hashed = [
+    item(0x05, 'StudyRegistration', [{ id: '10.5281/zenodo.00000000', id_type: 'DOI', relation: 'IsPartOf' }]),
+    item(0x03, 'Text'),
+    item(0x09, 'Dataset'),
+    item(0x01, 'Software')
+  ];
+  const s = await signRecord(buildRecord({ kind: 'freeze', hashed }), signer);
+  const ri = mapGet(decode(s.body, { canonical: true }), 'research-items');
+  for (const h of hashed) {
+    const typing = [...ri.entries()].find(([k]) => hex(k) === h.hex)[1];
+    assert.equal(mapGet(typing, 'type'), h.type, h.name);
+    const ids = mapGet(typing, 'ids');
+    if (h.ids) assert.deepEqual(ids.map((x) => mapGet(x, 'id')), h.ids.map((x) => x.id), h.name);
+    else assert.equal(ids, undefined, h.name);
+  }
+});

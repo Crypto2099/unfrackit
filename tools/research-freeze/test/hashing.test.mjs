@@ -101,3 +101,58 @@ test('manifest rules: kinds, the document, DOIs, supersedes and related', () => 
   const ok = parseManifest(raw, dir);
   assert.deepEqual(ok.messageItems, [0]);
 });
+
+test('the DOI must appear as a whole token: a DOI with one digit dropped does not match a longer one', async () => {
+  const { mentionsDoi, mentionsHexToken } = await import('../src/hashing.mjs');
+  assert.ok(mentionsDoi('DOI of this document: 10.5281/zenodo.17000001\n', '10.5281/zenodo.17000001'));
+  assert.ok(mentionsDoi('(https://doi.org/10.5281/zenodo.1700000).', '10.5281/zenodo.1700000'));
+  assert.ok(mentionsDoi('doi:10.5281/zenodo.1700000, then', '10.5281/zenodo.1700000'));
+  assert.ok(mentionsDoi('ends with 10.5281/zenodo.1700000.', '10.5281/zenodo.1700000'));
+  assert.ok(!mentionsDoi('DOI of this document: 10.5281/zenodo.17000001\n', '10.5281/zenodo.1700000'));
+  assert.ok(!mentionsDoi('see 10.5281/zenodo.1700000.5 and', '10.5281/zenodo.1700000'));
+  assert.ok(!mentionsDoi('x110.5281/zenodo.1700000', '10.5281/zenodo.1700000'));
+  assert.ok(!mentionsDoi('10.5281/zenodo.1700000-v2', '10.5281/zenodo.1700000'));
+  assert.ok(mentionsHexToken(`key: ${PUB}\n`, PUB));
+  assert.ok(!mentionsHexToken(`key: ${PUB}0\n`, PUB));
+  assert.ok(!mentionsHexToken(`key: f${PUB}\n`, PUB));
+  const short = '10.5281/zenodo.1234567';
+  const files = { 'a.mjs': 'one\n' };
+  const dir = tempDir();
+  fs.writeFileSync(path.join(dir, 'a.mjs'), files['a.mjs']);
+  fs.writeFileSync(path.join(dir, 'doc.md'), `DOI of this document: ${short}8\nkey ${PUB}\n${sha('one\n')}  a.mjs\n`);
+  const m = parseManifest({ format: MANIFEST_FORMAT, kind: 'freeze', doi: short, items: [{ path: 'doc.md', type: 'StudyRegistration', document: true, ids: [{ id: short, id_type: 'DOI', relation: 'IsPartOf' }] }, { path: 'a.mjs', type: 'Software' }] }, dir);
+  const r = documentChecks(m, hashItems(m), PUB);
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /does not carry the DOI 10\.5281\/zenodo\.1234567 as a whole token/);
+});
+
+test('relation Other needs relation_info, in research-items identifiers and research-related entries', () => {
+  const { raw, dir } = setup();
+  const otherId = { ...raw.items[0], ids: [{ id: DOI, id_type: 'DOI', relation: 'IsPartOf' }, { id: 'https://example.org/x', id_type: 'URL', relation: 'Other' }] };
+  assert.throws(() => parseManifest({ ...raw, items: [otherId, ...raw.items.slice(1)] }, dir), /Other, which needs relation_info/);
+  otherId.ids[1].relation_info = 'archived copy';
+  assert.doesNotThrow(() => parseManifest({ ...raw, items: [otherId, ...raw.items.slice(1)] }, dir));
+  const uri = `web+cardano://transaction/${'ab'.repeat(32)}/metadata/309`;
+  const scripts = { format: MANIFEST_FORMAT, kind: 'scripts', items: [{ path: 'a.mjs', type: 'Software', message: true }] };
+  assert.throws(() => parseManifest({ ...scripts, related: [{ uri, relation: 'Other' }] }, dir), /Other, which needs relation_info/);
+  assert.doesNotThrow(() => parseManifest({ ...scripts, related: [{ uri, relation: 'Other', relation_info: 'shares the sample' }] }, dir));
+});
+
+test('an amendment runs the document checks, and one that amends a study registration needs its DOI', async () => {
+  const { hashManifest } = await import('../src/build.mjs');
+  const { raw, dir } = setup();
+  const amend = { ...raw, kind: 'amend', supersedes: 'ab'.repeat(32) };
+  // A stale hash row in the amended document is caught, as for a freeze.
+  fs.writeFileSync(path.join(dir, 'b.mjs'), 'two, changed\n');
+  const mpath = path.join(dir, 'amend.json');
+  fs.writeFileSync(mpath, JSON.stringify(amend));
+  const r = hashManifest({ manifestPath: mpath, signingPublicKeyHex: PUB });
+  assert.equal(r.doc.ok, false);
+  assert.match(r.doc.errors.join('\n'), /b\.mjs, the file's SHA-256 is/);
+  const missingKey = hashManifest({ manifestPath: mpath, signingPublicKeyHex: 'cd'.repeat(32) });
+  assert.match(missingKey.doc.errors.join('\n'), /signing public key/);
+  const { doi: _doi, ...noDoi } = amend;
+  assert.throws(() => parseManifest(noDoi, dir), /StudyRegistration needs the new version's DOI/);
+  const textDoc = { ...noDoi, items: [{ ...raw.items[0], type: 'Text', ids: undefined }, ...raw.items.slice(1)] };
+  assert.doesNotThrow(() => parseManifest(textDoc, dir), 'an amendment of a Text document needs no DOI');
+});
