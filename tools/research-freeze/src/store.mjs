@@ -6,7 +6,7 @@
 // written with exclusive create and never overwritten.
 //
 //   identities/<name>/signing-mnemonic   identities/<name>/payment-mnemonic
-//   identities/<name>/public.json        journal/<network>.json
+//   identities/<name>/public.json        journal/<network>.json (and .lock)
 //   runs/<network>/<tx hash>/            rehearsals/<id>/
 //   secrets/                             tmp/
 
@@ -40,6 +40,36 @@ export function enclosingGitTree(p) {
 
 function modeOf(p) {
   return fs.statSync(p).mode & 0o777;
+}
+
+// Write a new file with exclusive create, flush it to disk, then close it.
+function writeFileSynced(p, content) {
+  const fd = fs.openSync(p, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, content);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Flush a directory entry (a rename into it) to disk.
+function fsyncDir(dir) {
+  const fd = fs.openSync(dir, 'r');
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
 }
 
 function checkMode(p, max) {
@@ -151,17 +181,60 @@ export class Store {
     return this.path('journal', `${network}.json`);
   }
 
+  lockPath(network) {
+    return this.path('journal', `${network}.lock`);
+  }
+
   readJournal(network) {
     const p = this.journalPath(network);
     return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : { network, current: null, history: [] };
   }
 
+  // The new journal goes to a temporary file that is flushed to disk, renamed
+  // over the old one, and the directory is flushed after the rename, so a
+  // power loss leaves either the old journal or the new one.
   writeJournal(network, journal) {
     this.ensure();
     const p = this.journalPath(network);
     const tmp = `${p}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(journal, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    writeFileSynced(tmp, JSON.stringify(journal, null, 2) + '\n');
     fs.renameSync(tmp, p);
+    fsyncDir(path.dirname(p));
+  }
+
+  // Every read-modify-write of a journal runs under an exclusive lock file
+  // (created with `wx`, removed afterwards). A second invocation that finds
+  // the lock refuses rather than waiting, so two terminals can never both
+  // read the journal before either writes it. `fn` receives the journal,
+  // changes it in place and returns a value; throwing leaves it unwritten.
+  updateJournal(network, fn) {
+    this.ensure();
+    const lock = this.lockPath(network);
+    let fd;
+    try {
+      fd = fs.openSync(lock, 'wx', 0o600);
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let holder = '';
+      try {
+        holder = fs.readFileSync(lock, 'utf8').trim();
+      } catch {
+        // gone in the meantime
+      }
+      throw new UserError(`the ${network} journal is locked by another invocation (${lock}${holder ? `: ${holder}` : ''}); if no other invocation is running, remove the lock file`);
+    }
+    try {
+      fs.writeSync(fd, `pid ${process.pid} since ${new Date().toISOString()}\n`);
+      fs.closeSync(fd);
+      fd = undefined;
+      const j = this.readJournal(network);
+      const out = fn(j);
+      this.writeJournal(network, j);
+      return out;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+      fs.rmSync(lock, { force: true });
+    }
   }
 
   // ---- run directories ----
@@ -179,18 +252,31 @@ export class Store {
     if (fs.existsSync(final)) throw new UserError(`a run directory for ${txHash} already exists: ${final}`);
     const tmp = `${final}.partial-${process.pid}`;
     fs.mkdirSync(tmp, { mode: 0o700 });
-    for (const [name, content] of Object.entries(files)) {
-      fs.writeFileSync(path.join(tmp, name), content, { flag: 'wx', mode: 0o600 });
-    }
+    for (const [name, content] of Object.entries(files)) writeFileSynced(path.join(tmp, name), content);
     fs.renameSync(tmp, final);
+    fsyncDir(path.dirname(final));
     return final;
   }
 
   updateRunFile(runDir, name, content) {
     const p = path.join(runDir, name);
     const tmp = `${p}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, content, { flag: 'wx', mode: 0o600 });
+    writeFileSynced(tmp, content);
     fs.renameSync(tmp, p);
+    fsyncDir(runDir);
+  }
+
+  // A new file in an existing run directory, never overwriting one.
+  addRunFile(runDir, name, content) {
+    const p = path.join(runDir, name);
+    try {
+      writeFileSynced(p, content);
+    } catch (e) {
+      if (e.code === 'EEXIST') throw new UserError(`${p} already exists; refusing to overwrite it`);
+      throw e;
+    }
+    fsyncDir(runDir);
+    return p;
   }
 
   knownTxHashes(network) {
@@ -214,6 +300,25 @@ export class Store {
     const p = this.path('tmp', `secret-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     fs.writeFileSync(p, contents, { flag: 'wx', mode: 0o600 });
     return p;
+  }
+
+  // A process killed between writing a temporary secret and its `finally`
+  // (SIGKILL, power loss) leaves the file behind. Each name carries the
+  // writing process's pid; a file whose process is gone is removed. Run at
+  // startup.
+  cleanTmp() {
+    const dir = this.path('tmp');
+    if (!fs.existsSync(dir)) return [];
+    const removed = [];
+    for (const name of fs.readdirSync(dir)) {
+      const m = /^secret-(\d+)-/.exec(name);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      if (pid === process.pid || processAlive(pid)) continue;
+      fs.rmSync(path.join(dir, name), { force: true });
+      removed.push(name);
+    }
+    return removed;
   }
 
   readSecretToken(name, envValue) {

@@ -46,7 +46,18 @@ export async function submitRun({ store, dir, log = console.error, streams }) {
   if (network === 'mainnet') await confirmMainnet(run.txHash, 'submission', streams);
   const entry = journal(
     store,
-    journalEntry({ network, txHash: run.txHash, cbor: toHex(run.txBytes), ttl: run.report.ttl, inputs: run.report.inputs.map((u) => ({ txHash: u.tx_hash, index: u.index, coin: u.coin })), run: dir })
+    journalEntry({
+      network,
+      txHash: run.txHash,
+      cbor: toHex(run.txBytes),
+      ttl: run.report.ttl,
+      inputs: run.report.inputs.map((u) => ({ txHash: u.tx_hash, index: u.index, coin: u.coin })),
+      run: dir,
+      kind: run.report.kind,
+      stage: run.report.stage || null,
+      identity: run.report.identity,
+      signingPublicKey: run.report.signing_public_key
+    })
   );
   const tip = await koios.tip();
   if (entry.state === 'unsubmitted' && tip.slot > entry.ttl) throw new UserError(`the TTL of ${run.txHash} (slot ${entry.ttl}) has passed (tip slot ${tip.slot}); abandon it and build again`);
@@ -141,7 +152,7 @@ export async function sweep({ store, network, identityName, to, log = console.er
   });
   koios.allowTx(tx.hash);
   if (network === 'mainnet') await confirmMainnet(tx.hash, 'sweep', streams);
-  const entry = journal(store, journalEntry({ network, txHash: tx.hash, cbor: toHex(tx.bytes), ttl, inputs: tx.inputs, run: dir }));
+  const entry = journal(store, journalEntry({ network, txHash: tx.hash, cbor: toHex(tx.bytes), ttl, inputs: tx.inputs, run: dir, kind: 'sweep', identity: name }));
   return submitJournaled({ koios, store, entry, address: pub.addresses[network], log });
 }
 
