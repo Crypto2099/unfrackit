@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The draw plan: the randomness stabilisation window from k and f, the
+// The draw plan: the randomness stabilization window from k and f, the
 // cutoff slot, and N = E + 1 or E + 2.
 
 import test from 'node:test';
