@@ -115,7 +115,8 @@ function stripComments(s) {
 //   int     a safe integer or a bigint, written as a decimal literal
 //   num     a decimal string or number, written as a numeric literal
 //   bool    true or false
-//   bytea   lowercase or uppercase hex, written as '\x...'::bytea
+//   bytea   lowercase or uppercase hex, written as decode('...', 'hex'), which
+//           reads the same whatever standard_conforming_strings is
 //   text    any string without a NUL, single quotes doubled
 //   ident   a plain lowercase identifier, written as is (table and column names)
 //   intarr  an array of integers, written as ARRAY[...]::bigint[]
@@ -139,7 +140,7 @@ export function literal(name, p) {
       return v ? 'true' : 'false';
     case 'bytea':
       if (typeof v !== 'string' || !/^([0-9a-fA-F]{2})*$/.test(v)) throw new Error(`parameter ${name}: not hex`);
-      return `'\\x${v.toLowerCase()}'::bytea`;
+      return `decode('${v.toLowerCase()}', 'hex')`;
     case 'text':
       if (typeof v !== 'string' || v.includes('\0')) throw new Error(`parameter ${name}: not text`);
       return `'${v.replace(/'/g, "''")}'`;

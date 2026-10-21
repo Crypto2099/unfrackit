@@ -5,6 +5,12 @@
 -- per sampled wallet and its frame's window. Profiles decide nothing; they are
 -- inputs to later artifacts.
 --
+-- Descriptive only. On 2026-10-21 the profiles became data-driven: a
+-- clustering procedure that research revision v0.3 specifies, fitted on the
+-- exploration split. The fixed cut points below are not the profile
+-- definition; the profile column and the three flags are kept as a
+-- descriptive legacy field until v0.3 names the features and the procedure.
+--
 --   spends per month               spend events in the window divided by 12;
 --                                  a spend event is a transaction with a wallet
 --                                  input (as in 05-04-activity.sql)
@@ -171,4 +177,5 @@ SELECT p.frame, p.profile, count(*) AS n,
        count(*) FILTER (WHERE p.ft_heavy) AS ft_heavy,
        count(*) FILTER (WHERE p.dex_active) AS dex_active
   FROM study.profile p JOIN study.sample_frame f ON f.frame = p.frame AND f.sa_id = p.sa_id AND f.in_sample
+ WHERE NOT EXISTS (SELECT 1 FROM study.check_61 k WHERE k.sa_id = p.sa_id AND NOT k.agree)
  GROUP BY p.frame, p.profile ORDER BY p.frame DESC, p.profile;

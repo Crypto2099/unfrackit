@@ -5,32 +5,36 @@
 --
 -- Wallets are split 20% exploration and 80% confirmation by the "split" order
 -- of section 5.4 (split_key in study.frame), before any outcome is computed.
--- Read as: per sample (each frame's random sample, ADA-only sample and each
--- stratum), in split_key order, the first floor(N / 5) are exploration and the
--- rest confirmation (split_den).
+-- One label per stake credential (X16 as decided on 2026-10-21): every
+-- credential sampled in any frame and sample is ranked once by its split key,
+-- and the first floor(N / 5) of the N distinct credentials (split_den) are
+-- exploration, the rest confirmation. The split key depends only on h and the
+-- credential, so a wallet drawn in both frames has the same key and the same
+-- label in both; each sample is then about, not exactly, 20% exploration.
 --
 -- study.sample_wallet lists every sampled credential once, for the per-wallet
--- steps that follow (prior-treated flags, franken flags, the section 6.1
--- check), and study.sample_frame each (frame, wallet) once, for the profile
--- inputs. Case wallets ride along with in_sample false: the consented keys,
--- analyzed as named case studies (pre-registration section 5.2), and any
--- wallets the driver adds for checks; they never enter study.sample, and every
--- count over the sample leaves them out.
+-- steps that follow (the section 6.1 check, prior-treated flags, franken
+-- flags), and study.sample_frame each (frame, wallet) once, for the profile
+-- inputs. Case wallets ride along with in_sample false: the wallets Adam K.
+-- Dean names as case studies (pre-registration section 5.2), each of which
+-- is also one of the consented keys removed from every frame; they never
+-- enter study.sample, and every count over the sample leaves them out.
 
 -- @step split
 -- @outputs study.case_wallet
 DROP TABLE IF EXISTS study.case_wallet;
 CREATE TABLE study.case_wallet (sa_id bigint PRIMARY KEY);
-INSERT INTO study.case_wallet SELECT sa_id FROM study.consented ON CONFLICT DO NOTHING;
 UPDATE study.sample x
    SET split = CASE WHEN r.rn <= r.n / {{split_den}} THEN 'exploration' ELSE 'confirmation' END
-  FROM (SELECT s.frame, s.kind, s.stratum, s.sa_id,
-               row_number() OVER (PARTITION BY s.frame, s.kind, s.stratum ORDER BY f.split_key) AS rn,
-               count(*) OVER (PARTITION BY s.frame, s.kind, s.stratum) AS n
-          FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id) r
- WHERE x.frame = r.frame AND x.kind = r.kind AND x.stratum = r.stratum AND x.sa_id = r.sa_id;
+  FROM (SELECT u.sa_id,
+               row_number() OVER (ORDER BY u.split_key, u.sa_id) AS rn,
+               count(*) OVER () AS n
+          FROM (SELECT DISTINCT s.sa_id, f.split_key
+                  FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id) u) r
+ WHERE x.sa_id = r.sa_id;
 
--- The driver binds extra case wallets (bech32 stake addresses).
+-- The driver binds the case wallets (bech32 stake addresses), after checking
+-- that each one is in the consented file.
 -- @query case_wallet_load
 INSERT INTO study.case_wallet (sa_id)
 SELECT c.sa_id FROM study.cred c WHERE c.view = ANY ($1::text[])
@@ -67,5 +71,13 @@ ANALYZE study.sample_frame;
 SELECT frame, kind, stratum, count(*) AS n,
        count(*) FILTER (WHERE split = 'exploration') AS n_exploration,
        count(*) FILTER (WHERE split = 'confirmation') AS n_confirmation,
-       count(*) FILTER (WHERE split IS NULL) AS n_unassigned
+       count(*) FILTER (WHERE split IS NULL) AS n_unassigned,
+       count(*) FILTER (WHERE excluded_6_1) AS n_excluded_6_1
   FROM study.sample GROUP BY frame, kind, stratum ORDER BY frame DESC, kind, stratum;
+
+-- The split over all sampled credentials, each counted once.
+-- @query split_overall
+SELECT count(DISTINCT sa_id) AS n_credentials,
+       count(DISTINCT sa_id) FILTER (WHERE split = 'exploration') AS n_exploration,
+       count(DISTINCT sa_id) FILTER (WHERE split = 'confirmation') AS n_confirmation
+  FROM study.sample;

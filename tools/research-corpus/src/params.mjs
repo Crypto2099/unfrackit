@@ -10,7 +10,7 @@
 // Fixed by the pre-registration.
 export const FIXED = {
   peak_epochs: 73, // section 5.3: 73 epochs of 5 days make 365 days
-  alonzo_protocol_major: 5, // section 5.3: the Alonzo epoch is the first with protocol_major >= 5
+  peak_from_protocol_major: 4, // section 5.3: the peak search begins at the Mary hard fork, the first epoch with protocol_major >= 4
   recent_days: 365, // section 5.3
   guard: 200000, // section 5.4; it counts eligible keys taken in draw order
   target_a: 2400, // section 5.4 (a)
@@ -20,7 +20,9 @@ export const FIXED = {
   assets_c_min: 100, // section 5.4: 100 or more tokens
   ada_only_n: 1200, // section 5.4
   strata_n: 50, // section 5.4
-  nft_top_n: 10, // section 5.4
+  nft_top_n: 10, // section 5.4, part 3 of the strata rule
+  ft_n: 10, // section 5.4, part 2 of the strata rule: ten CoinGecko tokens that pass the floor
+  ft_floor: 1000, // part 2: a candidate held by fewer stake credentials of the recent frame at the snapshot is skipped
   utxo_cap: 20000, // section 5.5: more than 20,000 UTxOs is excluded
   pay_cred_cap: 200, // section 5.5: more than 200 distinct payment credentials
   script_share: '0.5', // section 5.5: more than half of the value
@@ -49,22 +51,32 @@ export const READINGS = {
   x9_count_held: { value: true, note: 'held UTxOs count toward token-holding, asset counts, UTxO counts and lovelace' },
   x10_skip_random_only: { value: false, note: 'strata skip wallets in the random, ADA-only and earlier strata samples; true skips only the random sample' },
   x10_spacebudz_one: { value: false, note: 'the two SpaceBudz policies are two strata; true merges them into one' },
-  x11_supply: { value: false, note: 'per-wallet class for the NFT top ten; true also drops policies with an asset minted above 1' },
   x12_history: { value: true, note: 'payment credentials counted over history up to the reference block; false counts those present at it' },
   x13_all: { value: false, note: 'franken flags over key payment credentials only; true includes script credentials' },
   x14_search_bytes: { value: true, note: 'key-674 rows db-sync could not decode are searched in their bytes and counted separately' },
   x15_bech32: { value: false, note: 'the HMAC input is the 29-byte reward address; true uses its bech32 text' },
   x17_invalid_is_script: { value: true, note: 'a phase-2-invalid transaction counts as executing a script' },
-  x19_count_invalid: { value: true, note: 'every tx row counts toward the peak window, phase-2-invalid included' },
+  x19_count_invalid: { value: true, note: 'every tx row counts toward the peak window, phase-2-invalid included; the search begins at the first epoch with protocol_major >= 4 (Mary)' },
   x21_others_allowed: { value: true, note: 'other outputs are allowed beside the seven Evolution outputs' }
 };
 
 export const NETWORK_TAG = { mainnet: 1, preprod: 0, preview: 0 };
 
+// Genesis parameters the draw key's epoch rule reads (the security parameter
+// k, the active slot coefficient f and the epoch length in slots). A run
+// compares them with Koios /genesis for the database's network and refuses on
+// any difference.
+export const GENESIS = {
+  mainnet: { k: 2160, f: '0.05', epoch_length: 432000 },
+  preprod: { k: 2160, f: '0.05', epoch_length: 432000 },
+  preview: { k: 432, f: '0.05', epoch_length: 86400 }
+};
+
 // The peak window as frozen (section 5.3), computed from Koios epoch_info on
-// 2026-10-05. A mainnet run compares the rule's result from db-sync with it
-// and reports any disagreement; the rule's result is used either way.
-export const FROZEN_PEAK = { mainnet: { first_epoch: 290, last_epoch: 362, n_tx: 36953004 } };
+// 2026-10-21 with the search beginning at the Mary hard fork. A mainnet run
+// compares the rule's result from db-sync with it and reports any
+// disagreement; the rule's result is used either way.
+export const FROZEN_PEAK = { mainnet: { first_epoch: 286, last_epoch: 358, n_tx: 37431658 } };
 
 const T = {
   int: (v) => ({ type: 'int', value: v }),

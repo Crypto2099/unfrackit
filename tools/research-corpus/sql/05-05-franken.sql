@@ -35,7 +35,7 @@ multi AS (SELECT sa_id, tx FROM ins GROUP BY sa_id, tx HAVING count(*) >= 2),
 co AS (SELECT DISTINCT i.sa_id, i.payment_cred FROM ins i JOIN multi m ON m.sa_id = i.sa_id AND m.tx = i.tx),
 nc AS (SELECT sa_id, count(*) AS n_creds FROM creds GROUP BY sa_id),
 anyco AS (SELECT DISTINCT sa_id FROM co)
-SELECT c.sa_id, c.payment_cred, nc.n_creds,
+SELECT c.sa_id, c.payment_cred, nc.n_creds, (a.sa_id IS NOT NULL) AS any_cospend,
        (nc.n_creds >= 2 AND a.sa_id IS NOT NULL AND co.payment_cred IS NULL) AS flagged
   FROM creds c
   JOIN nc ON nc.sa_id = c.sa_id
@@ -43,10 +43,16 @@ SELECT c.sa_id, c.payment_cred, nc.n_creds,
   LEFT JOIN co ON co.sa_id = c.sa_id AND co.payment_cred = c.payment_cred;
 CREATE INDEX franken_sa ON study.franken (sa_id);
 
--- Over the sampled wallets only (case wallets are reported per wallet).
+-- Over the sampled wallets only (case wallets are reported per wallet), less
+-- those the section 6.1 check excluded. n_multi_cred_no_cospend counts the
+-- wallets the rule cannot flag because no pair of their key credentials ever
+-- co-spends: one real credential beside a third party's output at a mangled
+-- address (CIP-19, "Delegation part") is such a case.
 -- @query franken_counts
 SELECT count(DISTINCT f.sa_id) AS n_wallets,
        count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2) AS n_multi_cred,
        count(DISTINCT f.sa_id) FILTER (WHERE f.flagged) AS n_wallets_flagged,
-       count(*) FILTER (WHERE f.flagged) AS n_creds_flagged
-  FROM study.franken f JOIN study.sample_wallet w ON w.sa_id = f.sa_id AND w.in_sample;
+       count(*) FILTER (WHERE f.flagged) AS n_creds_flagged,
+       count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2 AND NOT f.any_cospend) AS n_multi_cred_no_cospend
+  FROM study.franken f JOIN study.sample_wallet w ON w.sa_id = f.sa_id AND w.in_sample
+ WHERE NOT EXISTS (SELECT 1 FROM study.check_61 k WHERE k.sa_id = f.sa_id AND NOT k.agree);

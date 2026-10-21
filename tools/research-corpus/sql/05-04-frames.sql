@@ -20,7 +20,9 @@
 --   6 more than 200 distinct payment credentials (counted as x12_history says)
 --   7 more than half of the lovelace at script payment credentials
 -- Eligible wallets with more than 5,000 transactions in the window are counted,
--- not removed.
+-- not removed. Beside stage 6, the report counts the removals that would stay
+-- under the cap if only key payment credentials were counted (n_pay_key):
+-- heavy users of per-user script addresses are removed by the cap as read.
 --
 -- Token-holding: at least one native asset at the snapshot (recent) or at the
 -- peak window's start or end (peak); held UTxOs count (x9_count_held). The
@@ -45,7 +47,7 @@ WITH rec AS (
          coalesce(s.lovelace, 0) AS lovelace,
          coalesce(s.lovelace_all, 0) AS lovelace_all,
          coalesce(s.lovelace_script_pay, 0) AS lovelace_script_pay,
-         coalesce(p.n_pay, 0) AS n_pay,
+         coalesce(p.n_pay, 0) AS n_pay, coalesce(p.n_pay_key, 0) AS n_pay_key,
          coalesce(s.n_assets, 0) AS n_assets_a, coalesce(s.n_assets, 0) AS n_assets_b,
          coalesce(s.n_nft, 0) AS n_nft_a, coalesce(s.n_nft, 0) AS n_nft_b,
          coalesce(s.n_units, 0) AS n_units_a, coalesce(s.n_units, 0) AS n_units_b
@@ -57,7 +59,7 @@ WITH rec AS (
 pk AS (
   SELECT 'peak'::text AS frame, a.sa_id, a.n_tx, a.n_spends, a.n_spends_key, a.n_spends_any,
          coalesce(e.n_utxo, 0), coalesce(e.lovelace, 0), coalesce(e.lovelace_all, 0), coalesce(e.lovelace_script_pay, 0),
-         coalesce(p.n_pay, 0),
+         coalesce(p.n_pay, 0), coalesce(p.n_pay_key, 0),
          coalesce(b.n_assets, 0), coalesce(e.n_assets, 0),
          coalesce(b.n_nft, 0), coalesce(e.n_nft, 0),
          coalesce(b.n_units, 0), coalesce(e.n_units, 0)
@@ -145,5 +147,7 @@ SELECT frame,
        count(*) FILTER (WHERE consented) AS consented_in_stage1,
        count(*) FILTER (WHERE consented AND eligible_unless_consented) AS consented_otherwise_eligible,
        count(*) FILTER (WHERE eligible AND n_spends_key <> n_spends_any) AS eligible_x2_differs,
-       count(*) FILTER (WHERE NOT is_script AND NOT consented AND frame = 'recent' AND NOT s4) AS emptied_during_window
+       count(*) FILTER (WHERE NOT is_script AND NOT consented AND frame = 'recent' AND NOT s4) AS emptied_during_window,
+       count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5 AND NOT s6
+                          AND n_pay_key <= {{pay_cred_cap}}) AS s6_removed_by_script_creds_only
   FROM study.frame GROUP BY frame ORDER BY frame DESC;
