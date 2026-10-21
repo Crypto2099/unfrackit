@@ -76,7 +76,7 @@ test('the cited hypotheses record must exist, be confirmed and be signed by the 
   const H = await hypotheses(h);
   const f = fakeChain('preprod', { txs: { [H.hash]: { cbor: H.cbor, confirmations: 30 } } });
   const koios = f.koios({ txHashes: [...h.store.knownTxHashes('preprod')] });
-  const args = { store: h.store, koios, network: 'preprod', publicKeyHex: h.identity.pub.signing_public_key };
+  const args = { store: h.store, koios, network: 'preprod', publicKeyHex: h.identity.pub.signing_public_key, paymentKeyHash: h.identity.pub.payment_key_hash };
   await assert.rejects(checkCitedHypotheses({ ...args, cited: ['9f'.repeat(32)] }), /cites no hypotheses-stage record/);
   const t = await checkCitedHypotheses({ ...args, cited: ['9f'.repeat(32), H.hash] });
   assert.equal(t.tx_hash, H.hash);
@@ -101,7 +101,7 @@ test('build of a final freeze refuses a document whose hypotheses record is unco
 });
 
 // A final-stage run with its block on both fake providers.
-async function finalRun({ epochSlot = 101600, blockfrostBlock, tip = {}, bfTip = {}, epochParams = {}, bfEpochParams = {}, network = 'preprod', name = 'rehearsal' } = {}) {
+async function finalRun({ epochSlot = 101600, blockfrostBlock, tip = {}, bfTip = {}, epochParams = {}, bfEpochParams = {}, bfGenesis = {}, bfBlockOverride, network = 'preprod', name = 'rehearsal' } = {}) {
   const store = new Store(tempHome());
   store.ensure();
   const identity = testIdentity(store, name);
@@ -110,7 +110,7 @@ async function finalRun({ epochSlot = 101600, blockfrostBlock, tip = {}, bfTip =
   const first = 136598400; // first slot of preprod epoch 320
   const block = blockOf({ slot: first + epochSlot, epoch: 320, epochSlot });
   const k = fakeChain(network, { txs: { [run.hash]: { cbor: run.cbor, confirmations: 15, block: block.koios } }, tip, epochParams });
-  const b = fakeBlockfrost(network, { txs: { [run.hash]: { cbor: run.cbor, block: (blockfrostBlock || block).blockfrost } }, tip: bfTip, epochParams: bfEpochParams });
+  const b = fakeBlockfrost(network, { txs: { [run.hash]: { cbor: run.cbor, block: (blockfrostBlock || block).blockfrost, blockOverride: bfBlockOverride } }, tip: bfTip, epochParams: bfEpochParams, genesis: bfGenesis });
   const koios = k.koios({ txHashes: [...store.knownTxHashes(network)], addresses: [run.report.payment_address] });
   const bf = b.bf({ txHashes: [run.hash] });
   return { store, identity, run, k, b, koios, bf, block, first };
@@ -199,7 +199,18 @@ test('drawkey fails on a nonce disagreement or absence, before N starts, before 
     [{ epochParams: { 321: null }, bfEpochParams: { 321: { epoch: 321, nonce: NONCE, protocol_major_ver: 11 } } }, started, /absent: Koios has none/],
     [{ epochParams: { 321: { epoch_no: 321, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: null } }, started, /absent: Koios has it, Blockfrost has none/],
     [{}, (f) => { f.k.chain.tip.block_height = f.block.koios.block_height + 2200; f.b.state.tip.height = f.block.blockfrost.height + 2200; }, /epoch 321 has not started \(Koios is at epoch 320, Blockfrost at 320\); it starts at slot 137030400/],
-    [{}, (f) => { started(f); f.b.state.tip.height = f.block.blockfrost.height + 100; }, /101 on Blockfrost; the draw key waits for the security parameter k = 2160/],
+    [{}, (f) => { started(f); f.b.state.tip.height = f.block.blockfrost.height + 100; }, /101 on Blockfrost; the draw key waits for depth k \+ 1 = 2161/],
+    // Depth exactly k is not enough: a rollback reaches k blocks back.
+    [{}, (f) => { started(f); f.k.chain.tip.block_height = f.block.koios.block_height + 2159; }, /2160 blocks deep on Koios/],
+    [{}, (f) => { started(f); f.b.state.tip.height = f.block.blockfrost.height + 2159; }, /2160 on Blockfrost/],
+    // The providers disagree on the genesis parameters.
+    [{ bfGenesis: { security_param: 2161 } }, started, /genesis parameters differ: securityParam: Koios 2160, Blockfrost 2161/],
+    // Blockfrost contradicts itself: /txs and /blocks place the transaction differently.
+    [{ bfBlockOverride: { slot: 136598400 + 101601 } }, started, /Blockfrost contradicts itself/],
+    // Koios answers with the parameters of another epoch.
+    [{ epochParams: { 321: { epoch_no: 320, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: { epoch: 321, nonce: NONCE, protocol_major_ver: 11 } } }, started, /parameters returned are for epoch 320 \(Koios\)/],
+    // The plan recomputed now differs from the one wait recorded.
+    [{ epochParams: { 321: { epoch_no: 321, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: { epoch: 321, nonce: NONCE, protocol_major_ver: 11 } } }, (f) => { started(f); const file = path.join(f.run.dir, 'report.json'); const r = JSON.parse(fs.readFileSync(file, 'utf8')); r.draw.cutoff_slot -= 1; f.store.updateRunFile(f.run.dir, 'report.json', JSON.stringify(r)); }, /draw plan differs from the recorded one: cutoff_slot/],
     [{ blockfrostBlock: blockOf({ hash: 'cc'.repeat(32), slot: 136598400 + 101600, epoch: 320, epochSlot: 101600 }) }, started, /freeze block differs: block_hash/]
   ];
   for (const [opts, prep, re] of cases) {
@@ -234,4 +245,76 @@ test('on mainnet a second final freeze is refused once one is journaled', async 
   const f = fakeChain('mainnet');
   await assert.rejects(submitRun({ store, dir: b.dir, log: () => {}, koios: f.koios({ addresses: [b.report.payment_address] }) }), /a final-stage freeze is already journaled on mainnet/);
   assert.deepEqual(f.calls, [], 'refused before any request');
+});
+
+test('drawkey accepts a freeze block exactly k + 1 deep on both providers', async () => {
+  const f = await finalRun({ epochParams: { 321: { epoch_no: 321, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: { epoch: 321, nonce: NONCE, protocol_major_ver: 11 } } });
+  await waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick });
+  started(f);
+  f.k.chain.tip.block_height = f.block.koios.block_height + 2160;
+  f.b.state.tip.height = f.block.blockfrost.height + 2160;
+  const r = await drawKey({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, blockfrost: f.bf });
+  assert.deepEqual(r.depth, { koios: 2161, blockfrost: 2161 });
+});
+
+test('verify of a final freeze fails when the providers disagree on the genesis parameters', async () => {
+  const f = await finalRun({ bfGenesis: { security_param: 2161 } });
+  await waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick });
+  const r = await verifyRun({ store: f.store, cli: fakeCli, arg: f.run.dir, network: 'preprod', log: () => {}, koios: f.koios, blockfrost: f.bf, sdkImpl: sdkValid });
+  assert.equal(r.verdict, 'failed');
+  assert.match(r.issues.join('; '), /genesis parameters differ: securityParam: Koios 2160, Blockfrost 2161/);
+});
+
+test('wait never replaces what it recorded: other facts are refused, equal ones leave the record as it was', async () => {
+  const f = await finalRun();
+  await waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick });
+  const file = path.join(f.run.dir, 'report.json');
+  const first = fs.readFileSync(file, 'utf8');
+  await waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: { ...quick, now: () => 99999 } });
+  assert.equal(fs.readFileSync(file, 'utf8'), first, 'a second wait with the same facts changes nothing');
+  f.k.chain.txs[f.run.hash].block = { ...f.k.chain.txs[f.run.hash].block, block_hash: 'dd'.repeat(32) };
+  await assert.rejects(waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick }), /already recorded other block facts .* block_hash/);
+  assert.equal(fs.readFileSync(file, 'utf8'), first);
+});
+
+test('wait keeps the confirmation even when the draw plan cannot be computed', async () => {
+  const f = await finalRun({ epochParams: { 320: { epoch_no: 320, protocol_major: 12, protocol_minor: 0 } } });
+  await assert.rejects(waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick }), /protocol version 12/);
+  const report = JSON.parse(fs.readFileSync(path.join(f.run.dir, 'report.json'), 'utf8'));
+  assert.equal(report.confirmed.confirmations, 15);
+  assert.equal(report.draw, undefined);
+});
+
+// A final freeze stays buildable after a home loss: --hypotheses names the
+// hypotheses record, which is read from chain.
+test('--hypotheses: the named record must be cited, on chain, paid and signed by this identity, and a core-only freeze', async () => {
+  const lost = await home();
+  const H = await hypotheses(lost);
+  const typed = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, utxoTag: 'e' });
+  // A fresh home with the same keys and no run directories.
+  const h = await home();
+  const f = fakeChain('preprod', { txs: { [H.hash]: { cbor: H.cbor, confirmations: 30 }, [typed.hash]: { cbor: typed.cbor, confirmations: 30 } } });
+  const args = { store: h.store, koios: f.koios(), network: 'preprod', publicKeyHex: h.identity.pub.signing_public_key, paymentKeyHash: h.identity.pub.payment_key_hash };
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [H.hash] }), /cites no hypotheses-stage record .* --hypotheses <hash>/);
+  const t = await checkCitedHypotheses({ ...args, cited: [H.hash], hypothesesHash: H.hash });
+  assert.equal(t.source, 'chain');
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: ['9f'.repeat(32)], hypothesesHash: H.hash }), /does not cite the hypotheses record/);
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [typed.hash], hypothesesHash: typed.hash }), /not a core-only freeze record/);
+  await assert.rejects(checkCitedHypotheses({ ...args, paymentKeyHash: 'ab'.repeat(28), cited: [H.hash], hypothesesHash: H.hash }), /was not paid by this identity/);
+  // In the home that has the runs, --hypotheses cannot name a run of another stage.
+  const g = fakeChain('preprod', { txs: { [typed.hash]: { cbor: typed.cbor, confirmations: 30 } } });
+  const report = JSON.parse(fs.readFileSync(path.join(typed.dir, 'report.json'), 'utf8'));
+  lost.store.updateRunFile(typed.dir, 'report.json', JSON.stringify({ ...report, stage: 'final' }));
+  await assert.rejects(checkCitedHypotheses({ store: lost.store, koios: g.koios(), network: 'preprod', publicKeyHex: lost.identity.pub.signing_public_key, paymentKeyHash: lost.identity.pub.payment_key_hash, cited: [typed.hash], hypothesesHash: typed.hash }), /final-stage run of this home, not the hypotheses record/);
+});
+
+test('build refuses a mainnet final while another final is journaled, before any request', async () => {
+  const store = new Store(tempHome());
+  store.ensure();
+  const identity = testIdentity(store, 'testfreeze');
+  const a = await fabricateRun(store, { network: 'mainnet', identity, extra: { stage: 'final' } });
+  journalConfirmed(store, 'mainnet', a, identity);
+  const f = fakeChain('mainnet');
+  await assert.rejects(build({ store, koios: f.koios(), cli: {}, manifestPath: '/nowhere.json', network: 'mainnet', identityName: 'testfreeze', stage: 'final' }), /already journaled on mainnet/);
+  assert.deepEqual(f.calls, []);
 });

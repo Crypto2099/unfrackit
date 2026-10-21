@@ -166,10 +166,32 @@ export class Store {
     }
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { mode: 0o700 });
     fs.chmodSync(dir, 0o700);
-    writeFileSynced(path.join(dir, 'signing-mnemonic'), signingMnemonic + '\n');
-    writeFileSynced(path.join(dir, 'payment-mnemonic'), paymentMnemonic + '\n');
-    if (publicJson) writeFileSynced(path.join(dir, 'public.json'), JSON.stringify(publicJson, null, 2) + '\n');
+    // Both files go to temporary names first and are renamed only when both
+    // are written, so a failed write (a full disk) leaves no single mnemonic
+    // file behind to block the next attempt.
+    const files = [['signing-mnemonic', signingMnemonic + '\n'], ['payment-mnemonic', paymentMnemonic + '\n']];
+    if (publicJson) files.push(['public.json', JSON.stringify(publicJson, null, 2) + '\n']);
+    const tmp = (f) => path.join(dir, `.${f}.restore-${process.pid}`);
+    const placed = [];
+    try {
+      for (const [f, content] of files) writeFileSynced(tmp(f), content);
+      for (const [f] of files) {
+        fs.renameSync(tmp(f), path.join(dir, f));
+        placed.push(f);
+      }
+    } catch (e) {
+      // Undo a partial rename too: all of the files, or none.
+      for (const f of placed) fs.rmSync(path.join(dir, f), { force: true });
+      throw e;
+    } finally {
+      for (const [f] of files) fs.rmSync(tmp(f), { force: true });
+    }
     fsyncDir(dir);
+  }
+
+  identityNames() {
+    const dir = this.path('identities');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => IDENTITY_NAME_RE.test(n)) : [];
   }
 
   existingMnemonicFiles(name) {

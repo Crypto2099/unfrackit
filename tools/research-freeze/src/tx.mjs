@@ -212,3 +212,22 @@ export function assertSweep(bytes, expect) {
   const fee = assertBodyAndWitness(bytes, fixed, rawBody, txHash, expect, ok, SWEEP_BODY_KEYS);
   return { txHash, fee, size: bytes.length, checks };
 }
+
+// Whether a transaction read from chain was paid by this identity: its
+// witness set holds exactly one vkey witness, from the payment key with this
+// hash, verifying against the body hash. A replay of one of the identity's
+// signed record bodies in someone else's transaction fails this, which is
+// what tells the original from the replay (CIP-190, "Signature replay").
+export function witnessedBy(bytes, paymentKeyHash) {
+  const fixed = CSL.FixedTransaction.from_bytes(bytes);
+  const bodyHash = blake2b256(new Uint8Array(fixed.raw_body()));
+  const ws = decode(new Uint8Array(fixed.raw_witness_set()));
+  if (![...ws.keys()].every((k) => k === 0)) return { ok: false, reason: 'the witness set holds more than vkey witnesses' };
+  const vkeys = setItems(mapGet(ws, 0));
+  if (!Array.isArray(vkeys) || vkeys.length !== 1) return { ok: false, reason: `the transaction carries ${Array.isArray(vkeys) ? vkeys.length : 0} vkey witnesses, not one` };
+  const [vk, sig] = vkeys[0];
+  const keyHash = toHex(CSL.PublicKey.from_bytes(vk).hash().to_bytes());
+  if (keyHash !== paymentKeyHash) return { ok: false, reason: `its witness is from the key with hash ${keyHash}, not this identity's payment key ${paymentKeyHash}` };
+  if (!nodeVerify(vk, bodyHash, sig)) return { ok: false, reason: 'its payment witness does not verify against the body hash' };
+  return { ok: true };
+}

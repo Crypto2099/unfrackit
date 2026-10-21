@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { Koios, networkOf } from './koios.mjs';
-import { journal, journalEntry, journalEntries, submitJournaled, waitConfirmed, abandon, assertNoUnresolved } from './journal.mjs';
+import { journal, journalEntry, journalEntries, submitJournaled, waitConfirmed, abandon, assertNoUnresolved, assertNoOtherFinal } from './journal.mjs';
+import { unknownRecordsOnChain } from './targets.mjs';
 import { loadRun, assertIdentityNetwork, defaultIdentity } from './build.mjs';
 import { verifyAll, crossCheck, verifyDrawPlan } from './verify.mjs';
 import { blockfrostFor, tokenFileName } from './blockfrost.mjs';
@@ -54,21 +55,34 @@ export function submissionFacts(run) {
   ];
 }
 
-export async function submitRun({ store, dir, log = console.error, streams, koios: givenKoios }) {
+export async function submitRun({ store, dir, log = console.error, streams, koios: givenKoios, blockfrost: givenBlockfrost }) {
   const run = loadRun(dir);
   // The bytes about to be sent are the bytes the build checked: every
   // post-build assertion runs again on them first.
   assertTransaction(run.txBytes, run.txExpect);
   const network = run.report.network;
+  const finalOnMainnet = network === 'mainnet' && run.report.stage === 'final';
+  // The draw is keyed to one final freeze: on mainnet a second one is refused
+  // once another is journaled (an abandoned one does not count). This early
+  // refusal saves a prompt; `journal` checks again under the lock, right
+  // before sending.
+  if (finalOnMainnet) assertNoOtherFinal(journalEntries(store, network), network, run.txHash);
+  const bf = givenBlockfrost !== undefined ? givenBlockfrost : finalOnMainnet ? blockfrostFor(store, network, { own: { addresses: [run.report.payment_address] } }) : null;
+  if (finalOnMainnet && !bf) throw new UserError(`a mainnet final freeze is submitted only after its payment address's history is read from Koios and Blockfrost; save the mainnet project id as secrets/${tokenFileName('mainnet')}`);
   const koios = givenKoios || koiosFor(store, network, { addresses: [run.report.payment_address] });
   koios.allowTx(run.txHash);
-  // The draw is keyed to one final freeze: on mainnet a second one is refused
-  // once another is journaled (an abandoned one does not count).
-  if (network === 'mainnet' && run.report.stage === 'final') {
-    const other = journalEntries(store, network).find((e) => e.stage === 'final' && e.txHash !== run.txHash && e.state !== 'abandoned');
-    if (other) throw new UserError(`a final-stage freeze is already journaled on mainnet (${other.txHash}, state ${other.state}); the draw is keyed to one final freeze, so a second is refused`);
-  }
   await koios.guard();
+  if (finalOnMainnet) {
+    // The journal knows only what this home sent. The chain knows every
+    // record this identity paid for, so a final freeze sent from a lost home
+    // shows up there.
+    await bf.guard();
+    const { found, replays } = await unknownRecordsOnChain({ store, koios, bf, network, address: run.report.payment_address, publicKeyHex: run.report.signing_public_key, paymentKeyHash: run.txExpect.paymentKeyHash, exclude: [run.txHash, run.report.hypotheses_record].filter(Boolean) });
+    for (const h of replays) log(`${h} carries a record signed by this key in a transaction this identity did not pay for (a replay); it does not count`);
+    if (found.length) {
+      throw new UserError(`refusing a final freeze: the payment address's history holds transactions this home's journal does not know:\n${found.map((f) => `  ${f.tx_hash}: ${f.reason}`).join('\n')}\nOne of them may be a final freeze sent from a lost home.`);
+    }
+  }
   if (network === 'mainnet') await confirmMainnet(run.txHash, 'submission', streams, submissionFacts(run));
   const entry = journal(
     store,
@@ -107,15 +121,34 @@ export async function waitRun({ store, dir, log = console.error, koios: givenKoi
   const j = store.readJournal(network);
   const entry = j.current && j.current.txHash === txHash ? j.current : { network, txHash, state: 'confirmed' };
   const facts = await waitConfirmed({ koios, store, entry, log, ...waitOptions });
-  const out = { ...report, confirmed: facts };
+  // What `wait` recorded is what `verify` and `drawkey` compare against, so a
+  // second `wait` never replaces it: facts that differ from the recorded ones
+  // are refused, and equal ones leave the record as it was.
+  const recordedBlock = (c) => ({ block_hash: c.block_hash, block_height: c.block_height, slot: c.absolute_slot, epoch: c.epoch, epoch_slot: c.epoch_slot, block_time: c.block_time });
+  if (report.confirmed) {
+    const d = differences(recordedBlock(facts), recordedBlock(report.confirmed), BLOCK_FIELDS.filter((f) => recordedBlock(report.confirmed)[f] !== undefined));
+    if (d.length) throw new UserError(`wait already recorded other block facts for ${txHash}: ${describeDifferences(d, 'now', 'recorded')}; not replacing them (verify and drawkey will fail on the difference)`);
+  } else {
+    // Written before the plan, so a plan that cannot be computed does not
+    // lose the confirmation.
+    store.updateRunFile(dir, 'report.json', stringify({ ...report, confirmed: facts }, 2) + '\n');
+  }
+  const current = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
+  let draw = current.draw || null;
   if (report.stage === 'final') {
     const genesis = await koios.genesis();
     const params = await koios.epochParams(facts.epoch);
     const blockFacts = { slot: facts.absolute_slot, epoch: facts.epoch, epoch_slot: facts.epoch_slot };
-    out.draw = { ...planFrom(genesis, blockFacts, Number(params?.protocol_major)), sources: ['koios'], cross_checked: false, recorded_by: 'wait', at: new Date().toISOString() };
+    const plan = { ...planFrom(genesis, blockFacts, Number(params?.protocol_major)), sources: ['koios'], cross_checked: false, recorded_by: 'wait', at: new Date().toISOString() };
+    if (draw) {
+      const d = differences(plan, draw, PLAN_FIELDS);
+      if (d.length) throw new UserError(`wait already recorded another draw plan for ${txHash}: ${describeDifferences(d, 'now', 'recorded')}; not replacing it`);
+    } else {
+      draw = plan;
+      store.updateRunFile(dir, 'report.json', stringify({ ...current, draw }, 2) + '\n');
+    }
   }
-  store.updateRunFile(dir, 'report.json', stringify(out, 2) + '\n');
-  return { ...facts, stage: report.stage || null, draw: out.draw || null };
+  return { ...(current.confirmed || facts), stage: report.stage || null, draw };
 }
 
 // Whether verify needs Blockfrost: on mainnet always, because chain facts
@@ -236,8 +269,10 @@ export async function drawKey({ store, dir, log = console.error, koios: givenKoi
   const tK = await koios.tip();
   const tB = await bf.latestBlock();
   const depth = { koios: tK.height - fK.block_height + 1, blockfrost: Number(tB.height) - fB.block_height + 1 };
-  if (depth.koios < gK.securityParam || depth.blockfrost < gK.securityParam) {
-    fail(`the freeze block is ${depth.koios} blocks deep on Koios and ${depth.blockfrost} on Blockfrost; the draw key waits for the security parameter k = ${gK.securityParam}`);
+  // A rollback reaches at most k blocks back, so a block is immutable once
+  // more than k blocks deep.
+  if (depth.koios <= gK.securityParam || depth.blockfrost <= gK.securityParam) {
+    fail(`the freeze block is ${depth.koios} blocks deep on Koios and ${depth.blockfrost} on Blockfrost; the draw key waits for depth k + 1 = ${gK.securityParam + 1}`);
   }
   if (tK.epoch < N || Number(tB.epoch) < N) {
     fail(`epoch ${N} has not started (Koios is at epoch ${tK.epoch}, Blockfrost at ${tB.epoch}); it starts at slot ${plan.nonce_epoch_first_slot}`);
@@ -283,12 +318,16 @@ export async function drawKey({ store, dir, log = console.error, koios: givenKoi
   return record;
 }
 
-export async function abandonJournal({ store, network, identityName }) {
+export async function abandonJournal({ store, network, identityName, koios: givenKoios, blockfrost: givenBlockfrost }) {
   const name = identityName || defaultIdentity(network);
   const pub = store.readPublic(name);
-  const koios = koiosFor(store, network, { addresses: [pub.addresses[network]] });
+  const koios = givenKoios || koiosFor(store, network, { addresses: [pub.addresses[network]] });
+  // On mainnet the second provider must also not know the hash.
+  const bf = givenBlockfrost !== undefined ? givenBlockfrost : blockfrostFor(store, network);
+  if (!bf && network === 'mainnet') throw new UserError(`abandon on mainnet asks Blockfrost too; save the mainnet project id as secrets/${tokenFileName('mainnet')}`);
   await koios.guard();
-  return abandon({ koios, store, network, address: pub.addresses[network] });
+  if (bf) await bf.guard();
+  return abandon({ koios, store, network, address: pub.addresses[network], bf });
 }
 
 // Return every pure-ADA UTxO of the payment address to `to`: one output, no

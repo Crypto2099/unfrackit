@@ -4,9 +4,10 @@
 // Koios (API v1.4.2, public tier, no token). The client exposes only the
 // requests this tool makes: /genesis, /tip, /epoch_params, /address_utxos and
 // /address_txs for the identity's own payment address, /submittx, and
-// /tx_status, /tx_info and /tx_cbor for the tool's own transactions. It
-// refuses any other address or transaction hash, because before the freeze
-// block no study query may run.
+// /tx_status, /tx_info and /tx_cbor for the tool's own transactions and for
+// the transactions /address_txs listed for that address. It refuses any other
+// address or transaction hash, because before the freeze block no study query
+// may run.
 
 import { sleep as realSleep, UserError } from './util.mjs';
 
@@ -51,6 +52,9 @@ export class Koios {
     this.sleep = sleepImpl;
     this.addresses = new Set(own.addresses || []);
     this.txHashes = new Set(own.txHashes || []);
+    // Transactions of the identity's own payment address, as /address_txs
+    // listed them.
+    this.historyTxs = new Set();
     this.spacingMs = spacingMs;
     this.last = 0;
     this.log = log || (() => {});
@@ -63,7 +67,7 @@ export class Koios {
   #ownTx(hashes) {
     for (const h of hashes) {
       if (!/^[0-9a-f]{64}$/.test(h)) throw new UserError(`not a transaction hash: ${h}`);
-      if (!this.txHashes.has(h)) throw new UserError(`refusing to query ${h}: it is not one of this tool's own transactions`);
+      if (!this.txHashes.has(h) && !this.historyTxs.has(h)) throw new UserError(`refusing to query ${h}: it is not one of this tool's own transactions`);
     }
   }
 
@@ -175,7 +179,10 @@ export class Koios {
     const out = [];
     for (let offset = 0; ; offset += 1000) {
       const page = await this.request('POST', `/address_txs?offset=${offset}&limit=1000`, { json: { _addresses: [address] } });
-      for (const t of page) out.push({ txHash: t.tx_hash, blockHeight: Number(t.block_height), blockTime: Number(t.block_time), epoch: Number(t.epoch_no) });
+      for (const t of page) {
+        out.push({ txHash: t.tx_hash, blockHeight: Number(t.block_height), blockTime: Number(t.block_time), epoch: Number(t.epoch_no) });
+        this.historyTxs.add(t.tx_hash);
+      }
       if (page.length < 1000) return out;
     }
   }
@@ -200,6 +207,15 @@ export class Koios {
     this.#ownTx([hash]);
     const rows = await this.request('POST', '/tx_info', { json: { _tx_hashes: [hash] } });
     return rows.find((r) => r.tx_hash === hash) || null;
+  }
+
+  // The inputs a transaction spent, as `txHash#index` strings, or null when
+  // Koios does not know the transaction.
+  async txInputs(hash) {
+    this.#ownTx([hash]);
+    const rows = await this.request('POST', '/tx_info', { json: { _tx_hashes: [hash], _inputs: true } });
+    const row = rows.find((r) => r.tx_hash === hash);
+    return row ? (row.inputs || []).map((i) => `${i.tx_hash}#${Number(i.tx_index)}`) : null;
   }
 
   async txCbor(hash) {

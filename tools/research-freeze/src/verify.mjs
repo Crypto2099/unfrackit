@@ -38,11 +38,19 @@ export function confirmationDepth(tipHeight, blockHeight) {
 export async function recordFromChain(koios, txHash) {
   const cborHex = await koios.txCbor(txHash);
   if (!cborHex) return { verdict: 'unverifiable', issues: ['Koios /tx_cbor does not know the transaction'] };
+  return recordFromBytes(txHash, cborHex);
+}
+
+// The same from transaction CBOR already fetched. A transaction without a
+// label-309 value gives { verdict: 'none' }.
+export function recordFromBytes(txHash, cborHex) {
   const txBytes = fromHex(cborHex);
   const parts = sliceTxComponents(txBytes);
   const binding = bindTransactionBytes({ requestedTxHashHex: txHash, txBody: parts.txBody, auxiliaryData: parts.auxiliaryData });
   if (!binding.ok) return { verdict: 'unverifiable', issues: [`binding: ${binding.message}`] };
+  if (!parts.auxiliaryData) return { verdict: 'none', issues: ['no auxiliary data'], txBytes, cborHex };
   const unwrapped = unwrapAuxiliaryData(parts.auxiliaryData);
+  if (!unwrapped.label309) return { verdict: 'none', issues: ['no label-309 value'], txBytes, cborHex };
   const back = reassembleLabel309Value(unwrapped.label309);
   if (!back.ok) return { verdict: 'failed', issues: [`carriage: ${back.issue.code}`] };
   const body = back.body;

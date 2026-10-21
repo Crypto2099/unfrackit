@@ -10,6 +10,7 @@ import { Koios, parseRetryAfter } from '../src/koios.mjs';
 import { Store } from '../src/store.mjs';
 import { journal, journalEntry, submitJournaled, abandon, assertNoUnresolved, waitConfirmed } from '../src/journal.mjs';
 import { tempHome } from './helpers.mjs';
+import { fakeBlockfrost, blockOf } from './fixtures.mjs';
 
 const HASH = 'ab'.repeat(32);
 const OTHER = 'cd'.repeat(32);
@@ -24,7 +25,7 @@ function res(status, body, headers = {}) {
 // `status` gives the confirmations for the hash (null when unknown), `info`
 // whether /tx_info has a row, `unspent` whether the journaled input is still
 // unspent, and `history` the transaction hashes of the address.
-function fakeKoios({ submit = [], status = () => null, info = () => status() !== null, unspent = () => true, history = () => [], tipSlot = 100, infoRow = {} } = {}) {
+function fakeKoios({ submit = [], status = () => null, info = () => status() !== null, unspent = () => true, history = () => [], spends = {}, tipSlot = 100, infoRow = {} } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     const path = url.replace('https://fake.koios/api/v1', '');
@@ -39,6 +40,8 @@ function fakeKoios({ submit = [], status = () => null, info = () => status() !==
       return res(200, _tx_hashes.map((h) => ({ tx_hash: h, num_confirmations: status(h) })));
     }
     if (path === '/tx_info') {
+      const req = JSON.parse(init.body);
+      if (req._inputs) return res(200, req._tx_hashes.filter((h) => spends[h]).map((h) => ({ tx_hash: h, inputs: spends[h].map((u) => ({ tx_hash: u.txHash, tx_index: u.index })) })));
       return res(200, info() ? [{ tx_hash: HASH, block_height: 990, block_hash: 'bb'.repeat(32), absolute_slot: 90, epoch_slot: 90, tx_timestamp: 1700000000, epoch_no: 1, ...infoRow }] : []);
     }
     if (path.startsWith('/address_utxos')) return res(200, unspent() ? [{ tx_hash: INPUT.txHash, tx_index: 0, address: ADDR, value: '5000000', asset_list: [] }] : []);
@@ -224,17 +227,56 @@ test('abandon only after the TTL, with the hash unknown and the inputs unspent',
   assert.doesNotThrow(() => assertNoUnresolved(store, 'preprod'));
 });
 
-test('abandon a failed entry: after its TTL, with the hash unknown everywhere; its inputs are spent by definition', async () => {
+test('abandon a failed entry: after its TTL, with the hash unknown everywhere, only once another transaction is found to have spent its inputs', async () => {
   const { store, entry } = setup();
   const c = clock();
   const { k } = fakeKoios({ submit: [res(400, 'BadInputsUTxO')], unspent: () => false });
   await assert.rejects(submitJournaled({ koios: k, store, entry, address: ADDR, sleep: c.sleep, now: c.now, pollMs: 60000, windowMs: 600000 }), /failed/);
   await assert.rejects(abandon({ koios: fakeKoios({ tipSlot: 400, unspent: () => false }).k, store, network: 'preprod', address: ADDR }), /has not passed/);
   await assert.rejects(abandon({ koios: fakeKoios({ tipSlot: 600, unspent: () => false, history: () => [HASH] }).k, store, network: 'preprod', address: ADDR }), /transaction history/);
-  const e = await abandon({ koios: fakeKoios({ tipSlot: 600, unspent: () => false }).k, store, network: 'preprod', address: ADDR });
+  // Negative reads alone (the likeliest cause is an inconsistent provider)
+  // do not release it.
+  await assert.rejects(abandon({ koios: fakeKoios({ tipSlot: 600, unspent: () => false, history: () => [OTHER] }).k, store, network: 'preprod', address: ADDR }), /no other transaction in the payment address's history spends them/);
+  // Nor does a second provider that knows the hash.
+  const known = fakeBlockfrost('preprod', { txs: { [HASH]: { cbor: '00', block: blockOf().blockfrost } } });
+  await assert.rejects(abandon({ koios: fakeKoios({ tipSlot: 600, unspent: () => false, history: () => [OTHER], spends: { [OTHER]: [INPUT] } }).k, store, network: 'preprod', address: ADDR, bf: known.bf() }), /known to Blockfrost/);
+  const unknown = fakeBlockfrost('preprod');
+  const e = await abandon({ koios: fakeKoios({ tipSlot: 600, unspent: () => false, history: () => [OTHER], spends: { [OTHER]: [INPUT] } }).k, store, network: 'preprod', address: ADDR, bf: unknown.bf() });
   assert.equal(e.state, 'abandoned');
   assert.equal(e.abandonedFrom, 'failed');
+  assert.equal(e.inputsSpentBy, OTHER);
+  assert.deepEqual(e.abandonCheckedWith, ['koios', 'blockfrost']);
   assert.doesNotThrow(() => assertNoUnresolved(store, 'preprod'));
+});
+
+test('a mainnet final freeze is refused inside the locked journal write while another final is journaled; an abandoned one does not count', () => {
+  const store = new Store(tempHome());
+  store.ensure();
+  const entry = (hash, stage) => journalEntry({ network: 'mainnet', txHash: hash, cbor: '00', ttl: 1, inputs: [INPUT], run: '/x', kind: 'freeze', stage });
+  journal(store, entry(HASH, 'final'));
+  store.updateJournal('mainnet', (j) => {
+    j.current.state = 'confirmed';
+    j.history = [j.current];
+    j.current = null;
+  });
+  assert.throws(() => journal(store, entry(OTHER, 'final')), /a final-stage freeze is already journaled on mainnet/);
+  assert.equal(store.readJournal('mainnet').current, null);
+  assert.doesNotThrow(() => journal(store, entry(OTHER, 'hypotheses')), 'only a second final is refused');
+  store.updateJournal('mainnet', (j) => {
+    j.history[0].state = 'abandoned';
+    j.current.state = 'confirmed';
+    j.history.push(j.current);
+    j.current = null;
+  });
+  assert.doesNotThrow(() => journal(store, entry('ef'.repeat(32), 'final')), 'an abandoned final does not block');
+  // Preprod rehearsals repeat the sequence, so the rule is mainnet's only.
+  journal(store, { ...entry('aa'.repeat(32), 'final'), network: 'preprod' });
+  store.updateJournal('preprod', (j) => {
+    j.current.state = 'confirmed';
+    j.history = [j.current];
+    j.current = null;
+  });
+  assert.doesNotThrow(() => journal(store, { ...entry('bb'.repeat(32), 'final'), network: 'preprod' }));
 });
 
 test('wait records the block facts at 15 confirmations and resolves the entry', async () => {

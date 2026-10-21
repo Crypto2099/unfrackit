@@ -15,7 +15,9 @@ import { build } from '../src/build.mjs';
 import { ownVerify } from '../src/verify.mjs';
 import { recordUri, MANIFEST_FORMAT } from '../src/manifest.mjs';
 import { tempHome, tempDir } from './helpers.mjs';
-import { testIdentity, fakeChain, fabricateRun, hashedItems, journalConfirmed } from './fixtures.mjs';
+import { prepareRun } from '../src/build.mjs';
+import { toHex } from '../src/util.mjs';
+import { testIdentity, fakeChain, fakeBlockfrost, fabricateRun, hashedItems, journalConfirmed, blockOf } from './fixtures.mjs';
 
 const VALID = { own: { verdict: 'valid' }, sdk: { verdict: 'valid' }, cli: { verdict: 'valid' } };
 const ITEMS = hashedItems([{ type: 'StudyRegistration', document: true, ids: [{ id: '10.5281/zenodo.1', id_type: 'DOI', relation: 'IsPartOf' }] }, { type: 'Software' }]);
@@ -32,7 +34,7 @@ async function setup({ extra = { confirmed: { confirmations: 15 }, verified: VAL
 }
 
 const retype = (target) => ({ kind: 'retype', supersedes: target.hash });
-const check = (s, manifest, hashed = ITEMS) => checkTargets({ store: s.store, koios: s.koios, network: 'preprod', manifest, hashed, publicKeyHex: s.identity.pub.signing_public_key });
+const check = (s, manifest, hashed = ITEMS, extra = {}) => checkTargets({ store: s.store, koios: s.koios, network: 'preprod', manifest, hashed, publicKeyHex: s.identity.pub.signing_public_key, paymentKeyHash: s.identity.pub.payment_key_hash, ...extra });
 
 test('a confirmed, verified, journaled record of this identity is a valid target', async () => {
   const s = await setup();
@@ -88,7 +90,7 @@ test('with the run directory gone, the superseded record is read from chain, bou
 test('a target signed by another key is refused', async () => {
   const s = await setup();
   const other = testIdentity(new Store(tempHome()), 'rehearsal', 'another identity');
-  await assert.rejects(checkTargets({ store: s.store, koios: s.koios, network: 'preprod', manifest: retype(s.target), hashed: ITEMS, publicKeyHex: other.pub.signing_public_key }), /is signed by [0-9a-f]{64}, not by this identity/);
+  await assert.rejects(checkTargets({ store: s.store, koios: s.koios, network: 'preprod', manifest: retype(s.target), hashed: ITEMS, publicKeyHex: other.pub.signing_public_key, paymentKeyHash: s.identity.pub.payment_key_hash }), /is signed by [0-9a-f]{64}, not by this identity/);
 });
 
 test('build refuses a retype whose superseded record is not confirmed, after the network guard and before any key is read', async () => {
@@ -128,4 +130,42 @@ test('ownVerify: valid at depth 15, pending below it, failed on another body or 
   assert.match(signer.issues.join(), /not by this home's identity/);
   s.koios.allowTx('9f'.repeat(32));
   assert.equal((await ownVerify({ koios: s.koios, txHash: '9f'.repeat(32), expectedSigner: key })).verdict, 'unverifiable');
+});
+
+test('a chain-only target must have been paid by this identity: a replay of its signed body in another\'s transaction is refused', async () => {
+  const s = await setup();
+  const other = testIdentity(new Store(tempHome()), 'rehearsal', 'replayer');
+  // This identity's signed body, carried and paid for by someone else.
+  const params = { epoch: 320, protocolMajor: 11, protocolMinor: 0, minFeeA: 44n, minFeeB: 155381n, maxTxSize: 16384, coinsPerUtxoByte: 4310n, tip: { slot: 1000 } };
+  const replay = await prepareRun({ manifest: { kind: 'freeze', messageItems: [0] }, hashed: ITEMS, coreOnly: false, id: { signing: s.identity.id.signing, payment: other.id.payment }, utxos: [{ txHash: 'cc'.repeat(32), index: 0, coin: 9000000n, assets: [] }], params, network: 'preprod', ttl: 9000, paymentKeyHash: other.pub.payment_key_hash });
+  assert.equal(toHex(replay.signed.body), toHex(s.target.body), 'the same signed body');
+  s.f.chain.txs[replay.tx.hash] = { cbor: toHex(replay.tx.bytes), confirmations: 50 };
+  await assert.rejects(check(s, retype({ hash: replay.tx.hash })), /was not paid by this identity: its witness is from the key with hash/);
+});
+
+test('on mainnet a target needs Blockfrost: its depth there and byte-identical CBOR, and a verify that cross-checked', async () => {
+  const store = new Store(tempHome());
+  store.ensure();
+  const identity = testIdentity(store, 'testfreeze');
+  const xcheck = { ...VALID, crosscheck: { ran: true, ok: true } };
+  const target = await fabricateRun(store, { network: 'mainnet', identity, items: ITEMS, extra: { confirmed: { confirmations: 15 }, verified: xcheck } });
+  journalConfirmed(store, 'mainnet', target, identity);
+  const f = fakeChain('mainnet', { txs: { [target.hash]: { cbor: target.cbor, confirmations: 20 } } });
+  const koios = f.koios({ txHashes: [target.hash] });
+  const block = blockOf({ height: 1000 });
+  const args = { store, koios, network: 'mainnet', manifest: retype(target), hashed: ITEMS, publicKeyHex: identity.pub.signing_public_key, paymentKeyHash: identity.pub.payment_key_hash };
+  await assert.rejects(checkTargets({ ...args, bf: null }), /cross-checked with Blockfrost/);
+  const deep = fakeBlockfrost('mainnet', { txs: { [target.hash]: { cbor: target.cbor, block: block.blockfrost } }, tip: { height: 1014 } });
+  const [t] = await checkTargets({ ...args, bf: deep.bf() });
+  assert.equal(t.blockfrost_depth, 15);
+  const shallow = fakeBlockfrost('mainnet', { txs: { [target.hash]: { cbor: target.cbor, block: block.blockfrost } }, tip: { height: 1013 } });
+  await assert.rejects(checkTargets({ ...args, bf: shallow.bf() }), /14 blocks deep on Blockfrost/);
+  const differs = fakeBlockfrost('mainnet', { txs: { [target.hash]: { cbor: target.cbor.replace(/.{2}$/, '00'), block: block.blockfrost } }, tip: { height: 1014 } });
+  await assert.rejects(checkTargets({ ...args, bf: differs.bf() }), /CBOR differs between Koios and Blockfrost/);
+  // A mainnet target whose verify did not cross-check is refused.
+  const report = JSON.parse(fs.readFileSync(path.join(target.dir, 'report.json'), 'utf8'));
+  store.updateRunFile(target.dir, 'report.json', JSON.stringify({ ...report, verified: VALID }));
+  await assert.rejects(checkTargets({ ...args, bf: deep.bf() }), /did not cross-check the chain facts with Blockfrost/);
+  store.updateRunFile(target.dir, 'report.json', JSON.stringify({ ...report, verified: { ...VALID, crosscheck: { ran: true, ok: false, issues: ['x'] } } }));
+  await assert.rejects(checkTargets({ ...args, bf: deep.bf() }), /Koios and Blockfrost in disagreement/);
 });

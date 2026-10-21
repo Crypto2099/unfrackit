@@ -22,7 +22,9 @@
 // 5. Any other rejection stops with the node's message verbatim.
 // 6. An entry may be abandoned only after its TTL has passed, while Koios
 //    knows nothing of the hash (/tx_status, /tx_info and the address history)
-//    and, unless it is recorded as failed, its inputs are unspent.
+//    nor does Blockfrost when a project id is present (always on mainnet),
+//    and its inputs are unspent; or, for an entry recorded as failed, while
+//    another transaction in the address history is found to have spent them.
 //
 // States: unsubmitted, submitted, failed (all unresolved); confirmed and
 // abandoned (resolved).
@@ -84,10 +86,27 @@ export function journalEntries(store, network) {
   return [...(j.history || []), ...(j.current ? [j.current] : [])];
 }
 
-// Journal the entry (rule 1). Refuses while another unresolved entry exists.
+// The draw is keyed to one final freeze: on mainnet, another final-stage
+// entry that was not abandoned rules out a second one.
+export function blockingFinal(entries, exceptHash) {
+  return entries.find((e) => e.stage === 'final' && e.txHash !== exceptHash && e.state !== 'abandoned') || null;
+}
+
+export function assertNoOtherFinal(entries, network, exceptHash) {
+  if (network !== 'mainnet') return;
+  const other = blockingFinal(entries, exceptHash);
+  if (other) throw new UserError(`a final-stage freeze is already journaled on mainnet (${other.txHash}, state ${other.state}); the draw is keyed to one final freeze, so a second is refused`);
+}
+
+// Journal the entry (rule 1). Refuses while another unresolved entry exists,
+// and, for a mainnet final freeze, while another final freeze is journaled.
+// Both checks run inside the locked read-modify-write, immediately before
+// the first submission, so nothing that happened while the operator was at
+// the prompt can slip past them.
 export function journal(store, entry) {
   return store.updateJournal(entry.network, (j) => {
     checkNoUnresolved(j, entry.network, entry.txHash);
+    if (entry.stage === 'final') assertNoOtherFinal([...(j.history || []), ...(j.current ? [j.current] : [])], entry.network, entry.txHash);
     if (j.current && j.current.txHash === entry.txHash) return j.current;
     retire(j);
     j.current = entry;
@@ -223,8 +242,23 @@ export async function submitJournaled({ koios, store, entry, address, sleep = re
   }
 }
 
-// Rule 6.
-export async function abandon({ koios, store, network, address }) {
+// The transaction in the payment address's history, other than the entry's
+// own, that spent one of the entry's inputs, or null. Only this payment key
+// can spend those inputs, so such a transaction is in that history.
+async function spenderOf(koios, address, entry) {
+  const wanted = new Set(entry.inputs.map((u) => `${u.txHash}#${u.index}`));
+  const history = await koios.addressTxs(address);
+  for (const t of [...history].reverse()) {
+    if (t.txHash === entry.txHash) continue;
+    const inputs = await koios.txInputs(t.txHash);
+    if (inputs && inputs.some((i) => wanted.has(i))) return t.txHash;
+  }
+  return null;
+}
+
+// Rule 6. `bf` is the Blockfrost client when the home holds a project id
+// (the caller requires one on mainnet): it must not know the hash either.
+export async function abandon({ koios, store, network, address, bf = null }) {
   const entry = store.readJournal(network).current;
   if (!entry || isResolved(entry)) throw new UserError(`no unresolved ${network} transaction is journaled`);
   const tip = await koios.tip();
@@ -233,7 +267,20 @@ export async function abandon({ koios, store, network, address }) {
   if ((await koios.txStatus(entry.txHash)) !== null) throw new UserError(`${entry.txHash} is known to Koios /tx_status; it cannot be abandoned`);
   if ((await koios.txInfo(entry.txHash)) !== null) throw new UserError(`${entry.txHash} is known to Koios /tx_info; it cannot be abandoned`);
   if (await inAddressHistory(koios, address, entry.txHash)) throw new UserError(`${entry.txHash} is in the payment address's transaction history; it cannot be abandoned`);
-  if (entry.state !== 'failed' && !(await inputsUnspent(koios, address, entry))) {
+  // One provider's negative answers are not authoritative (CIP-190 Part B,
+  // "Pipeline", step 1): the second provider must not know the hash either.
+  if (bf) {
+    bf.allowTx(entry.txHash);
+    if ((await bf.tx(entry.txHash)) !== null) throw new UserError(`${entry.txHash} is known to Blockfrost; it cannot be abandoned`);
+  }
+  let spentBy = null;
+  if (entry.state === 'failed') {
+    // A failed entry's inputs read as spent while its hash is unknown. Most
+    // likely a provider is inconsistent, so it is released only when the
+    // transaction that did spend those inputs is found.
+    spentBy = await spenderOf(koios, address, entry);
+    if (!spentBy) throw new UserError(`the inputs of ${entry.txHash} read as spent, but no other transaction in the payment address's history spends them; it cannot be abandoned`);
+  } else if (!(await inputsUnspent(koios, address, entry))) {
     throw new UserError(`the inputs of ${entry.txHash} are not all unspent; it cannot be abandoned (run "submit" to look the hash up)`);
   }
   return store.updateJournal(network, (j) => {
@@ -241,6 +288,8 @@ export async function abandon({ koios, store, network, address }) {
     j.current.state = 'abandoned';
     j.current.abandonedFrom = entry.state;
     j.current.abandonedAt = new Date().toISOString();
+    if (spentBy) j.current.inputsSpentBy = spentBy;
+    if (bf) j.current.abandonCheckedWith = ['koios', 'blockfrost'];
     const out = j.current;
     retire(j);
     return out;
