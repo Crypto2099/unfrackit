@@ -8,9 +8,12 @@
 //
 // The words are read without echo. Both mnemonics pass the same checks as
 // `init` (24 words, BIP-39 checksum, distinct entropies, distinct keys). The
-// derived keys must equal the identity's public.json when one is present, and
-// the signing key passed with --signing-key when given (for example the key a
-// published record carries). Neither mnemonic file may exist already.
+// derived keys must equal the identity's public.json when one is present;
+// without one, --signing-key is required (for example the key a published
+// record carries), because the name alone decides the network an identity
+// signs for, and the real mnemonics typed under the rehearsal name would give
+// the real key a preprod identity. A key that another identity of the home
+// already has is refused. Neither mnemonic file may exist already.
 
 import { deriveIdentity, publicFacts } from './keys.mjs';
 import { askHidden, requireTty } from './tty.mjs';
@@ -44,6 +47,9 @@ export async function restoreIdentity({ store, name, expectSigningKey, streams =
   const present = store.existingMnemonicFiles(name);
   if (present.length) throw new UserError(`identity "${name}" already has ${present.join(' and ')} in ${store.home}; refusing to overwrite`);
   const existing = store.hasPublic(name) ? store.readPublic(name) : null;
+  if (!existing && !expectSigningKey) {
+    throw new UserError(`identity "${name}" has no public.json in ${store.home}; pass --signing-key <hex> with the signing key the identity is known by, so the words are checked against it`);
+  }
   streams.stdout.write(`Restoring identity "${name}" in ${store.home}. The words are not shown as you type.\n`);
   const signingMnemonic = normalizeTyped(await askHidden('Signing mnemonic (24 words, one line): ', streams));
   const paymentMnemonic = normalizeTyped(await askHidden('Payment mnemonic (24 words, one line): ', streams));
@@ -55,6 +61,12 @@ export async function restoreIdentity({ store, name, expectSigningKey, streams =
   if (existing) {
     const diffs = compareFacts(facts, existing);
     if (diffs.length) throw new UserError(`the mnemonics do not give this identity's public.json; nothing was written:\n  ${diffs.join('\n  ')}`);
+  }
+  for (const other of store.identityNames().filter((n) => n !== name && store.hasPublic(n))) {
+    const p = store.readPublic(other);
+    if (p.signing_public_key === facts.signing_public_key || p.payment_key_hash === facts.payment_key_hash) {
+      throw new UserError(`the mnemonics give the keys of identity "${other}" in this home; one identity's keys are never restored under another name; nothing was written`);
+    }
   }
   store.restoreIdentity(name, { signingMnemonic, paymentMnemonic, publicJson: existing ? null : { ...facts, restored: new Date().toISOString() } });
   return { facts, checkedAgainst: [existing ? 'public.json' : null, expectSigningKey ? '--signing-key' : null].filter(Boolean) };

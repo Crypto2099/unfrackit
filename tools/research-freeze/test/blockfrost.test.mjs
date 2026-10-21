@@ -34,6 +34,23 @@ test('the host is chosen by network, and the project id travels only in the proj
   assert.ok(!JSON.stringify(bf).includes(TEST_PROJECT_ID), 'the id is not an enumerable property');
 });
 
+test('a redirect is refused, never followed with the project id', async () => {
+  const { b, bf, koios } = both();
+  await crossCheck({ koios, bf, txHash: H });
+  assert.ok(b.redirects.length > 3);
+  assert.ok(b.redirects.every((r) => r === 'error'));
+});
+
+test('the address history is read for the identity\'s own address only, and its transactions become readable', async () => {
+  const addr = 'addr_test1vr6xv2jn0tr5ya02aehm4v74qhkxhcqh86wy44uf086kzhgnxnune';
+  const b = fakeBlockfrost('preprod', { history: ['cd'.repeat(32)], txs: { ['cd'.repeat(32)]: { cbor: CBOR } } });
+  const bf = b.bf({ addresses: [addr] });
+  await assert.rejects(bf.addressTxs('addr_test1vqcjne9p3m0urs6m928jh82knxcw0hsd4r4hpv6n29nt43swclamr'), /not this identity's payment address/);
+  await assert.rejects(bf.txCbor('cd'.repeat(32)), /not one of this tool's own/);
+  assert.deepEqual((await bf.addressTxs(addr)).map((t) => t.txHash), ['cd'.repeat(32)]);
+  assert.equal(await bf.txCbor('cd'.repeat(32)), CBOR);
+});
+
 test('cross-check: agreement on the transaction CBOR and every block fact', async () => {
   const { koios, bf } = both();
   const r = await crossCheck({ koios, bf, txHash: H });

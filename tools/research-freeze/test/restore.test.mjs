@@ -54,7 +54,7 @@ test('restore writes both mnemonics (0600) and the public facts, without echoing
   const src = source();
   const store = new Store(tempHome());
   const t = terminal([src.signingMnemonic, src.paymentMnemonic]);
-  const r = await restoreIdentity({ store, name: 'rehearsal', streams: t });
+  const r = await restoreIdentity({ store, name: 'rehearsal', expectSigningKey: src.pub.signing_public_key, streams: t });
   assert.equal(r.facts.signing_public_key, src.pub.signing_public_key);
   const dir = path.join(store.home, 'identities', 'rehearsal');
   assert.equal(fs.readFileSync(path.join(dir, 'signing-mnemonic'), 'utf8').trim(), src.signingMnemonic);
@@ -99,11 +99,71 @@ test('restore checks the signing key passed with --signing-key, and refuses shor
   await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: 'ab'.repeat(32), streams: terminal([src.signingMnemonic, src.paymentMnemonic]) }), /not the expected/);
   const ok = await restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: src.pub.signing_public_key, streams: terminal([src.signingMnemonic, src.paymentMnemonic]) });
   assert.deepEqual(ok.checkedAgainst, ['--signing-key']);
+  const key = src.pub.signing_public_key;
   const short = src.signingMnemonic.split(' ').slice(0, 23).join(' ');
-  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', streams: terminal([short, src.paymentMnemonic]) }), /23 words is refused/);
+  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: key, streams: terminal([short, src.paymentMnemonic]) }), /23 words is refused/);
   const typo = src.signingMnemonic.replace(/^\S+/, 'zoo');
-  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', streams: terminal([typo, src.paymentMnemonic]) }), /checksum/);
-  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', streams: terminal([src.signingMnemonic, src.signingMnemonic]) }), /equal entropy/);
+  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: key, streams: terminal([typo, src.paymentMnemonic]) }), /checksum/);
+  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: key, streams: terminal([src.signingMnemonic, src.signingMnemonic]) }), /equal entropy/);
+  // Swapped mnemonics give other keys, which --signing-key catches.
+  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: key, streams: terminal([src.paymentMnemonic, src.signingMnemonic]) }), /not the expected/);
+});
+
+test('without public.json, restore requires --signing-key, before any word is asked for', async () => {
+  const src = source();
+  const t = terminal([src.signingMnemonic, src.paymentMnemonic]);
+  await assert.rejects(restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', streams: t }), /has no public\.json .* pass --signing-key/);
+  assert.doesNotMatch(t.shown(), /mnemonic \(24 words/);
+});
+
+test('restore refuses keys that another identity of the home already has: the real words under the rehearsal name', async () => {
+  const store = new Store(tempHome());
+  store.ensure();
+  const real = testIdentity(store, 'testfreeze', 'the real identity');
+  await assert.rejects(
+    restoreIdentity({ store, name: 'rehearsal', expectSigningKey: real.pub.signing_public_key, streams: terminal([real.signingMnemonic, real.paymentMnemonic]) }),
+    /give the keys of identity "testfreeze"/
+  );
+  assert.equal(store.hasIdentity('rehearsal'), false, 'nothing was written');
+});
+
+test('the terminal is in raw mode, with a muted interface, before each prompt is shown', async () => {
+  const src = source();
+  const events = [];
+  const t = terminal([src.signingMnemonic, src.paymentMnemonic]);
+  t.stdin.setRawMode = (mode) => {
+    events.push(`raw ${mode}`);
+    return t.stdin;
+  };
+  const write = t.stdout.write.bind(t.stdout);
+  t.stdout.write = (chunk, ...rest) => {
+    if (/mnemonic \(24 words/.test(String(chunk))) events.push('prompt');
+    return write(chunk, ...rest);
+  };
+  await restoreIdentity({ store: new Store(tempHome()), name: 'rehearsal', expectSigningKey: src.pub.signing_public_key, streams: t });
+  assert.deepEqual(events, ['raw true', 'prompt', 'raw false', 'raw true', 'prompt', 'raw false']);
+  assert.ok(!t.shown().includes(src.signingMnemonic.split(' ')[0] + ' ' + src.signingMnemonic.split(' ')[1]), 'nothing typed is echoed');
+});
+
+test('a restore whose second write fails leaves no mnemonic file behind, so the next attempt is not blocked', async () => {
+  const src = source();
+  const store = new Store(tempHome());
+  store.ensure();
+  const realRename = fs.renameSync;
+  let n = 0;
+  fs.renameSync = (a, b) => {
+    if (/payment-mnemonic/.test(String(b)) && n++ === 0) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    return realRename(a, b);
+  };
+  try {
+    await assert.rejects(restoreIdentity({ store, name: 'rehearsal', expectSigningKey: src.pub.signing_public_key, streams: terminal([src.signingMnemonic, src.paymentMnemonic]) }), /ENOSPC/);
+  } finally {
+    fs.renameSync = realRename;
+  }
+  const dir = path.join(store.home, 'identities', 'rehearsal');
+  assert.deepEqual(fs.readdirSync(dir), [], 'no mnemonic file and no temporary file');
+  const again = await restoreIdentity({ store, name: 'rehearsal', expectSigningKey: src.pub.signing_public_key, streams: terminal([src.signingMnemonic, src.paymentMnemonic]) });
+  assert.equal(again.facts.signing_public_key, src.pub.signing_public_key, 'the next attempt succeeds');
 });
 
 test('typed words are normalized: case, spacing and the numbers of a numbered list', () => {

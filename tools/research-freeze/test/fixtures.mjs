@@ -64,6 +64,7 @@ export function fakeChain(network, { utxos = [], txs = {}, tip = {}, genesis = {
     if (path === '/tx_status') return res(200, body._tx_hashes.map((h) => ({ tx_hash: h, num_confirmations: tx(h) ? tx(h).confirmations : null })));
     if (path === '/tx_cbor') return res(200, body._tx_hashes.filter(tx).map((h) => ({ tx_hash: h, cbor: tx(h).cbor })));
     if (path === '/tx_info') {
+      if (body._inputs) return res(200, body._tx_hashes.filter((h) => tx(h) && tx(h).inputs).map((h) => ({ tx_hash: h, inputs: tx(h).inputs.map((i) => ({ tx_hash: i.txHash, tx_index: i.index })) })));
       return res(
         200,
         body._tx_hashes.filter((h) => tx(h) && tx(h).block).map((h) => ({ tx_hash: h, ...tx(h).block }))
@@ -120,20 +121,25 @@ export const TEST_PROJECT_ID = 'preprodTESTprojectID0123456789abcdef';
 // A scripted Blockfrost. `txs` maps a hash to { cbor, block } with `block`
 // from blockOf(...).blockfrost; `epochParams[n]` is a row, or null for 404;
 // `override[path]` answers a path with { status, body, headers }.
-export function fakeBlockfrost(network, { txs = {}, tip = {}, genesis = {}, epochParams = {}, override = {} } = {}) {
+export function fakeBlockfrost(network, { txs = {}, tip = {}, genesis = {}, epochParams = {}, override = {}, history = [] } = {}) {
   const net = NETWORKS[network];
   const calls = [];
   const headers = [];
-  const state = { txs, tip: { height: 5319315, slot: 136928566, epoch: 320, hash: '00'.repeat(32), time: 1792611766, ...tip } };
+  const redirects = [];
+  const state = { txs, history, tip: { height: 5319315, slot: 136928566, epoch: 320, hash: '00'.repeat(32), time: 1792611766, ...tip } };
   const fetchImpl = async (url, init) => {
     const p = url.replace('https://fake.blockfrost/api/v0', '');
     calls.push(p);
     headers.push(init.headers);
+    redirects.push(init.redirect);
     const o = typeof override[p] === 'function' ? override[p]() : override[p];
     if (o) return res(o.status, o.body ?? '{}', o.headers || {});
     if (p === '/genesis') return res(200, { network_magic: net.magic, security_param: 2160, active_slots_coefficient: 0.05, epoch_length: 432000, ...genesis });
     if (p === '/blocks/latest') return res(200, state.tip);
     let m;
+    if ((m = /^\/addresses\/([a-z0-9_]+)\/transactions\?page=(\d+)/.exec(p))) {
+      return res(200, m[2] === '1' ? state.history.map((h, i) => ({ tx_hash: h, tx_index: 0, block_height: 1 + i, block_time: 1 })) : []);
+    }
     if ((m = /^\/txs\/([0-9a-f]{64})\/cbor$/.exec(p))) return state.txs[m[1]] ? res(200, { cbor: state.txs[m[1]].cbor }) : res(404, { status_code: 404 });
     if ((m = /^\/txs\/([0-9a-f]{64})$/.exec(p))) {
       const t = state.txs[m[1]];
@@ -152,5 +158,5 @@ export function fakeBlockfrost(network, { txs = {}, tip = {}, genesis = {}, epoc
     throw new Error(`fake Blockfrost: unexpected ${p}`);
   };
   const bf = (own = {}, opts = {}) => new Blockfrost(network, { projectId: TEST_PROJECT_ID, baseUrl: 'https://fake.blockfrost/api/v0', fetchImpl, sleepImpl: async () => {}, spacingMs: 0, own, ...opts });
-  return { state, calls, headers, bf, fetchImpl };
+  return { state, calls, headers, redirects, bf, fetchImpl };
 }

@@ -5,8 +5,9 @@
 // independent provider of chain facts. It is used only to cross-check what
 // Koios reports, by `verify` and `drawkey`, and a disagreement fails the
 // command; it is never a fallback when Koios fails. Its requests are about
-// this tool's own transactions and their blocks, the genesis parameters, the
-// tip and epoch parameters.
+// this tool's own transactions and their blocks, the transactions of the
+// identity's own payment address, the genesis parameters, the tip and epoch
+// parameters.
 //
 // The project id is read from secrets/blockfrost-<network>.token in the home
 // (0600) and sent only in the `project_id` header. It never appears in a
@@ -60,6 +61,8 @@ export class Blockfrost {
     this.retries = retries;
     this.last = 0;
     this.txHashes = new Set(own.txHashes || []);
+    this.addresses = new Set(own.addresses || []);
+    this.historyTxs = new Set();
     this.blocks = new Set();
     this.calls = [];
   }
@@ -70,7 +73,7 @@ export class Blockfrost {
 
   #ownTx(hash) {
     if (!/^[0-9a-f]{64}$/.test(hash)) throw new UserError(`not a transaction hash: ${hash}`);
-    if (!this.txHashes.has(hash)) throw new UserError(`refusing to query ${hash} on Blockfrost: it is not one of this tool's own transactions`);
+    if (!this.txHashes.has(hash) && !this.historyTxs.has(hash)) throw new UserError(`refusing to query ${hash} on Blockfrost: it is not one of this tool's own transactions`);
   }
 
   redact(text) {
@@ -86,7 +89,9 @@ export class Blockfrost {
       this.last = Date.now();
       let res;
       try {
-        res = await this.fetch(this.base + path, { method: 'GET', headers: { accept: 'application/json', project_id: this.#projectId } });
+        // A redirect is refused rather than followed: fetch would carry the
+        // project_id header to the redirect target.
+        res = await this.fetch(this.base + path, { method: 'GET', headers: { accept: 'application/json', project_id: this.#projectId }, redirect: 'error' });
       } catch (e) {
         throw new BlockfrostError(`Blockfrost GET ${path}: ${this.redact(e.message)}`, 0);
       }
@@ -142,6 +147,21 @@ export class Blockfrost {
   async block(hash) {
     if (!this.blocks.has(hash)) throw new UserError(`refusing to query block ${hash} on Blockfrost: it does not hold one of this tool's own transactions`);
     return this.request(`/blocks/${hash}`);
+  }
+
+  // Every transaction of the identity's own payment address, oldest first.
+  async addressTxs(address) {
+    if (!this.addresses.has(address)) throw new UserError(`refusing to query ${address} on Blockfrost: it is not this identity's payment address`);
+    const out = [];
+    for (let page = 1; ; page++) {
+      const rows = await this.request(`/addresses/${address}/transactions?page=${page}&count=100&order=asc`);
+      if (!rows) return out;
+      for (const t of rows) {
+        out.push({ txHash: t.tx_hash, blockHeight: Number(t.block_height), blockTime: Number(t.block_time) });
+        this.historyTxs.add(t.tx_hash);
+      }
+      if (rows.length < 100) return out;
+    }
   }
 
   async latestBlock() {

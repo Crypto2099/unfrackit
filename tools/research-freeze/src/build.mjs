@@ -12,7 +12,7 @@ import { deriveIdentity } from './keys.mjs';
 import { buildRecord, signRecord, carry, messageLines, auxiliaryData, detailedMetadataJson, topLevelKeys } from './record.mjs';
 import { buildTransaction, TTL_SLOTS } from './tx.mjs';
 import { checkArtifacts, requireAllPass } from './checks.mjs';
-import { assertNoUnresolved } from './journal.mjs';
+import { assertNoUnresolved, assertNoOtherFinal, journalEntries } from './journal.mjs';
 import { checkTargets, checkCitedHypotheses } from './targets.mjs';
 import { networkOf } from './koios.mjs';
 import { versions } from './pins.mjs';
@@ -73,12 +73,18 @@ export function hashManifest({ manifestPath, signingPublicKeyHex, stage }) {
   return { manifest, hashed, doc };
 }
 
-export async function build({ store, koios, cli, manifestPath, network, identityName, coreOnly = false, stage, log = () => {} }) {
+// `bf`: the Blockfrost client when the home holds a project id; on mainnet a
+// build that points at another record needs one. `hypothesesHash`: the
+// hypotheses record a final freeze's document cites, named explicitly
+// (`--hypotheses`), for a home that has no run directory for it.
+export async function build({ store, koios, bf = null, cli, manifestPath, network, identityName, coreOnly = false, stage, hypothesesHash, log = () => {} }) {
   networkOf(network);
   const name = identityName || defaultIdentity(network);
   const pub = store.readPublic(name);
   assertIdentityNetwork(pub, network);
   assertNoUnresolved(store, network);
+  if (stage === 'final') assertNoOtherFinal(journalEntries(store, network), network);
+  if (hypothesesHash && stage !== 'final') throw new UserError('--hypotheses applies to a final-stage freeze only');
   if (!cli) throw new UserError('build requires the cardanowall CLI 0.12.0 for its offline checks');
 
   const { manifest, hashed, doc } = hashManifest({ manifestPath, signingPublicKeyHex: pub.signing_public_key, stage });
@@ -86,12 +92,14 @@ export async function build({ store, koios, cli, manifestPath, network, identity
   if (doc && !doc.ok) throw new UserError(`document checks failed:\n${doc.errors.map((e) => `  ${e}`).join('\n')}`);
 
   await koios.guard();
+  if (bf) await bf.guard();
   const params = await koios.params();
   // Every record this one points at is a confirmed record of this identity.
-  const targets = await checkTargets({ store, koios, network, manifest, hashed, publicKeyHex: pub.signing_public_key });
+  const keys = { publicKeyHex: pub.signing_public_key, paymentKeyHash: pub.payment_key_hash };
+  const targets = await checkTargets({ store, koios, bf, network, manifest, hashed, ...keys });
   let hypotheses = null;
   if (stage === 'final') {
-    hypotheses = await checkCitedHypotheses({ store, koios, network, cited: doc.cited, publicKeyHex: pub.signing_public_key });
+    hypotheses = await checkCitedHypotheses({ store, koios, bf, network, cited: doc.cited, hypothesesHash, ...keys });
     targets.push(hypotheses);
   }
 

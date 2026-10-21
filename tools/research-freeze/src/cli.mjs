@@ -12,6 +12,7 @@ import { rehearse } from './rehearse.mjs';
 import { restoreIdentity } from './restore.mjs';
 import { dataciteCheck, ZenodoSandbox } from './registry.mjs';
 import { requireTty } from './tty.mjs';
+import { blockfrostFor } from './blockfrost.mjs';
 import { networkOf } from './koios.mjs';
 import { stringify, tada, UserError } from './util.mjs';
 
@@ -20,13 +21,14 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
   init [--identity <name>]                   create an identity: two 24-word mnemonics; print the public facts
   show [--identity <name>]                   print the identity's public facts
   backup [--identity <name>]                 print both mnemonics for a paper backup (interactive terminal only)
-  restore --identity <name> [--signing-key <hex>]
+  restore --identity <name> [--signing-key <hex>]   (--signing-key is required without public.json)
                                              recreate an identity from its two typed mnemonics (interactive terminal only)
   hash <manifest> [--identity <name>] [--stage <stage>]
                                              hash every file and run the byte-form and document checks
-  build <manifest> --network <n> [--stage hypotheses|final] [--identity <name>] [--core-only]
+  build <manifest> --network <n> [--stage hypotheses|final] [--hypotheses <hash>] [--identity <name>] [--core-only]
                                              build, sign and check the record and its transaction; submits nothing
-                                             (a freeze names its stage; the hypotheses stage is core-only)
+                                             (a freeze names its stage; the hypotheses stage is core-only; --hypotheses
+                                             names the cited hypotheses record when this home has no run for it)
   check <run>                                re-run the offline checks on a run directory
   submit <run>                               submit the run's exact signed bytes (mainnet: interactive confirmation)
   wait <run>                                 wait for 15 confirmations and record the block facts
@@ -170,7 +172,7 @@ async function main() {
       const pub = store.readPublic(name);
       const cli = Cardanowall.require();
       const koios = koiosFor(store, network, { addresses: [pub.addresses[network]] });
-      const r = await build({ store, koios, cli, manifestPath: args[0], network, identityName: name, coreOnly: Boolean(flags['core-only']), stage: flags.stage, log: note });
+      const r = await build({ store, koios, bf: blockfrostFor(store, network), cli, manifestPath: args[0], network, identityName: name, coreOnly: Boolean(flags['core-only']), stage: flags.stage, hypothesesHash: flags.hypotheses, log: note });
       say(`built ${r.report.kind}${r.report.stage ? `, stage ${r.report.stage}` : ''}${r.report.core_only ? ' (core-only)' : ''} record on ${network}: ${r.tx.hash}`);
       if (r.report.hypotheses_record) say(`  its document cites the hypotheses record ${r.report.hypotheses_record}, confirmed and signed by the same key`);
       say(`  record ${r.report.record_bytes} bytes in ${r.report.label_309_chunks} chunks; transaction ${r.tx.size} bytes; fee ${tada(r.tx.fee)} ADA; TTL slot ${r.report.ttl}`);
