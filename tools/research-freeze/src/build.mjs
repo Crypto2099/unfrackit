@@ -13,8 +13,8 @@ import { buildRecord, signRecord, carry, messageLines, auxiliaryData, detailedMe
 import { buildTransaction, TTL_SLOTS } from './tx.mjs';
 import { checkArtifacts, requireAllPass } from './checks.mjs';
 import { assertNoUnresolved } from './journal.mjs';
+import { checkTargets } from './targets.mjs';
 import { networkOf } from './koios.mjs';
-import { decode, mapGet } from './cbor.mjs';
 import { versions } from './pins.mjs';
 import { fromHex, stringify, toHex, UserError } from './util.mjs';
 
@@ -43,24 +43,6 @@ export function hashManifest({ manifestPath, signingPublicKeyHex }) {
   return { manifest, hashed, doc };
 }
 
-// The record a retype or amend record supersedes, from this home's own run
-// directory: a retype carries every item of it with identical digests, and
-// both are signed by the same key.
-function checkSuperseded(store, network, manifest, hashed, publicKeyHex) {
-  const dir = store.runDir(network, manifest.supersedes);
-  const file = path.join(dir, 'body.cbor');
-  if (!fs.existsSync(file)) throw new UserError(`the superseded record ${manifest.supersedes} has no run directory in this home (${dir}); its items and signer cannot be checked`);
-  const body = decode(new Uint8Array(fs.readFileSync(file)), { canonical: true });
-  const items = mapGet(body, 'items').map((it) => toHex(mapGet(mapGet(it, 'hashes'), 'sha2-256')));
-  const cose = decode(mapGet(mapGet(body, 'sigs')[0], 'cose_sign1'));
-  const signer = toHex(mapGet(decode(cose[0]), 4));
-  if (signer !== publicKeyHex) throw new UserError(`the superseded record is signed by ${signer}, not by this identity's ${publicKeyHex}`);
-  if (manifest.kind === 'retype' && items.join() !== hashed.map((h) => h.hex).join()) {
-    throw new UserError('a retype record carries every item of the record it supersedes, with identical digests in the same order');
-  }
-  return { items, signer };
-}
-
 export async function build({ store, koios, cli, manifestPath, network, identityName, coreOnly = false, log = () => {} }) {
   networkOf(network);
   const name = identityName || defaultIdentity(network);
@@ -71,10 +53,11 @@ export async function build({ store, koios, cli, manifestPath, network, identity
 
   const { manifest, hashed, doc } = hashManifest({ manifestPath, signingPublicKeyHex: pub.signing_public_key });
   if (doc && !doc.ok) throw new UserError(`document checks failed:\n${doc.errors.map((e) => `  ${e}`).join('\n')}`);
-  if (manifest.supersedes) checkSuperseded(store, network, manifest, hashed, pub.signing_public_key);
 
   await koios.guard();
   const params = await koios.params();
+  // Every record this one points at is a confirmed record of this identity.
+  const targets = await checkTargets({ store, koios, network, manifest, hashed, publicKeyHex: pub.signing_public_key });
 
   const { signingMnemonic, paymentMnemonic } = store.readMnemonics(name);
   const id = deriveIdentity(signingMnemonic, paymentMnemonic);
@@ -101,7 +84,7 @@ export async function build({ store, koios, cli, manifestPath, network, identity
   );
   requireAllPass(checks);
 
-  const report = runReport({ network, name, pub, manifest, coreOnly, hashed, doc, p, params, checks, cli });
+  const report = runReport({ network, name, pub, manifest, coreOnly, hashed, doc, p, params, checks, cli, extra: { targets } });
   const dir = store.writeRun(network, p.tx.hash, runFiles(p, report));
   log(`run directory: ${dir}`);
   return { dir, report, tx: p.tx, signed: p.signed };
