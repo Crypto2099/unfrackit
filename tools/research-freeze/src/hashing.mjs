@@ -118,3 +118,16 @@ export function documentChecks(manifest, hashed, signingPublicKeyHex) {
   if (manifest.doi && !mentionsDoi(text, manifest.doi)) errors.push(`the document does not carry the DOI ${manifest.doi} as a whole token`);
   return { ok: errors.length === 0, errors, hashLines: [...seen.values()].reduce((a, b) => a + b, 0) };
 }
+
+// The record URIs a document cites (CIP-0107 transaction-metadata URIs for
+// label 309), in order and without repeats. Uppercase hex is reported, since
+// this tool writes and matches record URIs in lowercase only.
+export function citedRecords(text) {
+  const hashes = [];
+  const uppercase = [];
+  for (const m of text.matchAll(/web\+cardano:\/\/transaction\/([0-9a-fA-F]{64})\/metadata\/309(?![0-9])/g)) {
+    if (m[1] !== m[1].toLowerCase()) uppercase.push(m[0]);
+    else if (!hashes.includes(m[1])) hashes.push(m[1]);
+  }
+  return { hashes, uppercase };
+}

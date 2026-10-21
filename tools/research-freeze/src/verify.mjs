@@ -14,6 +14,7 @@ import { decode, encode, mapGet } from './cbor.mjs';
 import { networkOf } from './koios.mjs';
 import { CONFIRMATION_THRESHOLD } from './journal.mjs';
 import { VERIFY_FLAGS } from './cardanowall.mjs';
+import { koiosBlockFacts, blockfrostBlockFacts, differences, describeDifferences, genesisDifferences, planFrom, BLOCK_FIELDS, PLAN_FIELDS } from './draw.mjs';
 import { equalBytes, fromHex, sha256, toHex } from './util.mjs';
 
 const sha256Hex = (b) => toHex(sha256(b));
@@ -135,10 +136,72 @@ export function cliVerify({ cli, network, txHash, koiosUrl }) {
   };
 }
 
-export async function verifyAll({ koios, cli, network, txHash, expectedBody, expectedSigner }) {
+export async function verifyAll({ koios, cli, network, txHash, expectedBody, expectedSigner, sdkImpl = sdkVerify }) {
   const net = networkOf(network);
   const own = await ownVerify({ koios, txHash, expectedBody, expectedSigner });
-  const sdk = await sdkVerify({ network, txHash, koiosUrl: koios.base });
+  const sdk = await sdkImpl({ network, txHash, koiosUrl: koios.base });
   const cliR = cli ? cliVerify({ cli, network, txHash, koiosUrl: koios.base }) : { verdict: 'not run', note: 'cardanowall CLI not available' };
   return { network: net.name, txHash, own, sdk, cli: cliR, explorers: explorerLinks(network, txHash) };
+}
+
+// Chain facts from two independent providers, compared field by field
+// (CIP-190 "Chain facts: block time and confirmation depth": verifiers are
+// RECOMMENDED to resolve them from at least two independent explorers and to
+// surface divergence, and a deployment for which they are load-bearing MUST
+// cross-check them). Koios and Blockfrost must return byte-identical
+// transaction CBOR and the same block hash, height, slot, epoch, epoch slot
+// and time. Any difference fails; neither provider stands in for the other.
+export async function crossCheck({ koios, bf, txHash }) {
+  await bf.guard();
+  bf.allowTx(txHash);
+  const issues = [];
+  const kCbor = await koios.txCbor(txHash);
+  const bCbor = await bf.txCbor(txHash);
+  if (!kCbor || !bCbor) issues.push(`transaction CBOR: Koios ${kCbor ? 'has it' : 'does not have it'}, Blockfrost ${bCbor ? 'has it' : 'does not have it'}`);
+  else if (kCbor.toLowerCase() !== bCbor.toLowerCase()) issues.push('the transaction CBOR differs between Koios and Blockfrost');
+  const kf = await koiosBlockFacts(koios, txHash);
+  const bfacts = await blockfrostBlockFacts(bf, txHash);
+  if (!kf || !bfacts) issues.push(`block facts: Koios ${kf ? 'has them' : 'has none'}, Blockfrost ${bfacts ? 'has them' : 'has none'}`);
+  else {
+    const d = differences(kf, bfacts, BLOCK_FIELDS);
+    if (d.length) issues.push(`block facts differ: ${describeDifferences(d, 'Koios', 'Blockfrost')}`);
+  }
+  const kTip = await koios.tip();
+  const bTip = await bf.latestBlock();
+  return {
+    ran: true,
+    ok: issues.length === 0,
+    issues,
+    at: new Date().toISOString(),
+    koios: kf,
+    blockfrost: bfacts,
+    tx_cbor_sha256: kCbor ? sha256Hex(fromHex(kCbor)) : null,
+    depth: { koios: kf ? kTip.height - kf.block_height + 1 : null, blockfrost: bfacts && bTip ? Number(bTip.height) - bfacts.block_height + 1 : null },
+    blockfrost_calls: bf.calls.map((c) => `GET ${c.path} ${c.status}`)
+  };
+}
+
+// The draw plan of a final-stage freeze from Koios, and from Blockfrost when
+// it is available; the two must agree, and so must the plan `wait` recorded.
+export async function verifyDrawPlan({ koios, bf, facts, bfFacts, recorded }) {
+  const issues = [];
+  const gK = await koios.genesis();
+  const pK = await koios.epochParams(facts.epoch);
+  const plan = planFrom(gK, facts, Number(pK?.protocol_major));
+  const sources = ['koios'];
+  if (bf && bfFacts) {
+    const gB = await bf.genesis();
+    const gd = genesisDifferences(gK, gB);
+    if (gd.length) issues.push(`genesis parameters differ: ${describeDifferences(gd, 'Koios', 'Blockfrost')}`);
+    const pB = await bf.epochParams(bfFacts.epoch);
+    const planB = planFrom(gB, bfFacts, Number(pB?.protocol_major_ver));
+    const d = differences(plan, planB, PLAN_FIELDS);
+    if (d.length) issues.push(`the draw plan differs: ${describeDifferences(d, 'Koios', 'Blockfrost')}`);
+    sources.push('blockfrost');
+  }
+  if (recorded) {
+    const d = differences(plan, recorded, PLAN_FIELDS);
+    if (d.length) issues.push(`the draw plan differs from the one "wait" recorded: ${describeDifferences(d, 'now', 'recorded')}`);
+  }
+  return { ...plan, sources, cross_checked: sources.length === 2, issues };
 }

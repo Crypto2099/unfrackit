@@ -7,13 +7,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readManifest, recordUri } from './manifest.mjs';
-import { hashItems, documentChecks, DOCUMENT_CHECKED_KINDS } from './hashing.mjs';
+import { hashItems, documentChecks, citedRecords, DOCUMENT_CHECKED_KINDS } from './hashing.mjs';
 import { deriveIdentity } from './keys.mjs';
 import { buildRecord, signRecord, carry, messageLines, auxiliaryData, detailedMetadataJson, topLevelKeys } from './record.mjs';
 import { buildTransaction, TTL_SLOTS } from './tx.mjs';
 import { checkArtifacts, requireAllPass } from './checks.mjs';
 import { assertNoUnresolved } from './journal.mjs';
-import { checkTargets } from './targets.mjs';
+import { checkTargets, checkCitedHypotheses } from './targets.mjs';
 import { networkOf } from './koios.mjs';
 import { versions } from './pins.mjs';
 import { fromHex, stringify, toHex, UserError } from './util.mjs';
@@ -33,17 +33,47 @@ export function assertIdentityNetwork(pub, network) {
   }
 }
 
-export function hashManifest({ manifestPath, signingPublicKeyHex }) {
+export const STAGES = Object.freeze(['hypotheses', 'final']);
+
+// The two-stage freeze. A freeze record names its stage: `hypotheses`, a
+// core-only freeze of the pre-registration text taken before any live-fire
+// query, or `final`, the freeze whose block determines the epoch whose nonce
+// keys the study's draw. The stage is not on chain; it goes into the run
+// directory, the journal and every report, so which run keys the draw is
+// never ambiguous. No other kind has a stage.
+export function checkStage({ kind, stage, coreOnly }) {
+  if (kind !== 'freeze') {
+    if (stage) throw new UserError(`--stage applies to freeze records only, not ${kind}`);
+    return null;
+  }
+  if (!stage) throw new UserError('a freeze record needs --stage hypotheses or --stage final (the final freeze is the one whose block keys the draw)');
+  if (!STAGES.includes(stage)) throw new UserError(`--stage must be hypotheses or final, not "${stage}"`);
+  if (stage === 'hypotheses' && !coreOnly) throw new UserError('the hypotheses record is a core-only freeze; build it with --core-only');
+  return stage;
+}
+
+export function hashManifest({ manifestPath, signingPublicKeyHex, stage }) {
   const manifest = readManifest(manifestPath);
   const hashed = hashItems(manifest);
   let doc = null;
   if (DOCUMENT_CHECKED_KINDS.has(manifest.kind)) {
     doc = documentChecks(manifest, hashed, signingPublicKeyHex);
   }
+  if (stage === 'final' && doc) {
+    // The final document cites the hypotheses record; the chain half of this
+    // check (the record exists, is confirmed, and is signed by the same key)
+    // runs in build, after the network guard.
+    const text = new TextDecoder().decode(hashed.find((x) => x.document).bytes);
+    const { hashes, uppercase } = citedRecords(text);
+    doc.cited = hashes;
+    for (const u of uppercase) doc.errors.push(`the document cites ${u} with uppercase hex; record URIs are written in lowercase`);
+    if (!hashes.length) doc.errors.push('a final-stage document cites the hypotheses record by its URI, web+cardano://transaction/<hash>/metadata/309; this one cites none');
+    doc.ok = doc.errors.length === 0;
+  }
   return { manifest, hashed, doc };
 }
 
-export async function build({ store, koios, cli, manifestPath, network, identityName, coreOnly = false, log = () => {} }) {
+export async function build({ store, koios, cli, manifestPath, network, identityName, coreOnly = false, stage, log = () => {} }) {
   networkOf(network);
   const name = identityName || defaultIdentity(network);
   const pub = store.readPublic(name);
@@ -51,13 +81,19 @@ export async function build({ store, koios, cli, manifestPath, network, identity
   assertNoUnresolved(store, network);
   if (!cli) throw new UserError('build requires the cardanowall CLI 0.12.0 for its offline checks');
 
-  const { manifest, hashed, doc } = hashManifest({ manifestPath, signingPublicKeyHex: pub.signing_public_key });
+  const { manifest, hashed, doc } = hashManifest({ manifestPath, signingPublicKeyHex: pub.signing_public_key, stage });
+  checkStage({ kind: manifest.kind, stage, coreOnly });
   if (doc && !doc.ok) throw new UserError(`document checks failed:\n${doc.errors.map((e) => `  ${e}`).join('\n')}`);
 
   await koios.guard();
   const params = await koios.params();
   // Every record this one points at is a confirmed record of this identity.
   const targets = await checkTargets({ store, koios, network, manifest, hashed, publicKeyHex: pub.signing_public_key });
+  let hypotheses = null;
+  if (stage === 'final') {
+    hypotheses = await checkCitedHypotheses({ store, koios, network, cited: doc.cited, publicKeyHex: pub.signing_public_key });
+    targets.push(hypotheses);
+  }
 
   const { signingMnemonic, paymentMnemonic } = store.readMnemonics(name);
   const id = deriveIdentity(signingMnemonic, paymentMnemonic);
@@ -84,7 +120,7 @@ export async function build({ store, koios, cli, manifestPath, network, identity
   );
   requireAllPass(checks);
 
-  const report = runReport({ network, name, pub, manifest, coreOnly, hashed, doc, p, params, checks, cli, extra: { targets } });
+  const report = runReport({ network, name, pub, manifest, coreOnly, hashed, doc, p, params, checks, cli, extra: { stage: stage || null, hypotheses_record: hypotheses ? hypotheses.tx_hash : null, targets } });
   const dir = store.writeRun(network, p.tx.hash, runFiles(p, report));
   log(`run directory: ${dir}`);
   return { dir, report, tx: p.tx, signed: p.signed };

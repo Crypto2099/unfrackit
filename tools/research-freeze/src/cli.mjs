@@ -7,7 +7,7 @@ import { newMnemonicPair, deriveIdentity, publicFacts } from './keys.mjs';
 import { hashManifest, build, checkRun, defaultIdentity } from './build.mjs';
 import { requireAllPass } from './checks.mjs';
 import { Cardanowall } from './cardanowall.mjs';
-import { koiosFor, resolveRun, submitRun, waitRun, verifyRun, abandonJournal, sweep } from './ops.mjs';
+import { koiosFor, resolveRun, submitRun, waitRun, verifyRun, drawKey, abandonJournal, sweep } from './ops.mjs';
 import { rehearse } from './rehearse.mjs';
 import { restoreIdentity } from './restore.mjs';
 import { dataciteCheck, ZenodoSandbox } from './registry.mjs';
@@ -22,14 +22,18 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
   backup [--identity <name>]                 print both mnemonics for a paper backup (interactive terminal only)
   restore --identity <name> [--signing-key <hex>]
                                              recreate an identity from its two typed mnemonics (interactive terminal only)
-  hash <manifest> [--identity <name>]        hash every file and run the byte-form and document checks
-  build <manifest> --network <n> [--identity <name>] [--core-only]
+  hash <manifest> [--identity <name>] [--stage <stage>]
+                                             hash every file and run the byte-form and document checks
+  build <manifest> --network <n> [--stage hypotheses|final] [--identity <name>] [--core-only]
                                              build, sign and check the record and its transaction; submits nothing
+                                             (a freeze names its stage; the hypotheses stage is core-only)
   check <run>                                re-run the offline checks on a run directory
   submit <run>                               submit the run's exact signed bytes (mainnet: interactive confirmation)
   wait <run>                                 wait for 15 confirmations and record the block facts
+                                             (a final-stage freeze: also E, the cutoff slot and N)
   verify <run | tx-hash> --network <n> [--identity <name>]
-                                             verify on chain: this tool, the SDK and the cardanowall CLI
+                                             verify on chain (this tool, the SDK, the cardanowall CLI) and cross-check with Blockfrost
+  drawkey <run>                              once epoch N has started, read its nonce from Koios and Blockfrost and record both
   abandon --network <n> [--identity <name>]  drop a journaled transaction whose TTL has passed and which never landed
   rehearse <manifest> --network preprod [--doi <doi>] | rehearse --resume <id> --network preprod
                                              the whole sequence on preprod with placeholder files
@@ -40,7 +44,8 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
 
 <network> is mainnet or preprod. <run> is a run directory or the transaction hash of one.
 The home is $RESEARCH_FREEZE_HOME, else \${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research-freeze.
-The cardanowall CLI 0.12.0 is found on PATH or through $RESEARCH_FREEZE_CARDANOWALL.`;
+The cardanowall CLI 0.12.0 is found on PATH or through $RESEARCH_FREEZE_CARDANOWALL.
+Blockfrost project ids are read from secrets/blockfrost-<network>.token in the home.`;
 
 function parse(argv) {
   const flags = {};
@@ -147,12 +152,13 @@ async function main() {
     case 'hash': {
       if (!args[0]) throw new UserError('hash <manifest>');
       const pub = store.readPublic(flags.identity || (flags.network ? defaultIdentity(flags.network) : 'freeze'));
-      const { manifest, hashed, doc } = hashManifest({ manifestPath: args[0], signingPublicKeyHex: pub.signing_public_key });
+      const { manifest, hashed, doc } = hashManifest({ manifestPath: args[0], signingPublicKeyHex: pub.signing_public_key, stage: flags.stage });
       say(`kind ${manifest.kind}, ${hashed.length} items (SHA-256 over the file bytes as on disk):`);
       for (const h of hashed) say(`${h.hex}  ${h.name}${h.document ? '  (document)' : ''}${h.binary ? '  (binary)' : ''}`);
       if (doc) {
         say(doc.ok ? `document checks: ok (${doc.hashLines} hash lines, signing key ${pub.signing_public_key}${manifest.doi ? `, DOI ${manifest.doi}` : ''})` : 'document checks FAILED:');
         for (const e of doc.errors) say(`  ${e}`);
+        if (doc.cited) say(`record URIs the document cites: ${doc.cited.length ? doc.cited.join(', ') : 'none'}`);
         if (!doc.ok) process.exitCode = 1;
       }
       return;
@@ -164,8 +170,9 @@ async function main() {
       const pub = store.readPublic(name);
       const cli = Cardanowall.require();
       const koios = koiosFor(store, network, { addresses: [pub.addresses[network]] });
-      const r = await build({ store, koios, cli, manifestPath: args[0], network, identityName: name, coreOnly: Boolean(flags['core-only']), log: note });
-      say(`built ${r.report.kind}${r.report.core_only ? ' (core-only)' : ''} record on ${network}: ${r.tx.hash}`);
+      const r = await build({ store, koios, cli, manifestPath: args[0], network, identityName: name, coreOnly: Boolean(flags['core-only']), stage: flags.stage, log: note });
+      say(`built ${r.report.kind}${r.report.stage ? `, stage ${r.report.stage}` : ''}${r.report.core_only ? ' (core-only)' : ''} record on ${network}: ${r.tx.hash}`);
+      if (r.report.hypotheses_record) say(`  its document cites the hypotheses record ${r.report.hypotheses_record}, confirmed and signed by the same key`);
       say(`  record ${r.report.record_bytes} bytes in ${r.report.label_309_chunks} chunks; transaction ${r.tx.size} bytes; fee ${tada(r.tx.fee)} ADA; TTL slot ${r.report.ttl}`);
       say(`  ${r.report.uri}`);
       say(`  ${r.report.checks.length} offline checks passed; run directory ${r.dir}`);
@@ -190,6 +197,11 @@ async function main() {
       if (!args[0]) throw new UserError('wait <run>');
       const facts = await waitRun({ store, dir: resolveRun(store, args[0]), log: note });
       say(stringify(facts, 2));
+      if (facts.draw) {
+        const d = facts.draw;
+        say(`final-stage freeze in epoch E = ${d.block_epoch} at slot ${d.block_slot}; cutoff slot ${d.cutoff_slot} (window ${d.stabilisation_window} slots): the draw key is the nonce of epoch N = ${d.nonce_epoch}, which starts at slot ${d.nonce_epoch_first_slot}`);
+        say('These facts come from Koios alone; "verify" and "drawkey" read them again from Koios and Blockfrost.');
+      }
       return;
     }
     case 'verify': {
@@ -200,13 +212,24 @@ async function main() {
         say(stringify(r, 2));
         return;
       }
-      say(`${r.txHash} on ${r.network}`);
+      say(`${r.txHash} on ${r.network}${r.stage ? `, stage ${r.stage}` : ''}: ${r.verdict}`);
       say(`  this tool: ${r.own.verdict}${r.own.issues.length ? ` (${r.own.issues.join('; ')})` : ''}; signer ${r.own.signers.join(', ')}; labels ${r.own.labels.join(', ')}`);
       if (r.own.block) say(`  block ${r.own.block.height} ${r.own.block.hash}, slot ${r.own.block.slot}, ${r.own.block.time_iso} (Koios); ${r.own.confirmations} confirmations`);
       say(`  SDK verifyTx: ${r.sdk.verdict}${r.sdk.issues.length ? ` (${r.sdk.issues.join('; ')})` : ''}`);
       say(`  cardanowall verify: ${r.cli.verdict}${r.cli.exit !== undefined ? ` (exit ${r.cli.exit})` : ''}${r.cli.issues?.length ? ` (${r.cli.issues.join('; ')})` : ''}`);
+      if (r.crosscheck.ran) {
+        say(`  Blockfrost cross-check: ${r.crosscheck.ok ? 'agrees' : 'DISAGREES'} (transaction CBOR, block hash, height, slot, epoch, epoch slot, time); depth ${r.crosscheck.depth.koios} on Koios, ${r.crosscheck.depth.blockfrost} on Blockfrost`);
+      } else say(`  Blockfrost cross-check: not run (${r.crosscheck.reason})`);
+      if (r.draw) say(`  draw plan: E = ${r.draw.block_epoch}, slot ${r.draw.block_slot}, cutoff ${r.draw.cutoff_slot}, N = ${r.draw.nonce_epoch} (${r.draw.sources.join(' and ')})`);
+      for (const i of r.issues) say(`  ISSUE ${i}`);
       for (const e of r.explorers) say(`  ${e}`);
-      if (![r.own.verdict, r.sdk.verdict, r.cli.verdict].every((v) => v === 'valid')) process.exitCode = 1;
+      if (r.verdict !== 'valid') process.exitCode = 1;
+      return;
+    }
+    case 'drawkey': {
+      if (!args[0]) throw new UserError('drawkey <run>');
+      const r = await drawKey({ store, dir: resolveRun(store, args[0]), log: note });
+      say(stringify(r, 2));
       return;
     }
     case 'abandon': {
@@ -221,9 +244,11 @@ async function main() {
       const { base, state } = await rehearse({ store, cli: Cardanowall.require(), manifestPath: args[0], resumeId: flags.resume, doi: flags.doi, log: note });
       say(`rehearsal ${state.runId} in ${base}`);
       for (const s of state.steps) {
-        say(`  ${s.label}: ${s.txHash}, fee ${tada(s.fee)} ADA, ${s.size} bytes; this tool ${s.verify.own.verdict}, SDK ${s.verify.sdk.verdict}, CLI ${s.verify.cli.verdict}`);
+        say(`  ${s.label}: ${s.txHash}, fee ${tada(s.fee)} ADA, ${s.size} bytes; this tool ${s.verify.own.verdict}, SDK ${s.verify.sdk.verdict}, CLI ${s.verify.cli.verdict}; ${s.verify.verdict}`);
       }
       say(`  fees ${state.summary.fees_tada} tADA over ${state.summary.transactions} transactions`);
+      const d = state.summary.draw;
+      if (d) say(`  the final freeze is in epoch ${d.block_epoch} at slot ${d.block_slot} (cutoff ${d.cutoff_slot}); run "drawkey" on it once epoch ${d.nonce_epoch} starts at slot ${d.nonce_epoch_first_slot}`);
       return;
     }
     case 'registry': {
