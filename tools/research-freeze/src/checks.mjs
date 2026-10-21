@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import { coseSign1Label309Verify } from '@cardanowall/crypto-core/cose';
 import { validatePoeRecord } from '@cardanowall/poe-standard';
 import { decode, mapGet } from './cbor.mjs';
+import { VERIFY_FLAGS } from './cardanowall.mjs';
 import { assertTransaction } from './tx.mjs';
 import { toHex, UserError } from './util.mjs';
 
@@ -40,7 +41,7 @@ export function checkArtifacts(a, { cli, store, rehearsalSeed } = {}) {
   }
   const tmp = store.writeTempSecret(toHex(a.body));
   try {
-    const r = cli.json(['verify', '--record', tmp, '--json']);
+    const r = cli.json(['verify', '--record', tmp, '--json', ...VERIFY_FLAGS]);
     const j = r.json || {};
     out.push(result('cardanowall verify --record exits 0 with verdict valid', r.status === 0 && j.verdict === 'valid', `exit ${r.status}, verdict ${j.verdict}, issues ${issuesText(j.issues)}`));
     const signer = (j.signatures || [])[0];

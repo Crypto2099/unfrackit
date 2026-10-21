@@ -193,3 +193,15 @@ export function mapGet(map, key) {
   for (const [k, v] of map) if (k === key) return v;
   return undefined;
 }
+
+// Every text string in a decoded value, map keys included.
+export function* textStrings(v) {
+  if (typeof v === 'string') yield v;
+  else if (Array.isArray(v)) for (const x of v) yield* textStrings(x);
+  else if (v instanceof Map) {
+    for (const [k, x] of v) {
+      yield* textStrings(k);
+      yield* textStrings(x);
+    }
+  } else if (v instanceof Tagged) yield* textStrings(v.value);
+}

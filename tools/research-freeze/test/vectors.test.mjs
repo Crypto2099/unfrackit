@@ -333,3 +333,23 @@ test('validator: the positive and negative corpora give the pinned codes', () =>
     }
   }
 });
+
+test('cose: signRecord itself reproduces the sign1-build vectors (Sig_structure, signature, COSE_Sign1, sigs entry)', async () => {
+  const { signRecord } = await import('../src/record.mjs');
+  const f = vector('cose/sign1-build.json');
+  for (const v of f.cardano_poe_vectors) {
+    const seed = unhex(v.signer_secret_key_hex);
+    const pub = unhex(v.signer_public_key_hex);
+    assert.equal(hex(getPublicKeyEd25519({ seed })), v.signer_public_key_hex);
+    // The vector gives the Ed25519 secret seed itself, so the key is built on
+    // it directly (signRecord takes any key with publicKey and sign).
+    const key = { publicKey: pub, sign: async (m) => signEd25519({ seed, message: m }) };
+    const record = decodeCanonicalCbor(unhex(v.record_body_cbor_hex));
+    const s = await signRecord(record, key);
+    assert.equal(hex(s.bodyNoSigs), v.record_body_cbor_hex, `${v.name} body`);
+    assert.equal(hex(s.sigStructure), v.expected_sig_structure_hex, `${v.name} Sig_structure`);
+    assert.equal(hex(s.signature), v.expected_signature_hex, `${v.name} signature`);
+    assert.equal(hex(s.coseSign1), v.expected_cose_sign1_hex, `${v.name} COSE_Sign1`);
+    assert.equal(hex(encode(mapGet(decode(s.body, { canonical: true }), 'sigs')[0])), v.expected_sigs_entry_cbor_hex, `${v.name} sigs entry`);
+  }
+});

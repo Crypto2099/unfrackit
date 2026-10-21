@@ -45,10 +45,43 @@ export function hashItems(manifest) {
 const HASH_LINE_RE = /^([0-9a-f]{64}) {2}(\S+)$/;
 const LOOSE_HASH_LINE_RE = /^\s*([0-9a-fA-F]{64})\s+(\S+)\s*$/;
 
-// The consistency of a freeze record's document with the manifest: every hash
-// line names a non-document item and carries its computed digest, every
+// A DOI mentioned as a whole token. Before it: the start of the text or a
+// character that cannot end a DOI name (whitespace, `:`, `/`, brackets,
+// quotes). After it: the end of the text or a character that cannot continue
+// one: not a letter, digit, `-`, `_` or `/`, and not a `.` followed by a
+// letter or digit. So `10.5281/zenodo.1700000` does not match inside
+// `10.5281/zenodo.17000001`.
+export function mentionsDoi(text, doi) {
+  for (let i = text.indexOf(doi); i !== -1; i = text.indexOf(doi, i + 1)) {
+    const before = i === 0 ? '' : text[i - 1];
+    const after = text.slice(i + doi.length, i + doi.length + 2);
+    if (before && /[0-9A-Za-z._-]/.test(before)) continue;
+    if (after && (/^[0-9A-Za-z_/-]/.test(after) || /^\.[0-9A-Za-z]/.test(after))) continue;
+    return true;
+  }
+  return false;
+}
+
+// A 64-digit hex key mentioned as a whole token: not run into other hex digits.
+export function mentionsHexToken(text, hex) {
+  for (let i = text.indexOf(hex); i !== -1; i = text.indexOf(hex, i + 1)) {
+    const before = i === 0 ? '' : text[i - 1];
+    const after = text[i + hex.length] || '';
+    if (!/[0-9a-fA-F]/.test(before) && !/[0-9a-fA-F]/.test(after)) return true;
+  }
+  return false;
+}
+
+// The record kinds whose document lists the other files' SHA-256: a freeze
+// and an amendment (a new document version, with its own hash table). A
+// re-typing successor carries the superseded record's digests unchanged.
+export const DOCUMENT_CHECKED_KINDS = new Set(['freeze', 'amend']);
+
+// The consistency of a record's document with the manifest: every hash line
+// names a non-document item and carries its computed digest, every
 // non-document item is listed exactly once, and the document carries the
-// identity's signing public key and the manifest's DOI. Any mismatch fails.
+// identity's signing public key and the manifest's DOI, each as a whole
+// token. Any mismatch fails.
 export function documentChecks(manifest, hashed, signingPublicKeyHex) {
   const doc = hashed.find((x) => x.document);
   const text = new TextDecoder().decode(doc.bytes);
@@ -81,7 +114,7 @@ export function documentChecks(manifest, hashed, signingPublicKeyHex) {
     const count = seen.get(item.name) || 0;
     if (count !== 1) errors.push(`${item.name} appears ${count} times in the document's hash table; it must appear exactly once`);
   }
-  if (!text.includes(signingPublicKeyHex)) errors.push(`the document does not carry the signing public key ${signingPublicKeyHex}`);
-  if (!manifest.doi || !text.includes(manifest.doi)) errors.push(`the document does not carry the DOI ${manifest.doi}`);
+  if (!mentionsHexToken(text, signingPublicKeyHex)) errors.push(`the document does not carry the signing public key ${signingPublicKeyHex}`);
+  if (manifest.doi && !mentionsDoi(text, manifest.doi)) errors.push(`the document does not carry the DOI ${manifest.doi} as a whole token`);
   return { ok: errors.length === 0, errors, hashLines: [...seen.values()].reduce((a, b) => a + b, 0) };
 }

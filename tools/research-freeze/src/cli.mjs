@@ -87,6 +87,8 @@ async function main() {
   const { args, flags } = parse(rest);
   const store = new Store();
   store.assertSafe();
+  // Temporary secrets left by a killed process are removed before anything else.
+  for (const f of store.cleanTmp()) note(`removed a temporary file left by an earlier run: tmp/${f}`);
 
   switch (cmd) {
     case 'init': {
@@ -135,7 +137,7 @@ async function main() {
       say(`kind ${manifest.kind}, ${hashed.length} items (SHA-256 over the file bytes as on disk):`);
       for (const h of hashed) say(`${h.hex}  ${h.name}${h.document ? '  (document)' : ''}${h.binary ? '  (binary)' : ''}`);
       if (doc) {
-        say(doc.ok ? `document checks: ok (${doc.hashLines} hash lines, signing key ${pub.signing_public_key}, DOI ${manifest.doi})` : 'document checks FAILED:');
+        say(doc.ok ? `document checks: ok (${doc.hashLines} hash lines, signing key ${pub.signing_public_key}${manifest.doi ? `, DOI ${manifest.doi}` : ''})` : 'document checks FAILED:');
         for (const e of doc.errors) say(`  ${e}`);
         if (!doc.ok) process.exitCode = 1;
       }

@@ -12,7 +12,7 @@ import { loadRun, assertIdentityNetwork, defaultIdentity } from './build.mjs';
 import { verifyAll } from './verify.mjs';
 import { confirmMainnet } from './tty.mjs';
 import { deriveIdentity } from './keys.mjs';
-import { TTL_SLOTS, feeFor, assertTransaction } from './tx.mjs';
+import { TTL_SLOTS, feeFor, assertTransaction, assertSweep } from './tx.mjs';
 import { stringify, tada, toHex, UserError } from './util.mjs';
 
 export function koiosFor(store, network, { addresses = [], log } = {}) {
@@ -34,16 +34,34 @@ export function resolveRun(store, arg) {
   return d;
 }
 
-export async function submitRun({ store, dir, log = console.error, streams }) {
+// What the operator sees above the mainnet prompt.
+export function submissionFacts(run) {
+  const r = run.report;
+  return [
+    ['network', r.network],
+    ['record kind', r.kind],
+    ['stage', r.stage || 'none'],
+    ['research-items', r.core_only ? 'omitted (core-only)' : 'present (typed)'],
+    ['items', String(r.items.length)],
+    ['CIP-20 line', (r.message || []).join(', ')],
+    ['signing key', r.signing_public_key],
+    ['fee', `${tada(r.fee)} ADA`],
+    ['inputs', `${r.inputs.length} UTxOs, ${tada(r.inputs.reduce((s, u) => s + BigInt(u.coin), 0n))} ADA`],
+    ['change', `${tada(r.output_coin)} ADA to ${r.payment_address}`],
+    ['TTL', `slot ${r.ttl}`]
+  ];
+}
+
+export async function submitRun({ store, dir, log = console.error, streams, koios: givenKoios }) {
   const run = loadRun(dir);
   // The bytes about to be sent are the bytes the build checked: every
   // post-build assertion runs again on them first.
   assertTransaction(run.txBytes, run.txExpect);
   const network = run.report.network;
-  const koios = koiosFor(store, network, { addresses: [run.report.payment_address] });
+  const koios = givenKoios || koiosFor(store, network, { addresses: [run.report.payment_address] });
   koios.allowTx(run.txHash);
   await koios.guard();
-  if (network === 'mainnet') await confirmMainnet(run.txHash, 'submission', streams);
+  if (network === 'mainnet') await confirmMainnet(run.txHash, 'submission', streams, submissionFacts(run));
   const entry = journal(
     store,
     journalEntry({
@@ -122,7 +140,7 @@ export async function abandonJournal({ store, network, identityName }) {
 
 // Return every pure-ADA UTxO of the payment address to `to`: one output, no
 // change, no metadata. Same journal and mainnet guard as `submit`.
-export async function sweep({ store, network, identityName, to, log = console.error, streams }) {
+export async function sweep({ store, network, identityName, to, log = console.error, streams, koios: givenKoios }) {
   const net = networkOf(network);
   const name = identityName || defaultIdentity(network);
   const pub = store.readPublic(name);
@@ -135,7 +153,7 @@ export async function sweep({ store, network, identityName, to, log = console.er
     throw new UserError(`not a bech32 address: ${to}`);
   }
   if (target.network_id() !== net.networkId) throw new UserError(`${to} is not a ${network} address`);
-  const koios = koiosFor(store, network, { addresses: [pub.addresses[network]] });
+  const koios = givenKoios || koiosFor(store, network, { addresses: [pub.addresses[network]] });
   await koios.guard();
   const params = await koios.params();
   const { signingMnemonic, paymentMnemonic } = store.readMnemonics(name);
@@ -144,6 +162,9 @@ export async function sweep({ store, network, identityName, to, log = console.er
   const utxos = await koios.addressUtxos(pub.addresses[network]);
   const ttl = params.tip.slot + TTL_SLOTS;
   const tx = buildSweep({ utxos, target, signer: id.payment.privateKey, networkId: net.networkId, params, ttl });
+  // The same kind of post-build assertions as a record transaction, on the
+  // exact bytes, before anything is written or shown for confirmation.
+  assertSweep(tx.bytes, { txHash: tx.hash, maxTxSize: params.maxTxSize, networkId: net.networkId, ttl, params, inputs: tx.inputs, outputAddress: to, paymentKeyHash: pub.payment_key_hash });
   log(`sweep ${tx.hash}: ${tx.inputs.length} UTxOs, ${tada(tx.outCoin)} ADA to ${to}, fee ${tada(tx.fee)}`);
   const dir = store.writeRun(network, tx.hash, {
     'tx.signed.cbor': tx.bytes,
@@ -151,12 +172,22 @@ export async function sweep({ store, network, identityName, to, log = console.er
     'report.json': stringify({ format: 'research-freeze-sweep-v1', network, identity: name, payment_address: pub.addresses[network], to, tx_hash: tx.hash, fee: tx.fee, ttl, inputs: tx.inputs.map((u) => ({ tx_hash: u.txHash, index: u.index, coin: u.coin })), output_coin: tx.outCoin }, 2) + '\n'
   });
   koios.allowTx(tx.hash);
-  if (network === 'mainnet') await confirmMainnet(tx.hash, 'sweep', streams);
+  if (network === 'mainnet') {
+    await confirmMainnet(tx.hash, 'sweep', streams, [
+      ['network', network],
+      ['from', pub.addresses[network]],
+      ['to', to],
+      ['amount', `${tada(tx.outCoin)} ADA`],
+      ['fee', `${tada(tx.fee)} ADA`],
+      ['inputs', `${tx.inputs.length} UTxOs`],
+      ['TTL', `slot ${ttl}`]
+    ]);
+  }
   const entry = journal(store, journalEntry({ network, txHash: tx.hash, cbor: toHex(tx.bytes), ttl, inputs: tx.inputs, run: dir, kind: 'sweep', identity: name }));
   return submitJournaled({ koios, store, entry, address: pub.addresses[network], log });
 }
 
-function buildSweep({ utxos, target, signer, networkId, params, ttl }) {
+export function buildSweep({ utxos, target, signer, networkId, params, ttl }) {
   const pure = utxos.filter((u) => !u.assets.length && !u.datumBytes && !u.datumHash && !u.refScript);
   if (!pure.length) throw new UserError('nothing to sweep: the payment address holds no pure-ADA UTxO');
   const total = pure.reduce((s, u) => s + u.coin, 0n);

@@ -18,7 +18,7 @@ The tool has its own `package.json` and lockfile, with every dependency pinned e
 
 ### The CardanoWall CLI
 
-`build`, `check` and `verify` also run the CardanoWall reference CLI, an independent Rust implementation of CIP-190. The tool refuses any version other than 0.12.0 (commit 5400a64). Install the binary outside this repository:
+`build`, `check` and `verify` also run the CardanoWall reference CLI, an independent Rust implementation of CIP-190. The tool refuses any binary other than the `cardanowall` of the v0.12.0 release's `x86_64-unknown-linux-musl` archive: it must report version 0.12.0 (commit 5400a64) and its SHA-256 must be `ac43f67ee3ef4372836e358613f255a61f7997ef9021972da41b74b767efcc2c`. Install the binary outside this repository:
 
 ```
 BASE=https://github.com/cardanowall/label-309-cli/releases/download/v0.12.0
@@ -31,9 +31,11 @@ tar -xzf cardanowall-v0.12.0-x86_64-unknown-linux-musl.tar.gz
 
 The attestation check confirms that the archive was built by the release workflow of `cardanowall/label-309-cli` at tag `v0.12.0`. Put the extracted `cardanowall` on `PATH`, or point `RESEARCH_FREEZE_CARDANOWALL` at it. Without it, `npm test` skips the CLI tests with a notice and `build` refuses to run.
 
+The CLI reads settings from its environment (for example `CARDANOWALL_CONFIRMATION_DEPTH_THRESHOLD`, `CARDANOWALL_CARDANO_GATEWAY`, `CARDANOWALL_DENY_HOSTS_REPLACE`, `CARDANOWALL_SEED`) and from `~/.cardanowall/config.toml`, and each can change what `verify` checks. The tool therefore runs it with a minimal environment: `PATH`, `HOME` set to an empty temporary directory, and `CARDANOWALL_CONFIG_PATH` pointing at an empty file in it. Every `verify` is also given `--profile signed --threshold 15` explicitly.
+
 ## Identities and where secrets live
 
-The home is `${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research-freeze/`, or `RESEARCH_FREEZE_HOME`. Directories are created 0700 and files 0600; a secret is written with exclusive create and never overwritten. The tool refuses to run if the home resolves inside any git working tree, or if any directory or file in it has wider permissions.
+The home is `${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research-freeze/`, or `RESEARCH_FREEZE_HOME`. Directories are created 0700 and files 0600; a secret is written with exclusive create and never overwritten. The tool refuses to run if the home resolves inside any git working tree, or if any directory or file in it has wider permissions. The rehearsal seed handed to the reference CLI goes to a 0600 file in `tmp/` that is removed afterward; at startup the tool also removes any such file whose process is gone, which a killed process leaves behind.
 
 ```
 identities/<name>/signing-mnemonic    identities/<name>/payment-mnemonic    identities/<name>/public.json
@@ -110,16 +112,17 @@ The manifest is a JSON file kept outside the repository. It lists the items in r
 
 - `kind` is `freeze`, `scripts`, `results`, `retype` or `amend`.
 - `freeze`, `retype` and `amend` name exactly one item as the `document`; its digest is the CIP-20 line. `scripts` and `results` flag one or more items with `"message": true` instead.
-- `freeze` needs `doi`, the reserved DOI as a lowercase bare DOI name, and the document must carry it among its identifiers.
+- `freeze` needs `doi`, the reserved DOI as a lowercase bare DOI name, and the document must carry it among its identifiers. So does an `amend` whose document is typed `StudyRegistration` (a new version of the registration, with its own DOI).
 - `retype` and `amend` need `supersedes`, the 64-digit lowercase hash of the transaction they supersede. The tool reads the superseded record from its own run directory: a `retype` carries every item of it with identical digests in the same order, and both must be signed by the same key.
 - `scripts` and `results` need `related`, a list of `{ "uri", "relation", "relation_info"? }` whose `uri` is a record URI.
-- `type`, `id_type` and `relation` take the DataCite Metadata Schema 4.7 values (`resourceTypeGeneral`, `relatedIdentifierType`, `relationType`), spelled exactly; anything else is refused.
+- `type`, `id_type` and `relation` take the DataCite Metadata Schema 4.7 values (`resourceTypeGeneral`, `relatedIdentifierType`, `relationType`), spelled exactly; anything else is refused. A `relation` of `Other` needs `relation_info` saying what the relation is.
+- No string that goes on chain (an identifier, a `relation_info`, the DOI) may contain `unfrack.it` in any letter case.
 
 ## The record and the byte form it hashes
 
 Every digest is SHA-256 over the file exactly as it sits on disk, byte for byte, with no normalization (CIP-190, "Exact-bytes scope of a PoE claim"). A text item must already be valid UTF-8 with LF line endings and no byte-order mark; a file that is not is refused rather than normalized, unless the manifest marks it `binary`.
 
-For the `freeze` kind, `hash` and `build` also check the document against the manifest. Every line of the form `<64 lowercase hex><two spaces><file name>` must name a non-document item and carry its computed digest; every non-document item must appear exactly once; the document must not list itself; and the document must carry the identity's signing public key and the manifest's DOI. Any mismatch fails.
+For the `freeze` and `amend` kinds, `hash` and `build` also check the document against the manifest (an amendment is a new document version with its own hash table; a `retype` carries the superseded record's digests unchanged). Every line of the form `<64 lowercase hex><two spaces><file name>` must name a non-document item and carry its computed digest; every non-document item must appear exactly once; the document must not list itself; and the document must carry the identity's signing public key and the manifest's DOI, each as a whole token: the DOI not run into a longer DOI (`10.5281/zenodo.1700000` does not match inside `10.5281/zenodo.17000001`), and the key not run into other hex digits. Any mismatch fails.
 
 The label-309 value is a CIP-190 record, a canonical CBOR map (CIP-190, "Canonical CBOR (deterministic encoding)": RFC 8949 section 4.2.1, shortest integers, definite lengths, keys sorted bytewise by their encoding, no duplicates, no tags, no floats):
 
@@ -134,7 +137,7 @@ The `research-` keys are top-level extension keys in CIP-190's companion-CIP nam
 
 The signature follows CIP-190, "Record-level signatures (COSE_Sign1)". `to_sign` is the 25 ASCII bytes `cardano-poe-record-sig-v1` followed by the canonical CBOR of the record without `sigs`, `Sig_structure` is `["Signature1", protected, h'', to_sign]`, and the payload is `null`, detached ("Signed payload and Sig_structure"). The protected header is `{1: -8, 4: <32-byte public key>}`, which encodes as `a2 01 27 04 58 20` and the key: algorithm -8 ("Signing algorithm") and the raw public key as `kid` (path 1, "Signer-key identification"). The unprotected header is the empty map and the COSE_Sign1 is untagged, as the conformance vector `cose/sign1-build.json` pins. CIP-8 makes `version` and `hashed` mandatory in the unprotected header ("Version", "Payload encoding"), but CIP-190 treats an absent `hashed` as false ("Signing algorithm", its paragraph on CIP-8 `hashed` mode) and makes its conformance vectors authoritative in any byte-level dispute ("Conventions and terminology"); the tool follows CIP-190 and never uses hashed mode.
 
-The record is carried as a definite-length array of definite-length byte strings, the minimal split (every chunk 64 bytes except the last), even when the body is 64 bytes or fewer (CIP-190, "Metadata label 309 and the chunk-array transport"). The label-674 value is `{ "msg": [ "<64 lowercase hex>" ] }` (CIP-20, "Specification"). The transaction carries no other label, and no byte of it contains the string `unfrack.it` in any letter case. The auxiliary data is the untagged metadata map, one of the three forms CIP-190 accepts ("Auxiliary-data envelope forms").
+The record is carried as a definite-length array of definite-length byte strings, the minimal split (every chunk 64 bytes except the last), even when the body is 64 bytes or fewer (CIP-190, "Metadata label 309 and the chunk-array transport"). The label-674 value is `{ "msg": [ "<64 lowercase hex>" ] }` (CIP-20, "Specification"). The transaction carries no other label. The string `unfrack.it`, in any letter case, appears in no byte of the transaction, no byte of the reassembled record (a string can straddle two chunks, whose headers would split it in the transaction bytes), and no text string of the record or the metadata. The auxiliary data is the untagged metadata map, one of the three forms CIP-190 accepts ("Auxiliary-data envelope forms").
 
 Every step is done twice: once by the SDK and once by this tool's own canonical encoder, and the bytes must be identical, including the bytes-keyed `research-items` map.
 
@@ -161,9 +164,9 @@ Before the freeze block no study query may run, so the tool sends Koios only `/g
 
 ### Offline, inside `build` and `check`
 
-- The transaction, from its serialized bytes through CSL's `FixedTransaction` and the SDK's byte-faithful slicer: BLAKE2b-256 of the raw body equals the transaction hash; BLAKE2b-256 of the raw auxiliary data equals the body's `auxiliary_data_hash`; the auxiliary data is exactly the expected untagged map; the metadata labels are exactly 309 and 674; every chunk is 1 to 64 bytes and they reassemble to the record body byte for byte; the 674 message is exactly the expected digest; CSL refuses a 65-byte metadata byte string; no `unfrack.it`; the size is within `max_tx_size`; the body holds only inputs, outputs, fee, TTL, `auxiliary_data_hash` and network id; the fee is `min_fee_a * size + min_fee_b` and equals CSL `min_fee`; one output to the expected address with the network tag and at least its minimum ADA; one vkey witness, from the payment key, verifying against the body hash under CSL and OpenSSL.
+- The transaction, from its serialized bytes through CSL's `FixedTransaction` and the SDK's byte-faithful slicer: BLAKE2b-256 of the raw body equals the transaction hash; BLAKE2b-256 of the raw auxiliary data equals the body's `auxiliary_data_hash`; the auxiliary data is exactly the expected untagged map; the metadata labels are exactly 309 and 674; every chunk is 1 to 64 bytes and they reassemble to the record body byte for byte; the 674 message is exactly the expected digest; CSL refuses a 65-byte metadata byte string; no `unfrack.it` in the transaction bytes, the reassembled record or any text string; the size is within `max_tx_size`; the body holds only inputs, outputs, fee, TTL, `auxiliary_data_hash` and network id; the fee is `min_fee_a * size + min_fee_b` and equals CSL `min_fee`; one output to the expected address with the network tag and at least its minimum ADA; one vkey witness, from the payment key, verifying against the body hash under CSL and OpenSSL.
 - The SDK's `validatePoeRecord` (default options) reports the record valid, and its `coseSign1Label309Verify` verifies the signature against the identity's key.
-- `cardanowall verify --record` exits 0 with verdict `valid`, reports the identity's key as the signer and the manifest digests as the items, and echoes the `research-` keys in its report's record with no issue raised.
+- `cardanowall verify --record --profile signed --threshold 15` exits 0 with verdict `valid`, reports the identity's key as the signer and the manifest digests as the items, and echoes the `research-` keys in its report's record with no issue raised.
 - `cardanowall sign prepare --signer-pubkey <key>` over the body without `sigs` gives the same `Sig_structure` byte for byte. This involves no secret.
 - For the `rehearsal` identity only, `cardanowall sign record --seed-file` (the seed as hex in a 0600 file in the home's `tmp/`, removed afterward) produces the same signed body, and `cardanowall identity --seed-stdin` reports the same public key. The real identity's seed is never passed to another program.
 
@@ -173,20 +176,23 @@ The run directory holds the record body, the body without `sigs`, the `Sig_struc
 
 - This tool fetches the raw transaction from Koios `/tx_cbor`, never the metadata JSON view (CIP-190, "Structural validation, verifier roles, and error codes", Part B, "Pipeline", step 1), checks the transaction-hash and `auxiliary_data_hash` binding (step 2), reassembles the record and compares it with the run's bytes, validates it, verifies the signature, and reads the block height, hash, slot and time from `/tx_info`, with the confirmation depth computed as tip height minus block height plus one ("Chain facts: block time and confirmation depth").
 - The SDK's `verifyTx`, against the network's Koios endpoint, in the default `signed` profile.
-- `cardanowall verify <tx> --network <n> --cardano-gateway <Koios URL> --json`, in its default `signed` profile. The CLI defaults to Koios mainnet whatever `--network` says, so the tool always passes the endpoint.
+- `cardanowall verify <tx> --network <n> --cardano-gateway <Koios URL> --json --profile signed --threshold 15`. The CLI defaults to Koios mainnet whatever `--network` says, so the tool always passes the endpoint.
 
 Block facts come from one provider; `verify` prints links to cardanoscan.io and cexplorer.io (with the `preprod.` host on preprod) so a reader can cross-check them on two independent explorers.
 
 ### Unit tests (`npm test`)
 
-`npm test` runs `node --test test/*.test.mjs` offline. It covers:
+`npm test` runs `node --test test/*.test.mjs` offline, in temporary homes that are removed when the run ends. It covers:
 
 - the label-309 v0.10.0 conformance vectors below, copied byte for byte into `test/vectors/label-309-v0.10.0/` with label-309's Apache-2.0 `LICENSE` and a `PROVENANCE.json` recording the source commit (a51bad8d31669ccbf533bac6ec8c39dd38ff0388) and each file's SHA-256, which the first test checks;
-- the signing key of the three public test mnemonics (`abandon` x23 `art`, `zoo` x23 `vote`, and the `deadbeef` mnemonic), through the SDK and through Node and OpenSSL; the CIP-3 Icarus master key; the CIP-11 key at `m/1852'/1815'/0'/2/0`; the CIP-19 type-6 addresses; refusal of equal entropies and of mnemonics other than 24 words; the key-separation check;
+- the signing key of the three public test mnemonics (`abandon` x23 `art`, `zoo` x23 `vote`, and the `deadbeef` mnemonic), through the SDK and through Node and OpenSSL; the CIP-3 Icarus master key; the CIP-11 key at `m/1852'/1815'/0'/2/0`; the CIP-19 type-6 addresses; a throwaway 24-word payment mnemonic whose key at `m/1852'/1815'/0'/0/0` matches the one `cardano-signer` 1.32.0 derives (24 words is where CIP-3 `Icarus.md` notes that derivations diverge); refusal of equal entropies and of mnemonics other than 24 words; the key-separation check;
+- `signRecord` itself over the four `cose/sign1-build.json` record vectors (the `Sig_structure`, the signature, the COSE_Sign1 and the `sigs` entry), and each `research-items` typing sitting under its own item's digest;
 - all five record kinds with placeholder digests: canonical round trip through both encoders, the SDK validator, and the top-level key order; negative controls: a `research-` key in `crit` fails with `EXTENSION_UNSUPPORTED_CRITICAL`, a misspelled base key with `SCHEMA_UNKNOWN_FIELD`, and an uppercase hex digit in a record URI is refused by the builder;
-- transaction building and every post-build assertion, with fake UTxOs;
+- transaction building and every post-build assertion, with fake UTxOs, including a record string split across two chunks; the sweep assertions;
+- the order inside `submit` (network guard, mainnet prompt and its facts, journal, TTL, submission) and `sweep` on mainnet, and inside `build` (the identity's network, then the network guard, before any mnemonic is read);
+- the reference CLI's isolation: a binary with the right version string but another SHA-256 is refused, and a threshold of 1 in the operator's environment does not reach it;
 - the journal state machine against a fake Koios: a lost response followed by "All inputs are spent" with the hash found (submitted); a transaction that lands just after the last poll of the first window, and a lagging `/tx_status` instance (both found, never failed); the hash never found while the inputs read as spent (failed, and unresolved); 429 then success; `Retry-After`; a returned id that differs (failure); the journal lock; the abandonment rules for unsubmitted and failed entries; a missing `/tx_info` row while waiting;
-- the mainnet guard and `backup` refusing without a terminal, the refusal of a home inside a checkout or with loose permissions, the `unfrack.it` scanner, and the network guard;
+- the mainnet guard and `backup` refusing without a terminal, the refusal of a home inside a checkout or with loose permissions, the removal of temporary secrets left by a killed process, the `unfrack.it` scanner and the manifest's refusal of it, the token-bounded DOI and key checks, `relation_info` for `Other`, the amendment's document checks, and the network guard;
 - when the CLI is installed, `cardanowall verify --record` over the `poe-record/` vectors and every positive and negative `validator/` entry, in the `core` and `signed` profiles, giving the verdicts and error codes the vectors pin.
 
 The 27 vector files used, by directory:
@@ -210,7 +216,7 @@ Out of scope, because the tool emits none of these structures: sealed PoE and it
 
 `rehearse <manifest> --network preprod` reads the mainnet freeze manifest's item names, types and document flag, and generates one placeholder text file per item, with distinct content per run. The placeholder document carries a hash table of the other placeholders, the rehearsal public key and a placeholder DOI (`--doi` supplies a sandbox DOI instead), so the document checks run as they will for the mainnet freeze. It then builds, checks, submits, waits for 15 confirmations and verifies, in order: a core-only freeze record, a typed freeze record, a re-typing successor that supersedes the typed record and adds a second placeholder identifier, and a scripts record whose `research-related` names the typed record with `IsSupplementTo`. It keeps its state in `rehearsals/<id>/state.json` and resumes with `--resume <id>`. It refuses mainnet.
 
-On mainnet, `submit` and `sweep` require an interactive terminal on stdin and stdout and the operator typing the first eight hex digits of the transaction hash. `build` never submits.
+On mainnet, `submit` and `sweep` require an interactive terminal on stdin and stdout and the operator typing the first eight hex digits of the transaction hash. Above the prompt, `submit` shows the network, the record kind, the stage, whether `research-items` is present, the item count, the CIP-20 line (the document's digest), the signing key, the fee, the inputs, the change and the TTL; `sweep` shows the source and target addresses, the amount, the fee, the inputs and the TTL. Before a sweep is written or shown, its bytes pass the same kind of assertions as a record transaction: no auxiliary data, the body fields, the network id, the TTL, the inputs, one ADA-only output to the target, the exact fee, and one payment witness verifying under CSL and OpenSSL. `build` never submits.
 
 ## Specifications
 

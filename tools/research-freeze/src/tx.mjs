@@ -10,10 +10,10 @@ import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { sliceTxComponents, unwrapAuxiliaryData, auxiliaryDataHashFromTxBody, bindTransactionBytes } from '@cardanowall/sdk-ts/verifier';
 import { reassembleLabel309Value } from '@cardanowall/poe-standard';
 import { blake2b256 } from '@cardanowall/crypto-core/hash';
-import { decode, mapGet, Tagged } from './cbor.mjs';
+import { decode, mapGet, Tagged, textStrings } from './cbor.mjs';
 import { nodeVerify } from './keys.mjs';
 import { expectedAuxiliaryBytes, LABEL_MSG, LABEL_POE } from './record.mjs';
-import { containsMarker, equalBytes, fromHex, toHex, UserError } from './util.mjs';
+import { containsMarker, equalBytes, fromHex, stringContainsMarker, toHex, UserError } from './util.mjs';
 
 export const TTL_SLOTS = 7200; // two hours of one-second slots
 
@@ -104,51 +104,23 @@ function outputParts(o) {
   throw new Error('unrecognized output shape');
 }
 
-// Every post-build assertion, on the serialized bytes alone. Throws on the
-// first failure; returns the list of checks that passed.
-export function assertTransaction(bytes, expect) {
+function checker() {
   const checks = [];
   const ok = (name, cond, detail = '') => {
     if (!cond) throw new Error(`transaction check failed: ${name}${detail ? ` (${detail})` : ''}`);
     checks.push(name);
   };
+  return { checks, ok };
+}
 
-  const fixed = CSL.FixedTransaction.from_bytes(bytes);
-  const rawBody = new Uint8Array(fixed.raw_body());
-  const rawAux = fixed.raw_auxiliary_data() ? new Uint8Array(fixed.raw_auxiliary_data()) : null;
-  const parts = sliceTxComponents(bytes);
-  ok('the SDK and CSL slice the same body bytes', equalBytes(parts.txBody, rawBody));
-  ok('the SDK and CSL slice the same auxiliary-data bytes', rawAux !== null && parts.auxiliaryData !== null && equalBytes(parts.auxiliaryData, rawAux));
-
-  const txHash = toHex(blake2b256(rawBody));
-  ok('BLAKE2b-256 of the raw body equals the transaction hash', txHash === toHex(fixed.transaction_hash().to_bytes()) && (!expect.txHash || txHash === expect.txHash), txHash);
-  const committed = auxiliaryDataHashFromTxBody(rawBody);
-  ok('BLAKE2b-256 of the raw auxiliary data equals the body\'s auxiliary_data_hash', committed !== null && equalBytes(blake2b256(rawAux), committed));
-  ok('the SDK transaction binding accepts the bytes', bindTransactionBytes({ requestedTxHashHex: txHash, txBody: rawBody, auxiliaryData: rawAux }).ok);
-
-  ok('the auxiliary data is an untagged map with definite lengths, exactly as expected', equalBytes(rawAux, expectedAuxiliaryBytes(expect.chunks, expect.lines)));
-  const unwrapped = unwrapAuxiliaryData(rawAux);
-  ok('the metadata labels are exactly {309, 674}', unwrapped.metadataLabels.length === 2 && unwrapped.metadataLabels[0] === LABEL_POE && unwrapped.metadataLabels[1] === LABEL_MSG);
-  const aux = decode(rawAux);
-  const poe = mapGet(aux, LABEL_POE);
-  ok('every label-309 chunk is a byte string of 1 to 64 bytes', Array.isArray(poe) && poe.every((c) => c instanceof Uint8Array && c.length >= 1 && c.length <= 64));
-  const back = reassembleLabel309Value(unwrapped.label309);
-  ok('the label-309 value reassembles to the record body byte for byte', back.ok && equalBytes(back.body, expect.recordBody));
-  const msg = mapGet(mapGet(aux, LABEL_MSG), 'msg');
-  ok('the 674 message is exactly the expected digest line(s)', Array.isArray(msg) && msg.length === expect.lines.length && msg.every((l, i) => l === expect.lines[i]));
-  let refused = false;
-  try {
-    CSL.TransactionMetadatum.new_bytes(new Uint8Array(65));
-  } catch {
-    refused = true;
-  }
-  ok('CSL refuses a 65-byte metadata byte string', refused);
-
+// The body, the fee, the single output and the single payment witness: the
+// part of the assertions a record transaction and a sweep share.
+function assertBodyAndWitness(bytes, fixed, rawBody, txHash, expect, ok, allowedKeys) {
   ok(`no byte of the transaction contains "unfrack.it" in any letter case`, !containsMarker(bytes));
   ok('the size is within max_tx_size', bytes.length <= expect.maxTxSize, `${bytes.length} > ${expect.maxTxSize}`);
 
   const body = decode(rawBody);
-  for (const k of body.keys()) ok(`body field ${k} is one this tool writes`, BODY_KEYS_ALLOWED.has(k));
+  for (const k of body.keys()) ok(`body field ${k} is one this tool writes`, allowedKeys.has(k));
   ok('the body carries the network id', mapGet(body, 15) === expect.networkId);
   ok('the TTL is as built', BigInt(mapGet(body, 3)) === BigInt(expect.ttl));
   const fee = BigInt(mapGet(body, 2));
@@ -177,6 +149,66 @@ export function assertTransaction(bytes, expect) {
   ok('the witness key is the payment key', toHex(CSL.PublicKey.from_bytes(vk).hash().to_bytes()) === expect.paymentKeyHash);
   ok('the witness signature verifies against the body hash (CSL)', CSL.PublicKey.from_bytes(vk).verify(fromHex(txHash), CSL.Ed25519Signature.from_bytes(sig)));
   ok('the witness signature verifies against the body hash (OpenSSL)', nodeVerify(vk, fromHex(txHash), sig));
+  return fee;
+}
 
+// Every post-build assertion, on the serialized bytes alone. Throws on the
+// first failure; returns the list of checks that passed.
+export function assertTransaction(bytes, expect) {
+  const { checks, ok } = checker();
+
+  const fixed = CSL.FixedTransaction.from_bytes(bytes);
+  const rawBody = new Uint8Array(fixed.raw_body());
+  const rawAux = fixed.raw_auxiliary_data() ? new Uint8Array(fixed.raw_auxiliary_data()) : null;
+  const parts = sliceTxComponents(bytes);
+  ok('the SDK and CSL slice the same body bytes', equalBytes(parts.txBody, rawBody));
+  ok('the SDK and CSL slice the same auxiliary-data bytes', rawAux !== null && parts.auxiliaryData !== null && equalBytes(parts.auxiliaryData, rawAux));
+
+  const txHash = toHex(blake2b256(rawBody));
+  ok('BLAKE2b-256 of the raw body equals the transaction hash', txHash === toHex(fixed.transaction_hash().to_bytes()) && (!expect.txHash || txHash === expect.txHash), txHash);
+  const committed = auxiliaryDataHashFromTxBody(rawBody);
+  ok('BLAKE2b-256 of the raw auxiliary data equals the body\'s auxiliary_data_hash', committed !== null && equalBytes(blake2b256(rawAux), committed));
+  ok('the SDK transaction binding accepts the bytes', bindTransactionBytes({ requestedTxHashHex: txHash, txBody: rawBody, auxiliaryData: rawAux }).ok);
+
+  ok('the auxiliary data is an untagged map with definite lengths, exactly as expected', equalBytes(rawAux, expectedAuxiliaryBytes(expect.chunks, expect.lines)));
+  const unwrapped = unwrapAuxiliaryData(rawAux);
+  ok('the metadata labels are exactly {309, 674}', unwrapped.metadataLabels.length === 2 && unwrapped.metadataLabels[0] === LABEL_POE && unwrapped.metadataLabels[1] === LABEL_MSG);
+  const aux = decode(rawAux);
+  const poe = mapGet(aux, LABEL_POE);
+  ok('every label-309 chunk is a byte string of 1 to 64 bytes', Array.isArray(poe) && poe.every((c) => c instanceof Uint8Array && c.length >= 1 && c.length <= 64));
+  const back = reassembleLabel309Value(unwrapped.label309);
+  ok('the label-309 value reassembles to the record body byte for byte', back.ok && equalBytes(back.body, expect.recordBody));
+  ok('no byte of the reassembled record contains "unfrack.it" in any letter case (a string can straddle two chunks)', !containsMarker(back.body));
+  ok('no text string in the record contains "unfrack.it" in any letter case', ![...textStrings(decode(back.body))].some(stringContainsMarker));
+  const msg = mapGet(mapGet(aux, LABEL_MSG), 'msg');
+  ok('the 674 message is exactly the expected digest line(s)', Array.isArray(msg) && msg.length === expect.lines.length && msg.every((l, i) => l === expect.lines[i]));
+  ok('no text string in the auxiliary data contains "unfrack.it" in any letter case', ![...textStrings(aux)].some(stringContainsMarker));
+  let refused = false;
+  try {
+    CSL.TransactionMetadatum.new_bytes(new Uint8Array(65));
+  } catch {
+    refused = true;
+  }
+  ok('CSL refuses a 65-byte metadata byte string', refused);
+
+  const fee = assertBodyAndWitness(bytes, fixed, rawBody, txHash, expect, ok, BODY_KEYS_ALLOWED);
+  return { txHash, fee, size: bytes.length, checks };
+}
+
+// The same assertions for a sweep: no auxiliary data at all, one output to
+// the sweep target, no change.
+const SWEEP_BODY_KEYS = new Set([0, 1, 2, 3, 15]);
+
+export function assertSweep(bytes, expect) {
+  const { checks, ok } = checker();
+  const fixed = CSL.FixedTransaction.from_bytes(bytes);
+  const rawBody = new Uint8Array(fixed.raw_body());
+  const parts = sliceTxComponents(bytes);
+  ok('the SDK and CSL slice the same body bytes', equalBytes(parts.txBody, rawBody));
+  ok('the transaction carries no auxiliary data', !fixed.raw_auxiliary_data() && parts.auxiliaryData === null);
+  const txHash = toHex(blake2b256(rawBody));
+  ok('BLAKE2b-256 of the raw body equals the transaction hash', txHash === toHex(fixed.transaction_hash().to_bytes()) && (!expect.txHash || txHash === expect.txHash), txHash);
+  ok('the body carries no auxiliary_data_hash', auxiliaryDataHashFromTxBody(rawBody) === null);
+  const fee = assertBodyAndWitness(bytes, fixed, rawBody, txHash, expect, ok, SWEEP_BODY_KEYS);
   return { txHash, fee, size: bytes.length, checks };
 }

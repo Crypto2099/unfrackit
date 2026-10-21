@@ -13,6 +13,7 @@ import { coseSign1Label309Verify } from '@cardanowall/crypto-core/cose';
 import { decode, encode, mapGet } from './cbor.mjs';
 import { networkOf } from './koios.mjs';
 import { CONFIRMATION_THRESHOLD } from './journal.mjs';
+import { VERIFY_FLAGS } from './cardanowall.mjs';
 import { equalBytes, fromHex, toHex } from './util.mjs';
 
 export function explorerLinks(network, txHash) {
@@ -89,7 +90,7 @@ export async function sdkVerify({ network, txHash, koiosUrl }) {
 }
 
 export function cliVerify({ cli, network, txHash, koiosUrl }) {
-  const r = cli.json(['verify', txHash, '--network', network, '--cardano-gateway', koiosUrl, '--json']);
+  const r = cli.json(['verify', txHash, '--network', network, '--cardano-gateway', koiosUrl, '--json', ...VERIFY_FLAGS]);
   const j = r.json || {};
   return {
     exit: r.status,

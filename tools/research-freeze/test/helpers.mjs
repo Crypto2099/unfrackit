@@ -14,15 +14,24 @@ export function vector(rel) {
 export const hex = (b) => Buffer.from(b).toString('hex');
 export const unhex = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 
+// Every temporary directory a test creates is removed when the test process
+// exits, so no throwaway identity or mnemonic file outlives the run.
+const created = [];
+process.once('exit', () => {
+  for (const dir of created) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // A fresh home outside any git working tree.
 export function tempHome() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'research-freeze-test-'));
+  created.push(dir);
   fs.chmodSync(dir, 0o700);
   return path.join(dir, 'home');
 }
 
 export function tempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'research-freeze-files-'));
+  created.push(dir);
   return dir;
 }
 
