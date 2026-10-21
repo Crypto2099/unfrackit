@@ -7,7 +7,7 @@
 //   N = E + 1  if that block's slot < first slot of E + epoch length - W
 //   N = E + 2  otherwise,
 //
-// W being the randomness stabilisation window. The rule follows the Praos
+// W being the randomness stabilization window. The rule follows the Praos
 // nonce evolution in IntersectMBO/ouroboros-consensus (main at 46f4dffa,
 // ouroboros-consensus-protocol/.../Ouroboros/Consensus/Protocol/PolyPraos.hs):
 // a block's VRF output enters the candidate nonce only when
@@ -53,7 +53,7 @@ export function sameRatio(a, b) {
 // ceiling(4k / f) with f = num/den: ceiling(4k * den / num).
 export function randomnessStabilisationWindow({ securityParam, activeSlotCoeff, protocolMajor }) {
   if (!CONWAY_PROTOCOL_MAJORS.includes(protocolMajor)) {
-    throw new UserError(`this tool computes the randomness stabilisation window for Conway (protocol versions ${CONWAY_PROTOCOL_MAJORS.join(', ')}) only; the freeze block's epoch has protocol version ${protocolMajor}`);
+    throw new UserError(`this tool computes the randomness stabilization window for Conway (protocol versions ${CONWAY_PROTOCOL_MAJORS.join(', ')}) only; the freeze block's epoch has protocol version ${protocolMajor}`);
   }
   if (!Number.isSafeInteger(securityParam) || securityParam <= 0) throw new UserError(`not a security parameter: ${securityParam}`);
   const { num, den } = parseDecimal(activeSlotCoeff);
@@ -62,7 +62,7 @@ export function randomnessStabilisationWindow({ securityParam, activeSlotCoeff, 
 }
 
 export const DRAW_RULE =
-  'N = E + 1 if the freeze block\'s slot is earlier than the first slot of E plus the epoch length minus the randomness stabilisation window ceiling(4k/f), else N = E + 2';
+  'N = E + 1 if the freeze block\'s slot is earlier than the first slot of E plus the epoch length minus the randomness stabilization window ceiling(4k/f), else N = E + 2';
 
 export function drawPlan({ slot, epoch, epochSlot, securityParam, activeSlotCoeff, epochLength, protocolMajor }) {
   for (const [k, v] of Object.entries({ slot, epoch, epochSlot, epochLength })) {
@@ -70,7 +70,7 @@ export function drawPlan({ slot, epoch, epochSlot, securityParam, activeSlotCoef
   }
   if (epochSlot >= epochLength || epochSlot > slot) throw new UserError(`draw plan: epoch slot ${epochSlot} is inconsistent with slot ${slot} and epoch length ${epochLength}`);
   const window = randomnessStabilisationWindow({ securityParam, activeSlotCoeff, protocolMajor });
-  if (window >= epochLength) throw new UserError(`draw plan: the stabilisation window ${window} is not shorter than the epoch (${epochLength} slots)`);
+  if (window >= epochLength) throw new UserError(`draw plan: the stabilization window ${window} is not shorter than the epoch (${epochLength} slots)`);
   const firstSlot = slot - epochSlot;
   const cutoff = firstSlot + epochLength - window;
   const nonceEpoch = slot < cutoff ? epoch + 1 : epoch + 2;

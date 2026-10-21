@@ -199,7 +199,7 @@ test('cose: to-sign-verbatim, the published protected bytes enter Sig_structure 
     // headers, where the vector expects the signature to verify. This tool
     // only ever emits the canonical header, so its own records are unaffected.
     const r = coseSign1Label309Verify({ message: unhex(v.cose_sign1_hex), detachedRecordBodyCbor: unhex(v.record_body_cbor_hex) });
-    assert.equal(r.ok, false, `${v.name}: SDK behaviour changed; revisit this note`);
+    assert.equal(r.ok, false, `${v.name}: SDK behavior changed; revisit this note`);
   }
 });
 
