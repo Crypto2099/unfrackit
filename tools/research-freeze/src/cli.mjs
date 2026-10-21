@@ -9,6 +9,7 @@ import { requireAllPass } from './checks.mjs';
 import { Cardanowall } from './cardanowall.mjs';
 import { koiosFor, resolveRun, submitRun, waitRun, verifyRun, abandonJournal, sweep } from './ops.mjs';
 import { rehearse } from './rehearse.mjs';
+import { restoreIdentity } from './restore.mjs';
 import { dataciteCheck, ZenodoSandbox } from './registry.mjs';
 import { requireTty } from './tty.mjs';
 import { networkOf } from './koios.mjs';
@@ -19,13 +20,16 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
   init [--identity <name>]                   create an identity: two 24-word mnemonics; print the public facts
   show [--identity <name>]                   print the identity's public facts
   backup [--identity <name>]                 print both mnemonics for a paper backup (interactive terminal only)
+  restore --identity <name> [--signing-key <hex>]
+                                             recreate an identity from its two typed mnemonics (interactive terminal only)
   hash <manifest> [--identity <name>]        hash every file and run the byte-form and document checks
   build <manifest> --network <n> [--identity <name>] [--core-only]
                                              build, sign and check the record and its transaction; submits nothing
   check <run>                                re-run the offline checks on a run directory
   submit <run>                               submit the run's exact signed bytes (mainnet: interactive confirmation)
   wait <run>                                 wait for 15 confirmations and record the block facts
-  verify <run | tx-hash> --network <n>       verify on chain: this tool, the SDK and the cardanowall CLI
+  verify <run | tx-hash> --network <n> [--identity <name>]
+                                             verify on chain: this tool, the SDK and the cardanowall CLI
   abandon --network <n> [--identity <name>]  drop a journaled transaction whose TTL has passed and which never landed
   rehearse <manifest> --network preprod [--doi <doi>] | rehearse --resume <id> --network preprod
                                              the whole sequence on preprod with placeholder files
@@ -128,6 +132,16 @@ async function main() {
       say(`the funds sit at the enterprise address of ${p.payment_path}, which a default wallet restore does not show.`);
       say('');
       say(m.paymentMnemonic.split(' ').map((w, i) => `${String(i + 1).padStart(2)}. ${w}`).join('\n'));
+      say('');
+      say(`"restore --identity ${name}" recreates this identity from these words. Keep runs/ and journal/ of the home backed up with them.`);
+      return;
+    }
+    case 'restore': {
+      if (!flags.identity) throw new UserError('restore --identity <name> [--signing-key <hex>]');
+      const r = await restoreIdentity({ store, name: flags.identity, expectSigningKey: flags['signing-key'] });
+      say(`restored identity "${flags.identity}" in ${store.home}${r.checkedAgainst.length ? ` (checked against ${r.checkedAgainst.join(' and ')})` : ''}`);
+      printFacts(r.facts);
+      say('Keep runs/ and journal/ of the home backed up with the paper backup: they hold the signed bytes and the journal of every record.');
       return;
     }
     case 'hash': {
@@ -181,7 +195,7 @@ async function main() {
     case 'verify': {
       if (!args[0]) throw new UserError('verify <run | tx-hash> --network <n>');
       const network = needNetwork(flags);
-      const r = await verifyRun({ store, cli: Cardanowall.optional(), arg: args[0], network, log: note });
+      const r = await verifyRun({ store, cli: Cardanowall.optional(), arg: args[0], network, identityName: flags.identity, log: note });
       if (flags.json) {
         say(stringify(r, 2));
         return;

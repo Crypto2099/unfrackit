@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { Koios, networkOf } from './koios.mjs';
-import { journal, journalEntry, submitJournaled, waitConfirmed, abandon, assertNoUnresolved } from './journal.mjs';
+import { journal, journalEntry, journalEntries, submitJournaled, waitConfirmed, abandon, assertNoUnresolved } from './journal.mjs';
 import { loadRun, assertIdentityNetwork, defaultIdentity } from './build.mjs';
 import { verifyAll } from './verify.mjs';
 import { confirmMainnet } from './tty.mjs';
@@ -100,7 +100,7 @@ export async function waitRun({ store, dir, log = console.error }) {
   return facts;
 }
 
-export async function verifyRun({ store, cli, arg, network, log = console.error }) {
+export async function verifyRun({ store, cli, arg, network, identityName, log = console.error, koios: givenKoios }) {
   let dir = null;
   let txHash = arg;
   if (!/^[0-9a-f]{64}$/.test(arg)) {
@@ -109,19 +109,26 @@ export async function verifyRun({ store, cli, arg, network, log = console.error 
     dir = store.runDir(network, arg);
   }
   let expectedBody = null;
+  let expectedSigner = null;
   let address = [];
   if (dir) {
     const run = loadRun(dir);
     txHash = run.txHash;
     expectedBody = run.body;
+    expectedSigner = run.report.signing_public_key;
     if (run.report.network !== network) throw new UserError(`${txHash} is a ${run.report.network} run, not ${network}`);
     address = [run.report.payment_address];
   }
-  const koios = koiosFor(store, network, { addresses: address });
   if (!store.knownTxHashes(network).has(txHash)) throw new UserError(`refusing to verify ${txHash}: it is not one of this home's own ${network} transactions`);
+  if (!expectedSigner) {
+    // No run directory: the journal says which key built it, else the identity.
+    const entry = journalEntries(store, network).find((e) => e.txHash === txHash);
+    expectedSigner = entry?.signing_public_key || store.readPublic(identityName || defaultIdentity(network)).signing_public_key;
+  }
+  const koios = givenKoios || koiosFor(store, network, { addresses: address });
   koios.allowTx(txHash);
   await koios.guard();
-  const result = await verifyAll({ koios, cli, network, txHash, expectedBody });
+  const result = await verifyAll({ koios, cli, network, txHash, expectedBody, expectedSigner });
   if (dir) {
     const run = loadRun(dir);
     store.updateRunFile(dir, 'report.json', stringify({ ...run.report, verified: { at: new Date().toISOString(), ...result } }, 2) + '\n');

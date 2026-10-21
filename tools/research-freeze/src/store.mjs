@@ -154,6 +154,33 @@ export class Store {
     fs.writeFileSync(path.join(dir, 'public.json'), JSON.stringify(publicJson, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   }
 
+  // Recreate an identity's mnemonic files from typed words. Neither mnemonic
+  // file may exist; the identity directory and its public.json may (the
+  // caller has checked the derived keys against that file). `publicJson` is
+  // written only when the identity has none.
+  restoreIdentity(name, { signingMnemonic, paymentMnemonic, publicJson }) {
+    this.ensure();
+    const dir = this.identityDir(name);
+    for (const f of ['signing-mnemonic', 'payment-mnemonic']) {
+      if (fs.existsSync(path.join(dir, f))) throw new UserError(`identity "${name}" already has ${f} in ${this.home}; refusing to overwrite it`);
+    }
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { mode: 0o700 });
+    fs.chmodSync(dir, 0o700);
+    writeFileSynced(path.join(dir, 'signing-mnemonic'), signingMnemonic + '\n');
+    writeFileSynced(path.join(dir, 'payment-mnemonic'), paymentMnemonic + '\n');
+    if (publicJson) writeFileSynced(path.join(dir, 'public.json'), JSON.stringify(publicJson, null, 2) + '\n');
+    fsyncDir(dir);
+  }
+
+  existingMnemonicFiles(name) {
+    const dir = this.identityDir(name);
+    return ['signing-mnemonic', 'payment-mnemonic'].filter((f) => fs.existsSync(path.join(dir, f)));
+  }
+
+  hasPublic(name) {
+    return fs.existsSync(path.join(this.identityDir(name), 'public.json'));
+  }
+
   readPublic(name) {
     this.assertSafe();
     const p = path.join(this.identityDir(name), 'public.json');

@@ -2,6 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 import readline from 'node:readline/promises';
+import { Writable } from 'node:stream';
 import { UserError } from './util.mjs';
 
 export function requireTty(what, streams = { stdin: process.stdin, stdout: process.stdout }) {
@@ -23,5 +24,22 @@ export async function confirmMainnet(txHash, what, streams = { stdin: process.st
     if (answer.trim().toLowerCase() !== txHash.slice(0, 8)) throw new UserError('the digits did not match; nothing was sent');
   } finally {
     rl.close();
+  }
+}
+
+// Read one line without echoing it: the typed characters go to a muted
+// output, so a mnemonic typed here is never shown on the screen. The
+// interface (which puts a terminal into raw mode) exists before the prompt
+// is shown, so nothing typed after the prompt is echoed by the terminal.
+export async function askHidden(question, streams = { stdin: process.stdin, stdout: process.stdout }) {
+  const muted = new Writable({ write: (_chunk, _enc, cb) => cb() });
+  const rl = readline.createInterface({ input: streams.stdin, output: muted, terminal: Boolean(streams.stdin.isTTY && typeof streams.stdin.setRawMode === 'function') });
+  try {
+    const answer = rl.question('');
+    streams.stdout.write(question);
+    return await answer;
+  } finally {
+    rl.close();
+    streams.stdout.write('\n');
   }
 }
