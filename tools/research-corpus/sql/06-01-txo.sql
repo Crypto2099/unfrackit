@@ -102,6 +102,7 @@ ANALYZE study.asset;
 -- @query txo_counts
 SELECT (SELECT count(*) FROM study.txo) AS n_txo,
        (SELECT count(*) FROM study.txo WHERE via_payment) AS n_txo_via_payment,
+       (SELECT count(*) FROM study.txo WHERE payment_cred IS NULL) AS n_txo_payment_cred_null,
        (SELECT count(*) FROM study.txo WHERE consumed_tx IS NULL) AS n_unspent,
        (SELECT count(*) FROM study.txo_asset) AS n_txo_asset,
        (SELECT count(*) FROM study.asset) AS n_asset,

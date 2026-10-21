@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Koios, for the cross-checks of artifact A1 only (pre-registration sections
-// 5.1 and 10.5). Requests are spaced at least 150 ms apart and a 429 (or a
+// Koios, for the cross-checks of artifact A1 (pre-registration sections 5.1
+// and 10.5) and for the second reading of the genesis parameters and the
+// epoch nonce that keys the draw. Requests are spaced at least 150 ms apart and a 429 (or a
 // 5xx) is retried after the server's Retry-After, else with exponential
 // backoff. On mainnet the study's own registered-tier token is sent, read from
 // RESEARCH_CORPUS_KOIOS_TOKEN; on test networks no token is sent at all. The
@@ -54,6 +55,17 @@ export class Koios {
       if (!res.ok) throw new Error(`Koios ${method} ${path}: ${res.status} ${text.slice(0, 200)}`);
       return JSON.parse(text);
     }
+  }
+
+  async genesis() {
+    const [g] = await this.request('GET', '/genesis?select=networkmagic,securityparam,activeslotcoeff,epochlength');
+    return g;
+  }
+
+  async epochNonce(epochNo) {
+    const rows = await this.request('GET', `/epoch_params?_epoch_no=${Number(epochNo)}&select=epoch_no,nonce`);
+    const r = rows.find((x) => Number(x.epoch_no) === Number(epochNo));
+    return { nonce: r ? r.nonce : null, read_at: new Date().toISOString() };
   }
 
   async tip() {

@@ -20,6 +20,10 @@
 --                                                the point, by default, or only
 --                                                those present at the point
 --                                                (x12_history false)
+--   n_pay_key                                    the same count over key payment
+--                                                credentials only; reported beside
+--                                                the cap, which counts every
+--                                                credential (X12's accepted default)
 --
 -- n_assets counts distinct assets (policy and name). n_nft counts the assets
 -- held as non-fungible by the classification rule of section 6.2 over the
@@ -73,16 +77,16 @@ ANALYZE study.state;
 DROP TABLE IF EXISTS study.paycount;
 CREATE TABLE study.paycount AS
 WITH p AS (
-  SELECT 'snap'::text AS point, sa_id, payment_cred FROM study.txo
+  SELECT 'snap'::text AS point, sa_id, payment_cred, bool_and(NOT script_pay) AS key_cred FROM study.txo
    WHERE created_tx <= {{snap_tx}}
      AND ({{x12_history}} OR consumed_tx IS NULL OR consumed_tx > {{snap_tx}})
    GROUP BY sa_id, payment_cred
   UNION ALL
-  SELECT 'peak_end', sa_id, payment_cred FROM study.txo
+  SELECT 'peak_end', sa_id, payment_cred, bool_and(NOT script_pay) FROM study.txo
    WHERE created_tx <= {{peak_t_end}}
      AND ({{x12_history}} OR consumed_tx IS NULL OR consumed_tx > {{peak_t_end}})
    GROUP BY sa_id, payment_cred
 )
-SELECT point, sa_id, count(*) AS n_pay FROM p GROUP BY point, sa_id;
+SELECT point, sa_id, count(*) AS n_pay, count(*) FILTER (WHERE key_cred) AS n_pay_key FROM p GROUP BY point, sa_id;
 CREATE INDEX paycount_point_sa ON study.paycount (point, sa_id);
 ANALYZE study.paycount;

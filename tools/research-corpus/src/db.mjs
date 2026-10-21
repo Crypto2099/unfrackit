@@ -12,13 +12,18 @@
 // Guards:
 // - The first statement reads db-sync's own bookkeeping (meta, schema_version,
 //   extra_migrations), as db-sync's health checks do. A database whose extra
-//   migrations show prune or bootstrap has deleted history and is refused; one
-//   with consumed must still have tx_in rows.
-// - A mainnet database is refused unless the freeze transaction hash is given,
-//   that transaction's block is in the database, and the snapshot block's
-//   height is greater (pre-registration section 10.1), so no study query runs
-//   before the freeze. Plan capture (EXPLAIN, which reads planner statistics)
-//   is refused on mainnet.
+//   migrations show prune or bootstrap has deleted history and is refused.
+//   db-sync records the consumed configuration as ConsumeTxOutPreviouslySet
+//   (cardano-db, Cardano/Db/Types.hs), so the match is on "consume"; and
+//   every database must have tx_in rows, whatever its configuration says.
+//   Probes then check that db-sync inserted what the SQL reads (db_probes in
+//   05-01-snapshot.sql); a missing insert option would otherwise empty a
+//   measure silently.
+// - The session must have standard_conforming_strings on. Parameters are
+//   written as decode() calls and do not depend on it, but any string literal
+//   with a backslash would.
+// - The mainnet guards (the final freeze, the code manifest, the run options)
+//   live in src/guards.mjs and src/freeze.mjs.
 
 import pg from 'pg';
 import { readFileSync } from 'node:fs';
@@ -71,6 +76,11 @@ export async function connect(opts = {}) {
   });
   await client.connect();
   await client.query("SET search_path = public, pg_catalog");
+  const scs = (await client.query('SHOW standard_conforming_strings')).rows[0].standard_conforming_strings;
+  if (scs !== 'on') {
+    await client.end();
+    throw new Error(`refusing: standard_conforming_strings is ${scs}`);
+  }
   return client;
 }
 
@@ -102,13 +112,22 @@ export async function dbMeta(client, blocks) {
   return { network: r.network_name, version: r.version, startTime: r.start_time, schemaVersion: JSON.parse(r.schema_version), extraMigrations: migrations };
 }
 
-export async function checkHistoryIntact(client, blocks, meta) {
-  const bad = meta.extraMigrations.filter((t) => /prune|bootstrap/i.test(t));
+export const PROBES = ['tx_in', 'multi_asset', 'ma_tx_out', 'ma_tx_mint', 'metadata_674', 'redeemer', 'inline_datum', 'epoch_nonce'];
+
+export function checkMigrations(extraMigrations) {
+  const bad = extraMigrations.filter((t) => /prune|bootstrap/i.test(t));
   if (bad.length) throw new Error(`refusing: extra_migrations shows ${bad.join(', ')}; history has been deleted`);
-  if (meta.extraMigrations.some((t) => /consumed/i.test(t))) {
-    const r = (await client.query(blocks.get('tx_in_nonempty').statements[0])).rows[0];
-    if (!r.nonempty) throw new Error('refusing: consumed is configured and tx_in is empty');
-  }
+  return { consumed: extraMigrations.some((t) => /consume/i.test(t)) };
+}
+
+// Returns the probe results; throws when any is missing.
+export async function checkHistoryIntact(client, blocks, meta) {
+  const m = checkMigrations(meta.extraMigrations);
+  const r = (await client.query(blocks.get('db_probes').statements[0])).rows[0];
+  const missing = PROBES.filter((k) => r[k] !== true);
+  if (missing.includes('tx_in') && m.consumed) throw new Error('refusing: consumed is configured and tx_in is empty');
+  if (missing.length) throw new Error(`refusing: db-sync inserted nothing for ${missing.join(', ')}`);
+  return Object.fromEntries(PROBES.map((k) => [k, r[k]]));
 }
 
 // Runs a named query block with typed parameters.
@@ -138,10 +157,26 @@ function headOf(sql) {
     .slice(0, 160);
 }
 
+// A plan with every row estimate, row count, width and cost removed: what is
+// left is the shape of the plan (node types, join methods, indexes, filters),
+// which is what a live-fire check needs, and no number derived from the data.
+const PLAN_NUMBERS = /Rows|Width|Cost|Loops|Blocks|Heap Fetches|Workers Launched|Time/;
+export function stripPlan(node) {
+  if (Array.isArray(node)) return node.map(stripPlan);
+  if (node && typeof node === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(node)) if (!PLAN_NUMBERS.test(k)) out[k] = stripPlan(v);
+    return out;
+  }
+  return node;
+}
+
 // Executes one statement. With capture, an explainable statement runs under
 // EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON), which executes it, and the plan is
-// returned with the wall time.
-export async function exec(client, sql, { capture = false } = {}) {
+// returned with the wall time. With explain, an explainable statement is first
+// planned under plain EXPLAIN (FORMAT JSON), which does not execute it, the
+// plan is kept with its numbers stripped, and the statement then runs.
+export async function exec(client, sql, { capture = false, explain = false } = {}) {
   const body = sql.replace(/^(\s*--[^\n]*\n)+/, '');
   const t0 = performance.now();
   let res;
@@ -149,6 +184,9 @@ export async function exec(client, sql, { capture = false } = {}) {
   if (capture && EXPLAINABLE.test(body)) {
     res = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${body}`);
     plan = res.rows[0]['QUERY PLAN'];
+  } else if (explain && EXPLAINABLE.test(body)) {
+    plan = stripPlan((await client.query(`EXPLAIN (FORMAT JSON) ${body}`)).rows[0]['QUERY PLAN']);
+    res = await client.query(body);
   } else {
     res = await client.query(body);
   }
@@ -156,7 +194,7 @@ export async function exec(client, sql, { capture = false } = {}) {
   const tm = TARGET.exec(body);
   const target = tm ? (tm[1] || tm[2] || tm[3]).toLowerCase() : null;
   const kind = tm ? (tm[1] ? 'create' : tm[2] ? 'insert' : 'delete') : null;
-  let rowCount = plan ? null : res.rowCount;
-  if (plan && kind === 'create') rowCount = plan[0].Plan['Actual Rows'] * (plan[0].Plan['Actual Loops'] || 1);
+  let rowCount = capture && plan ? null : res.rowCount;
+  if (capture && plan && kind === 'create') rowCount = plan[0].Plan['Actual Rows'] * (plan[0].Plan['Actual Loops'] || 1);
   return { head: headOf(body), ms, rowCount, target, kind, plan };
 }

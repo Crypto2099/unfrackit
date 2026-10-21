@@ -11,21 +11,45 @@
 // Each set is compared at the database tip T: the database side is the
 // reference query at T (db-sync's tables only), the other side is read at its
 // own tip, and every transaction touching the credential after T is listed
-// through Koios. With none, the sets must be equal; with some, a difference is
-// reported as explained only if every differing line belongs to one of those
-// transactions.
+// through Koios. With none, the sets must be equal. With some, a difference is
+// explained only if every line found only on the other side was created by one
+// of those transactions, and every line found only in the database is an
+// input that one of those transactions spends (Koios tx_info inputs).
+//
+// Pointer addresses (CIP-19 header types 4 and 5) are left out of the node
+// comparison on both sides: db-sync attributes pointer outputs to the stake
+// credential before Conway and not after (Era/Universal/Insert/Other.hs), while
+// the node's query by address returns them all. The count left out is
+// reported.
 
 import { q } from './db.mjs';
 import { Koios } from './koios.mjs';
 import { fromKoios, fromNode, diff, sortLines } from './canon.mjs';
 import { nodeTip, nodeUtxoByAddress } from './nodequery.mjs';
 
-function explained(d, laterTxs) {
+// d.onlyA: lines in the database only; d.onlyB: lines on the other side only.
+// spent: the set of "<tx hash>#<index>" inputs of the later transactions.
+export function explained(d, laterTxs, spent) {
   const later = new Set(laterTxs.map((t) => t.tx_hash));
-  const all = [...d.onlyA, ...d.onlyB];
-  // A line created after T names a later transaction; a line spent after T is
-  // in the database set only, and Koios lists its spending transaction.
-  return all.length > 0 && laterTxs.length > 0 && d.onlyB.every((l) => later.has(l.split('#')[0]));
+  const ref = (l) => l.split(':')[0];
+  if (d.onlyA.length + d.onlyB.length === 0 || laterTxs.length === 0) return false;
+  return d.onlyB.every((l) => later.has(l.split('#')[0])) && d.onlyA.every((l) => spent.has(ref(l)));
+}
+
+// CIP-19 header types 4 and 5 (pointer delegation part), from the bech32 text:
+// the first data character encodes the header's type and the network tag's
+// high bit, which is 0 on both networks, so types 4 and 5 read g and 2.
+export const isPointerAddress = (a) => /^addr(_test)?1[g2]/.test(a);
+
+async function spentInputs(koios, laterTxs) {
+  const spent = new Set();
+  const hashes = [...new Set(laterTxs.map((t) => t.tx_hash))];
+  for (let i = 0; i < hashes.length; i += 50) {
+    for (const tx of await koios.txInfo(hashes.slice(i, i + 50))) {
+      for (const inp of tx.inputs || []) spent.add(`${inp.tx_hash}#${Number(inp.tx_index)}`);
+    }
+  }
+  return spent;
 }
 
 export async function a1Compare({ client, blocks, network, views, nodeViews = [], node = null, log = () => {} }) {
@@ -44,6 +68,7 @@ export async function a1Compare({ client, blocks, network, views, nodeViews = []
     const dbLines = sortLines(dbRows.map((r) => r.line));
     const kLines = fromKoios(await koios.accountUtxos(view));
     const later = await koios.accountTxsAfter(view, T.block_no);
+    const spent = later.length ? await spentInputs(koios, later) : new Set();
     const d = diff(dbLines, kLines);
     const equal = d.onlyA.length === 0 && d.onlyB.length === 0;
     const r = {
@@ -52,16 +77,18 @@ export async function a1Compare({ client, blocks, network, views, nodeViews = []
       n_db: dbLines.length,
       n_koios: kLines.length,
       later_txs: later.map((t) => ({ tx_hash: t.tx_hash, block_height: Number(t.block_height) })),
-      koios: { equal, only_db: d.onlyA.length, only_koios: d.onlyB.length, explained_by_later_txs: !equal && explained(d, later), diff_sample: equal ? [] : [...d.onlyA.slice(0, 3), ...d.onlyB.slice(0, 3)] }
+      koios: { equal, only_db: d.onlyA.length, only_koios: d.onlyB.length, explained_by_later_txs: !equal && explained(d, later, spent), diff_sample: equal ? [] : [...d.onlyA.slice(0, 3), ...d.onlyB.slice(0, 3)] }
     };
     if (node && nodeViews.includes(view)) {
-      const addrs = (await q(client, blocks, 'wallet_addresses', { sa_id: { type: 'int', value: s.sa_id } })).map((x) => x.address);
+      const all = (await q(client, blocks, 'wallet_addresses', { sa_id: { type: 'int', value: s.sa_id } })).map((x) => x.address);
+      const addrs = all.filter((a) => !isPointerAddress(a));
       const merged = {};
       for (const a of addrs) Object.assign(merged, nodeUtxoByAddress(node, a));
       const nLines = fromNode(merged);
-      const dn = diff(dbLines, nLines);
+      const dbNodeLines = sortLines(dbRows.filter((x) => !isPointerAddress(x.address)).map((x) => x.line));
+      const dn = diff(dbNodeLines, nLines);
       const eq = dn.onlyA.length === 0 && dn.onlyB.length === 0;
-      r.node = { addresses: addrs.length, n_node: nLines.length, equal: eq, only_db: dn.onlyA.length, only_node: dn.onlyB.length, explained_by_later_txs: !eq && explained(dn, later), diff_sample: eq ? [] : [...dn.onlyA.slice(0, 3), ...dn.onlyB.slice(0, 3)] };
+      r.node = { addresses: addrs.length, pointer_addresses_left_out: all.length - addrs.length, n_db: dbNodeLines.length, n_node: nLines.length, equal: eq, only_db: dn.onlyA.length, only_node: dn.onlyB.length, explained_by_later_txs: !eq && explained(dn, later, spent), diff_sample: eq ? [] : [...dn.onlyA.slice(0, 3), ...dn.onlyB.slice(0, 3)] };
     }
     results.push(r);
     log(`a1 ${view.slice(0, 20)}...: db ${r.n_db}, koios ${r.n_koios}${r.node ? `, node ${r.node.n_node}` : ''}, later txs ${later.length}`);

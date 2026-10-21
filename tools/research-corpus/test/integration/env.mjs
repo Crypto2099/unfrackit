@@ -11,6 +11,7 @@
 //   RESEARCH_CORPUS_TEST_TAG                     names the run ids and the results directory
 //   RESEARCH_CORPUS_NODE_CONTAINER               the preprod node's container, for the node query
 //   RESEARCH_CORPUS_DBTOOL_IMAGE                 the pinned db-sync image, for cardano-db-tool
+//   RESEARCH_CORPUS_REHEARSAL_DIR                the freeze tool's preprod rehearsal directory (T13; optional)
 //
 // The seeder is used only through its documented commands `address <shape>`
 // and `verify <shape>`, run from its folder, and through its deterministic

@@ -15,7 +15,7 @@ test('statement splitter respects quotes, dollar quotes and comments', () => {
 
 test('literals are typed and refuse bad values', () => {
   assert.equal(literal('a', { type: 'int', value: 12n }), '12');
-  assert.equal(literal('a', { type: 'bytea', value: 'AbCd' }), "'\\xabcd'::bytea");
+  assert.equal(literal('a', { type: 'bytea', value: 'AbCd' }), "decode('abcd', 'hex')");
   assert.equal(literal('a', { type: 'text', value: "it's" }), "'it''s'");
   assert.equal(literal('a', { type: 'intarr', value: [1, 2] }), 'ARRAY[1,2]::bigint[]');
   assert.throws(() => literal('a', { type: 'int', value: '1; DROP' }));
@@ -38,7 +38,7 @@ test('every SQL file parses, is UTF-8 with LF and no BOM, and every placeholder 
     }
   };
   const params = sqlParams(run);
-  const callTime = new Set(['block_hash', 'block_id', 'tx_hash', 'sa_ids', 't', 'sa_id', 'snap_hash', 'view']);
+  const callTime = new Set(['block_hash', 'block_id', 'tx_hash', 'sa_ids', 't', 'sa_id', 'snap_hash', 'view', 'epoch_no']);
   for (const [name, b] of blocks) {
     for (const st of b.statements) {
       for (const p of placeholders(st)) assert.ok(p in params || callTime.has(p), `${name}: unknown parameter ${p}`);

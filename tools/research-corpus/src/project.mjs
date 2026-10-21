@@ -27,6 +27,7 @@ export const DRIVER = {
   flow: 'stake_address',
   draw: 'stake_address',
   strata_list_table: null,
+  ft_floor: 'ma_tx_out',
   nft_top: 'ma_tx_out',
   strata: 'ma_tx_out',
   split: 'sample',

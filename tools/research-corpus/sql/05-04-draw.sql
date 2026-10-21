@@ -21,7 +21,8 @@
 -- within the guard.
 --
 -- study.sample(frame, kind, stratum, sa_id, draw_rank, prevalence_member,
--- split); draw_rank is the 1-based position in the frame's draw order.
+-- split, excluded_6_1); draw_rank is the 1-based position in the frame's draw
+-- order; excluded_6_1 is set by the section 6.1 check.
 
 -- @step draw
 -- @outputs study.draw_order study.draw_summary study.sample
@@ -73,6 +74,7 @@ CREATE TABLE study.sample (
   draw_rank bigint NOT NULL,
   prevalence_member boolean NOT NULL,
   split text,
+  excluded_6_1 boolean,
   PRIMARY KEY (frame, kind, stratum, sa_id)
 );
 INSERT INTO study.sample (frame, kind, stratum, sa_id, draw_rank, prevalence_member)
@@ -110,3 +112,47 @@ SELECT b.frame,
        count(f.sa_id) FILTER (WHERE NOT f.tok AND f.draw_key <= b.ada_bound) AS ada_only_prefix
   FROM b LEFT JOIN study.frame f ON f.frame = b.frame AND f.consented AND f.eligible_unless_consented
  GROUP BY b.frame ORDER BY b.frame DESC;
+
+-- The bound of every sample, for an outsider's reproduction: the draw key of
+-- the last wallet taken, and how many consented keys (eligible but for their
+-- removal, and of the sample's kind) have a draw key at or below it. A
+-- reproduction that takes every eligible key of the kind up to the bound, in
+-- draw order and with the same skipping, differs from the published sample by
+-- at most that many wallets. For a stratum, a consented key counts if it
+-- holds the stratum's assets at the frame's points, as fill_strata reads them.
+-- @query sample_bounds
+WITH g AS (
+  SELECT frame, kind, stratum, count(*) AS n, max(draw_rank) AS last_k
+    FROM study.sample GROUP BY frame, kind, stratum
+),
+b AS (
+  SELECT g.frame, g.kind, g.stratum, g.n, d.draw_key AS bound
+    FROM g JOIN study.draw_order d ON d.frame = g.frame AND d.k = g.last_k
+),
+pts AS (
+  SELECT 'recent'::text AS frame, {{snap_tx}}::bigint AS t1, {{snap_tx}}::bigint AS t2
+  UNION ALL SELECT 'peak', {{peak_t_start}}::bigint, {{peak_t_end}}::bigint
+),
+cons AS (
+  SELECT f.frame, f.sa_id, f.tok, f.draw_key FROM study.frame f WHERE f.consented AND f.eligible_unless_consented
+),
+cons_holds AS (
+  SELECT DISTINCT c.frame, c.sa_id, l.stratum
+    FROM cons c
+    JOIN pts p ON p.frame = c.frame
+    JOIN study.txo t ON t.sa_id = c.sa_id
+    JOIN study.txo_asset a ON a.tx_out_id = t.tx_out_id
+    JOIN study.asset s ON s.ident = a.ident
+    JOIN study.strata_all l ON l.policy = s.policy AND (l.asset_name IS NULL OR s.name = l.asset_name)
+                           AND (NOT l.nft_only OR coalesce(s.label NOT IN (333, 444), true))
+   WHERE (t.created_tx <= p.t1 AND (t.consumed_tx IS NULL OR t.consumed_tx > p.t1))
+      OR (t.created_tx <= p.t2 AND (t.consumed_tx IS NULL OR t.consumed_tx > p.t2))
+)
+SELECT b.frame, b.kind, b.stratum, b.n, encode(b.bound, 'hex') AS bound,
+       (SELECT count(*) FROM cons c
+         WHERE c.frame = b.frame AND c.draw_key <= b.bound
+           AND CASE b.kind WHEN 'random' THEN c.tok
+                           WHEN 'ada_only' THEN NOT c.tok
+                           ELSE EXISTS (SELECT 1 FROM cons_holds h
+                                         WHERE h.frame = c.frame AND h.sa_id = c.sa_id AND h.stratum = b.stratum) END) AS consented_at_or_below
+  FROM b ORDER BY b.frame DESC, b.kind, b.stratum;

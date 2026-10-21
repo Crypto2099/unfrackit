@@ -5,7 +5,8 @@
 -- the snapshot, the set from the reference query, the set from the life table
 -- and the set read directly are compared as sets of (transaction hash, index,
 -- lovelace, sorted assets). A wallet whose sets differ is excluded and
--- counted.
+-- counted: study.sample.excluded_6_1 is set for every sample row, and every
+-- count over the sample after this step leaves excluded wallets out.
 --
 -- The driver runs the three digest queries of 06-01-utxo-at-block.sql over the
 -- sampled wallets in batches and loads the results here, so the check uses the
@@ -33,6 +34,22 @@ INSERT INTO study.check_61 (sa_id, n_ref, d_ref, n_life, d_life, n_direct, d_dir
 SELECT x.sa_id, x.n_ref, x.d_ref, x.n_life, x.d_life, x.n_direct, x.d_direct, x.direct_valid, x.agree
   FROM json_to_recordset($1::json) AS x(sa_id bigint, n_ref bigint, d_ref text, n_life bigint, d_life text,
                                         n_direct bigint, d_direct text, direct_valid boolean, agree boolean);
+
+-- @query check_61_mark
+UPDATE study.sample s SET excluded_6_1 = NOT k.agree FROM study.check_61 k WHERE k.sa_id = s.sa_id;
+
+-- Sampled wallets with any output at a pointer address (CIP-19 header types 4
+-- and 5, which bech32-encode as addr1g / addr12, or addr_test1g /
+-- addr_test12: the first five data bits are the header's type and the high
+-- bit of the network tag, 0 on both networks). db-sync gives pointer outputs
+-- a stake_address_id before Conway and none from Conway on, so such a wallet
+-- keeps its pointer outputs from before Conway and loses later ones.
+-- @query pointer_wallets
+SELECT count(DISTINCT t.sa_id) AS n_wallets_with_pointer_outputs
+  FROM study.txo t
+  JOIN study.sample_wallet w ON w.sa_id = t.sa_id AND w.in_sample
+  JOIN public.tx_out o ON o.id = t.tx_out_id
+ WHERE o.address ~ '^addr(_test)?1[g2]';
 
 -- @query check_61_counts
 SELECT count(*) FILTER (WHERE w.in_sample) AS n_wallets,

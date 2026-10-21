@@ -46,10 +46,11 @@ CREATE INDEX unfrackit_tx_tx_id ON study.unfrackit_tx (tx_id);
 
 -- @query unfrackit_report
 WITH k AS (
-  SELECT count(*) AS n_674, count(*) FILTER (WHERE json IS NULL) AS n_674_json_null
+  SELECT count(*) AS n_674, count(*) FILTER (WHERE json IS NULL) AS n_674_json_null,
+         count(*) FILTER (WHERE jsonb_typeof(json -> 'msg') = 'array') AS n_674_msg_array
     FROM public.tx_metadata WHERE key = 674 AND tx_id <= {{snap_tx}}
 )
-SELECT k.n_674, k.n_674_json_null,
+SELECT k.n_674, k.n_674_json_null, k.n_674_msg_array,
        (SELECT count(*) FROM study.unfrackit_tx WHERE source = 'json') AS n_match_json,
        (SELECT count(*) FROM study.unfrackit_tx WHERE source = 'bytes') AS n_match_bytes,
        (SELECT min(b.time)::text FROM study.unfrackit_tx u JOIN public.tx t ON t.id = u.tx_id
@@ -106,8 +107,9 @@ SELECT sa_id, tx
    AND abs(v[6] / s - 0.05) <= 0.002
    AND abs(v[7] / s - 0.05) <= 0.002;
 
--- Per frame of the sample: wallets flagged by each classifier over their whole
--- history, and those with a flagged transaction inside the frame's window.
+-- Per frame of the sample, less the wallets the section 6.1 check excluded:
+-- wallets flagged by each classifier over their whole history, and those with
+-- a flagged transaction inside the frame's window.
 -- @query prior_counts
 SELECT f.frame,
        count(*) AS n_wallets,
@@ -118,4 +120,6 @@ SELECT f.frame,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM study.prior_evolution p WHERE p.sa_id = f.sa_id)) AS evolution_any,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM study.prior_evolution p WHERE p.sa_id = f.sa_id
                                        AND p.tx BETWEEN f.lo AND f.hi)) AS evolution_in_window
-  FROM study.sample_frame f WHERE f.in_sample GROUP BY f.frame ORDER BY f.frame DESC;
+  FROM study.sample_frame f
+ WHERE f.in_sample AND NOT EXISTS (SELECT 1 FROM study.check_61 k WHERE k.sa_id = f.sa_id AND NOT k.agree)
+ GROUP BY f.frame ORDER BY f.frame DESC;
