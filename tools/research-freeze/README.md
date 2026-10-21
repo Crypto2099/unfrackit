@@ -37,7 +37,7 @@ The home is `${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research-freeze/`, o
 
 ```
 identities/<name>/signing-mnemonic    identities/<name>/payment-mnemonic    identities/<name>/public.json
-journal/<network>.json                runs/<network>/<tx hash>/             rehearsals/<id>/
+journal/<network>.json (and .lock)    runs/<network>/<tx hash>/             rehearsals/<id>/
 secrets/                              tmp/
 ```
 
@@ -81,7 +81,7 @@ Run `show --identity <name>` and send a few ADA (a few tADA on preprod) to the p
 | `submit <run>` | Submits the run's exact signed bytes through the journal. On mainnet it requires an interactive terminal and the operator typing the first eight hex digits of the transaction hash. |
 | `wait <run>` | Polls until 15 confirmations, then records the block height, block hash, slot and block time. |
 | `verify <run or tx hash> --network <n> [--json]` | Verifies on chain three ways (see Checks) and prints the block facts with links to two explorers. Accepts only the home's own transactions. |
-| `abandon --network <n>` | Drops a journaled transaction, only after its TTL has passed, while Koios does not know its hash and its inputs are unspent. |
+| `abandon --network <n>` | Drops a journaled transaction, only after its TTL has passed, while Koios does not know its hash (`/tx_status`, `/tx_info`, the address history) and, unless it is recorded as failed, its inputs are unspent. |
 | `rehearse <manifest> --network preprod [--doi <doi>]` | Runs the whole sequence on preprod with the `rehearsal` identity. `--resume <id>` continues an interrupted rehearsal. Refuses mainnet. |
 | `registry datacite <doi> [--tx <hash>]` | Fetches `https://api.datacite.org/dois/<doi>` and reports whether it resolves, its `resourceTypeGeneral`, and whether its related identifiers carry the record URI with `URL` and `IsSupplementedBy`. Exits 0 when the DOI resolves (and the back-link is present, with `--tx`), 1 when the back-link is missing, 2 when the DOI does not resolve. |
 | `registry zenodo-sandbox <step>` | Rehearses the registry deposit on `https://sandbox.zenodo.org` in steps: `create` (a draft with a reserved DOI), `upload <id> <file>` (checks the MD5 Zenodo reports), `link <id> --tx <hash> --embargo <YYYY-MM-DD>` (embargoed access, CC BY 4.0, and the record URI as a related identifier with relation `isSupplementedBy`), `publish <id>`, and `check <id>` (the scheme Zenodo assigned, the DataCite export, the anonymous download). The token comes from `secrets/zenodo-sandbox.token` (0600) or `RESEARCH_FREEZE_ZENODO_SANDBOX_TOKEN`; a production Zenodo token does not work in the sandbox. Every request and response is logged under `registry/zenodo-sandbox/` with the token redacted. |
@@ -144,18 +144,18 @@ The transaction spends every pure-ADA UTxO at the payment address and returns on
 
 `submit` keeps a journal per network in the home:
 
-1. The journal entry (network, transaction hash, signed CBOR, TTL, inputs) is written before the first submission, and no second transaction is written for a network while an unresolved one is journaled.
+1. The journal entry (network, transaction hash, signed CBOR, TTL, inputs, record kind, stage and signing key) is written before the first submission, and no second transaction is written for a network while an unresolved one is journaled. Every read-modify-write of a journal holds an exclusive lock file (`journal/<network>.lock`); a second invocation that finds it refuses rather than racing. Each new journal is flushed to disk before it is renamed into place, and the directory is flushed after the rename.
 2. Every resubmission sends the identical bytes; nothing is rebuilt automatically.
 3. The transaction id Koios returns must equal the computed hash.
-4. If the node answers "All inputs are spent", "already been included" or `BadInputsUTxO`, the tool looks the hash up for up to ten minutes. Seen with confirmations, the transaction counts as submitted. Not seen while its inputs are spent, the tool stops with "inputs consumed by another transaction", which is a failure.
+4. If the node answers "All inputs are spent", "already been included" or `BadInputsUTxO`, the tool looks the hash up (`/tx_status`, then `/tx_info`) for up to ten minutes. Found, the transaction counts as submitted. If its inputs then read as spent, the tool still decides nothing from one negative answer (CIP-190, "Structural validation, verifier roles, and error codes", Part B, "Pipeline", step 1): it looks the hash up for a further ten minutes and then in the payment address's own transaction history (`/address_txs`), where any transaction that spent those inputs must appear, because only this payment key can spend them. Still not found, the entry is recorded as `failed`. A failed entry stays unresolved: `build` refuses until `wait` sees the transaction land or `abandon` releases it.
 5. Any other rejection stops with the node's message verbatim.
-6. An entry can be abandoned only after its TTL has passed, while the hash is unknown to Koios and its inputs are unspent.
+6. An entry can be abandoned only after its TTL has passed, while Koios knows nothing of its hash (`/tx_status`, `/tx_info` and the address history), and, unless it is recorded as failed, while its inputs are unspent. A failed entry's inputs are spent by definition, so for it the hash checks decide.
 
-Koios `POST /submittx` takes the raw CBOR with `content-type: application/cbor`; success is HTTP 202 with the transaction id. Requests are spaced, and 429 and 5xx answers are retried with the server's `Retry-After`. `wait` polls until 15 confirmations, CIP-190's recommended threshold and the reference CLI's default, and records the block facts.
+Koios `POST /submittx` takes the raw CBOR with `content-type: application/cbor`; success is HTTP 202 with the transaction id. Requests are spaced, and 429 and 5xx answers are retried after the server's `Retry-After` (seconds or an HTTP date, capped at ten minutes for a resubmission), or with backoff when it sends none. `wait` polls until 15 confirmations, CIP-190's recommended threshold and the reference CLI's default; a `/tx_info` answer without the block means "not yet". It records the confirmation count and the block facts Koios reports; those come from one provider, and `verify` reads them again from two (see Checks).
 
 ### What the tool queries
 
-Before the freeze block no study query may run, so the tool sends Koios only `/genesis`, `/tip`, `/epoch_params`, `/address_utxos` for the identity's own payment address, `/submittx`, and `/tx_status`, `/tx_info` and `/tx_cbor` for its own transactions. The Koios client refuses any other address or transaction hash. It never queries another address, account, asset or transaction. The network guard runs before anything is built or signed: `/genesis` must report network magic 764824073 and `Mainnet` for `--network mainnet`, or 1 and `Testnet` for `preprod`. The SDK verifier and the reference CLI, run by `verify`, read only `/tx_cbor`, `/tx_info` and `/tip` for the same transaction; their audit trails, which `verify --json` prints, show each call.
+Before the freeze block no study query may run, so the tool sends Koios only `/genesis`, `/tip`, `/epoch_params`, `/address_utxos` and `/address_txs` for the identity's own payment address, `/submittx`, and `/tx_status`, `/tx_info` and `/tx_cbor` for its own transactions. The Koios client refuses any other address or transaction hash. It never queries another address, account, asset or transaction. The network guard runs before anything is built or signed: `/genesis` must report network magic 764824073 and `Mainnet` for `--network mainnet`, or 1 and `Testnet` for `preprod`. The SDK verifier and the reference CLI, run by `verify`, read only `/tx_cbor`, `/tx_info` and `/tip` for the same transaction; their audit trails, which `verify --json` prints, show each call.
 
 ## Checks
 
@@ -185,7 +185,7 @@ Block facts come from one provider; `verify` prints links to cardanoscan.io and 
 - the signing key of the three public test mnemonics (`abandon` x23 `art`, `zoo` x23 `vote`, and the `deadbeef` mnemonic), through the SDK and through Node and OpenSSL; the CIP-3 Icarus master key; the CIP-11 key at `m/1852'/1815'/0'/2/0`; the CIP-19 type-6 addresses; refusal of equal entropies and of mnemonics other than 24 words; the key-separation check;
 - all five record kinds with placeholder digests: canonical round trip through both encoders, the SDK validator, and the top-level key order; negative controls: a `research-` key in `crit` fails with `EXTENSION_UNSUPPORTED_CRITICAL`, a misspelled base key with `SCHEMA_UNKNOWN_FIELD`, and an uppercase hex digit in a record URI is refused by the builder;
 - transaction building and every post-build assertion, with fake UTxOs;
-- the journal state machine against a fake Koios: a lost response followed by "All inputs are spent" with the hash found (submitted), the same with the hash absent and the inputs spent (failure), 429 then success, a returned id that differs (failure), abandonment rules;
+- the journal state machine against a fake Koios: a lost response followed by "All inputs are spent" with the hash found (submitted); a transaction that lands just after the last poll of the first window, and a lagging `/tx_status` instance (both found, never failed); the hash never found while the inputs read as spent (failed, and unresolved); 429 then success; `Retry-After`; a returned id that differs (failure); the journal lock; the abandonment rules for unsubmitted and failed entries; a missing `/tx_info` row while waiting;
 - the mainnet guard and `backup` refusing without a terminal, the refusal of a home inside a checkout or with loose permissions, the `unfrack.it` scanner, and the network guard;
 - when the CLI is installed, `cardanowall verify --record` over the `poe-record/` vectors and every positive and negative `validator/` entry, in the `core` and `signed` profiles, giving the verdicts and error codes the vectors pin.
 
