@@ -8,6 +8,7 @@
 import crypto from 'node:crypto';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { Koios, NETWORKS } from '../src/koios.mjs';
+import { Blockfrost } from '../src/blockfrost.mjs';
 import { deriveIdentity, mnemonicFromEntropy, publicFacts } from '../src/keys.mjs';
 import { prepareRun, runReport, runFiles } from '../src/build.mjs';
 import { journal, journalEntry } from '../src/journal.mjs';
@@ -103,4 +104,53 @@ export function journalConfirmed(store, network, run, identity) {
     j.history = [...(j.history || []), j.current];
     j.current = null;
   });
+}
+
+// A block in the shapes each provider reports it.
+export function blockOf({ hash = 'bb'.repeat(32), height = 5319000, slot = 136700000, epoch = 320, epochSlot = 101600, time = 1792380000 } = {}) {
+  return {
+    koios: { block_hash: hash, block_height: height, absolute_slot: slot, epoch_no: epoch, epoch_slot: epochSlot, tx_timestamp: time },
+    blockfrost: { hash, height, slot, epoch, epoch_slot: epochSlot, time },
+    plain: { hash, height, slot, epoch, epochSlot, time }
+  };
+}
+
+export const TEST_PROJECT_ID = 'preprodTESTprojectID0123456789abcdef';
+
+// A scripted Blockfrost. `txs` maps a hash to { cbor, block } with `block`
+// from blockOf(...).blockfrost; `epochParams[n]` is a row, or null for 404;
+// `override[path]` answers a path with { status, body, headers }.
+export function fakeBlockfrost(network, { txs = {}, tip = {}, genesis = {}, epochParams = {}, override = {} } = {}) {
+  const net = NETWORKS[network];
+  const calls = [];
+  const headers = [];
+  const state = { txs, tip: { height: 5319315, slot: 136928566, epoch: 320, hash: '00'.repeat(32), time: 1792611766, ...tip } };
+  const fetchImpl = async (url, init) => {
+    const p = url.replace('https://fake.blockfrost/api/v0', '');
+    calls.push(p);
+    headers.push(init.headers);
+    const o = typeof override[p] === 'function' ? override[p]() : override[p];
+    if (o) return res(o.status, o.body ?? '{}', o.headers || {});
+    if (p === '/genesis') return res(200, { network_magic: net.magic, security_param: 2160, active_slots_coefficient: 0.05, epoch_length: 432000, ...genesis });
+    if (p === '/blocks/latest') return res(200, state.tip);
+    let m;
+    if ((m = /^\/txs\/([0-9a-f]{64})\/cbor$/.exec(p))) return state.txs[m[1]] ? res(200, { cbor: state.txs[m[1]].cbor }) : res(404, { status_code: 404 });
+    if ((m = /^\/txs\/([0-9a-f]{64})$/.exec(p))) {
+      const t = state.txs[m[1]];
+      if (!t || !t.block) return res(404, { status_code: 404 });
+      return res(200, { hash: m[1], block: t.block.hash, block_height: t.block.height, block_time: t.block.time, slot: t.block.slot, index: 0 });
+    }
+    if ((m = /^\/blocks\/([0-9a-f]{64})$/.exec(p))) {
+      const t = Object.values(state.txs).find((x) => x.block && x.block.hash === m[1]);
+      return t ? res(200, { ...t.block, ...(t.blockOverride || {}) }) : res(404, { status_code: 404 });
+    }
+    if ((m = /^\/epochs\/(\d+)\/parameters$/.exec(p))) {
+      const n = Number(m[1]);
+      const row = epochParams[n] === undefined ? { epoch: n, protocol_major_ver: 11, nonce: null } : epochParams[n];
+      return row ? res(200, row) : res(404, { status_code: 404 });
+    }
+    throw new Error(`fake Blockfrost: unexpected ${p}`);
+  };
+  const bf = (own = {}, opts = {}) => new Blockfrost(network, { projectId: TEST_PROJECT_ID, baseUrl: 'https://fake.blockfrost/api/v0', fetchImpl, sleepImpl: async () => {}, spacingMs: 0, own, ...opts });
+  return { state, calls, headers, bf, fetchImpl };
 }

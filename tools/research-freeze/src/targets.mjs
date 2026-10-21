@@ -8,8 +8,9 @@
 // before anything is signed:
 //
 // - with a run directory in this home: its report records a wait to 15
-//   confirmations and a verify in which all three verifiers said valid, and
-//   the journal records it as confirmed;
+//   confirmations and a verify in which all three verifiers said valid (on
+//   mainnet, cross-checked with Blockfrost), and the journal records it as
+//   confirmed;
 // - in every case: Koios /tx_status reports at least 15 confirmations, and
 //   the record read from the raw transaction (/tx_cbor, after the hash and
 //   auxiliary_data_hash binding) validates, carries exactly one valid
@@ -41,9 +42,13 @@ export async function confirmedRecord({ store, koios, network, txHash, publicKey
       throw new UserError(`${where}: its run directory records no wait to ${CONFIRMATION_THRESHOLD} confirmations; run "wait" and then "verify" on it first`);
     }
     const v = report.verified;
-    if (!v || v.own?.verdict !== 'valid' || v.sdk?.verdict !== 'valid' || v.cli?.verdict !== 'valid') {
+    if (!v || v.own?.verdict !== 'valid' || v.sdk?.verdict !== 'valid' || v.cli?.verdict !== 'valid' || (v.verdict !== undefined && v.verdict !== 'valid')) {
       throw new UserError(`${where}: its run directory records no verify in which this tool, the SDK and the reference CLI all said valid; run "verify" on it first`);
     }
+    // On mainnet the verify must also have cross-checked the chain facts with
+    // Blockfrost; anywhere, a cross-check that disagreed rules the record out.
+    if (v.crosscheck?.ran && !v.crosscheck.ok) throw new UserError(`${where}: its verify found Koios and Blockfrost in disagreement (${(v.crosscheck.issues || []).join('; ')})`);
+    if (network === 'mainnet' && v.crosscheck?.ok !== true) throw new UserError(`${where}: its verify did not cross-check the chain facts with Blockfrost; run "verify" with the mainnet project id in place`);
     if (!journalEntries(store, network).some((e) => e.txHash === txHash && e.state === 'confirmed')) {
       throw new UserError(`${where}: the ${network} journal does not record it as confirmed`);
     }
@@ -81,4 +86,27 @@ export async function checkTargets({ store, koios, network, manifest, hashed, pu
     out.push(await confirmedRecord({ store, koios, network, txHash: hash, publicKeyHex, role: `the research-related (${r.relation}) record` }));
   }
   return out.map(({ items: _items, ...t }) => t);
+}
+
+// The final freeze's document cites the hypotheses record by its CIP-0107 URI
+// in its text, which the final freeze then hashes, so a reader can diff the
+// two documents. Exactly one cited URI must name a hypotheses-stage run of
+// this home on the same network, and that record must exist on chain, be
+// confirmed, and be signed by the same key. Other cited URIs are reported,
+// not checked.
+export async function checkCitedHypotheses({ store, koios, network, cited, publicKeyHex }) {
+  const stageOf = (h) => {
+    const f = path.join(store.runDir(network, h), 'report.json');
+    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).stage || null : null;
+  };
+  const hyps = cited.filter((h) => stageOf(h) === 'hypotheses');
+  if (hyps.length !== 1) {
+    throw new UserError(
+      hyps.length === 0
+        ? `the final-stage document cites no hypotheses-stage record of this home on ${network} (it cites ${cited.length ? cited.join(', ') : 'no record URI'}); its text must cite the hypotheses record as web+cardano://transaction/<hash>/metadata/309`
+        : `the final-stage document cites ${hyps.length} hypotheses-stage records (${hyps.join(', ')}); it must cite exactly one`
+    );
+  }
+  const { items: _items, ...t } = await confirmedRecord({ store, koios, network, txHash: hyps[0], publicKeyHex, role: 'the hypotheses record the document cites' });
+  return { ...t, other_cited: cited.filter((h) => h !== hyps[0]) };
 }

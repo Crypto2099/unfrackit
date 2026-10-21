@@ -110,7 +110,7 @@ test('build: the identity-network refusal comes first, and the network guard run
   const mpath = path.join(dir, 'm.json');
   fs.writeFileSync(mpath, JSON.stringify({ format: MANIFEST_FORMAT, kind: 'freeze', doi, items: [{ path: 'doc.md', type: 'StudyRegistration', document: true, ids: [{ id: doi, id_type: 'DOI', relation: 'IsPartOf' }] }] }));
   const cli = {};
-  await assert.rejects(build({ store, koios: fakeChain('mainnet').koios(), cli, manifestPath: mpath, network: 'mainnet', identityName: 'rehearsal' }), /preprod records only/);
+  await assert.rejects(build({ store, koios: fakeChain('mainnet').koios(), cli, manifestPath: mpath, network: 'mainnet', identityName: 'rehearsal', stage: 'hypotheses', coreOnly: true }), /preprod records only/);
   // A guard failure: the endpoint reports mainnet for a preprod build.
   let mnemonicsRead = false;
   const orig = store.readMnemonics.bind(store);
@@ -121,7 +121,7 @@ test('build: the identity-network refusal comes first, and the network guard run
   const wrong = fakeChain('mainnet');
   const koios = wrong.koios();
   koios.network = { ...koios.network, name: 'preprod', magic: 1, koiosName: 'Testnet' };
-  await assert.rejects(build({ store, koios, cli, manifestPath: mpath, network: 'preprod', identityName: 'rehearsal', coreOnly: true }), /refusing to run/);
+  await assert.rejects(build({ store, koios, cli, manifestPath: mpath, network: 'preprod', identityName: 'rehearsal', coreOnly: true, stage: 'hypotheses' }), /refusing to run/);
   assert.equal(mnemonicsRead, false);
 });
 
