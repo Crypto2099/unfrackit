@@ -36,17 +36,22 @@ export const refuse = (message) => new Refusal(message);
 
 // Error text with every bech32 string (an address, a stake address) and every
 // hex run of 20 or more characters (a hash, a key, a credential) replaced, and,
-// unless the error is one of the code's own refusals, every number that is not
-// part of an identifier, so neither wallet-level data nor a count inside a
-// database or provider message can reach the log.
+// unless the error is one of the code's own refusals, every number and every
+// other word with a digit in it, except snake_case names (settings, tables,
+// columns), so neither wallet-level data nor a count inside a database or
+// provider message can reach the log.
+const NUMBER = /(?<![\w.])\d[\d,._]*[a-zA-Z]*(?![\w])/g;
+const WORD_WITH_DIGIT = /(?<![\w])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+(?![\w])/g;
 export function sanitize(message, { refusal = false } = {}) {
   let t = String(message)
     .replace(/\b[a-z][a-z0-9_]*1[02-9ac-hj-np-z]{20,}\b/gi, '<bech32>')
     .replace(/(?:\\x|0x|_)?[0-9a-fA-F]{20,}/g, '<hex>')
     .replace(/(?:\\x|\b0x)[0-9a-fA-F]+\b/g, '<hex>');
-  // Numbers, with or without a unit or word joined to them (37k, 1500ms,
-  // 37rows).
-  if (!refusal) t = t.replace(/(?<![\w.])\d[\d,._]*[a-zA-Z]*(?![\w])/g, '#');
+  // Numbers, with or without a unit or word joined to them (3,400, 0.05, 37k,
+  // 1500ms, 37rows); then any word that still holds a digit (row37, 1e5,
+  // 12h30m, abc0x1f4) unless it joins an underscore. The placeholders above
+  // are left as they are.
+  if (!refusal) t = t.split(/(<bech32>|<hex>)/).map((part, i) => (i % 2 ? part : part.replace(NUMBER, '#').replace(WORD_WITH_DIGIT, '#'))).join('');
   return t.slice(0, 500);
 }
 
@@ -129,6 +134,9 @@ export function verifyLog(network) {
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
       failedDeletions.push({ run_id: e.run_id, seq: e.seq, wallet_level_output: e.wallet_level_output });
     }
+    // A run's cleanup settles the run. A start-closed entry (cleanup
+    // --start-seq) is no cleanup: it closed its one start through start_seq
+    // above.
     if (e.type === 'cleanup' && e.outcome === 'succeeded') {
       open.delete(e.run_id);
       for (const [seq, st] of starts) if (st.run_id === e.run_id) starts.delete(seq);
@@ -139,16 +147,20 @@ export function verifyLog(network) {
   return { path, entries: entries.length, errors, unclosed, kept_not_cleaned: [...open.entries()].map(([run_id, seq]) => ({ run_id, seq })), failed_deletions: failedDeletions, sha256: createHash('sha256').update(text).digest('hex') };
 }
 
-// Closes a start entry left by a killed command (a query with no run to clean
-// up, or whose run id a later clean finish will never settle) by its
-// sequence number: appends a cleanup entry naming it. Only an unclosed
-// query-start is closed this way; a live-fire run is cleaned up by its run id.
+// Closes a start entry left by a command that never wrote its end entry (a
+// query with no run to clean up, or whose run id a later clean finish will
+// never settle) by its sequence number: appends a start-closed entry naming
+// it. That entry closes that one start and nothing else: it is not a cleanup,
+// so it settles none of the run's other starts, kept output or failed
+// deletions, and it says nothing about what the command wrote. Only an
+// unclosed query-start is closed this way; a live-fire run is cleaned up by
+// its run id.
 export function closeStart(network, seq, command = null) {
   const v = verifyLog(network);
   const st = v.unclosed.find((x) => x.seq === Number(seq));
   if (!st) throw refuse(`refusing: entry ${seq} is not an unclosed start in the ${network} check log`);
   if (st.type !== 'query-start') throw refuse(`refusing: entry ${seq} is a ${st.type}; clean up a live-fire run with cleanup --run-id`);
-  return appendEntry(network, 'cleanup', { run_id: st.run_id, start_seq: st.seq, command, outcome: 'succeeded', error: null, wallet_level_output: 'none written', closed: 'killed before its end entry' });
+  return appendEntry(network, 'start-closed', { start_seq: st.seq, run_id: st.run_id, command, closed: 'no end entry' });
 }
 
 // Runs fn as a logged query when the network is mainnet: a start entry

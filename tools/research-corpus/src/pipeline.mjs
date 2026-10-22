@@ -31,7 +31,7 @@ import { codeVersion, hashList, TOOL_DIR } from './hash.mjs';
 import { buildManifest } from './manifest.mjs';
 import { check61 } from './check61.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
-import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses } from './guards.mjs';
+import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, studyKeyFor } from './guards.mjs';
 import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog } from './checklog.mjs';
 import { Koios } from './koios.mjs';
 
@@ -176,7 +176,12 @@ export async function runPipeline(opts) {
       if (opts.fromBlock !== undefined && opts.fromBlock !== null) errors.push('--from-block is for test networks only: on mainnet the scan for the study key\'s records starts at genesis');
       if (errors.length) throw refuse(`refusing: ${errors.join('; ')}`);
     }
-    if (finalRun && opts.snapshot && opts.snapshot !== 'rule') throw refuse('refusing: the snapshot of a run on the final freeze is fixed by rule (the last block of epoch N - 1); give no --snapshot');
+    // The study key: on mainnet the pinned one (src/params.mjs), and any
+    // other --study-key is refused; on a test network the flag.
+    // opts.studyKeyPin lets the unit tests stand a key they can sign with in
+    // for the pinned one; the command line never sets it.
+    const studyKey = studyKeyFor(network, opts.studyKey, opts.studyKeyPin);
+    if (finalRun && opts.snapshot && opts.snapshot !== 'rule') throw refuse('refusing: the snapshot of a run on the final freeze is fixed by rule (the last block of epoch N - 1 before its randomness stabilization cutoff); give no --snapshot');
     const caseViews = checkStakeAddresses([...new Set([...(opts.caseWallets || []), ...(opts.casesFile ? readStakeList(opts.casesFile, 'the cases file') : [])])], '--case and --cases');
     if (live) {
       if (!HEX32.test(live.testH || '')) throw refuse('refusing: a live-fire run needs --test-h <64 lowercase hex>');
@@ -184,16 +189,16 @@ export async function runPipeline(opts) {
       if (opts.freezeTx || opts.standInTx) throw refuse('refusing: a live-fire run uses a stated test h, never a freeze or stand-in transaction');
       if (opts.capture) throw refuse('refusing: a live-fire run may use --explain, not --capture');
       // The hypotheses are frozen before the first live-fire run on mainnet.
-      if (mainnet && (!HEX32.test(opts.hypothesesTx || '') || !HEX32.test(opts.studyKey || ''))) throw refuse('refusing: a mainnet live-fire run needs --hypotheses-tx and --study-key (the hypotheses freeze comes first)');
+      if (mainnet && !HEX32.test(opts.hypothesesTx || '')) throw refuse('refusing: a mainnet live-fire run needs --hypotheses-tx (the hypotheses freeze comes first)');
       const used = (await q(client, blocks, 'test_h_in_use', { h: { type: 'bytea', value: live.testH } }))[0];
       if (used.nonce || used.block_hash) throw refuse('refusing: the test h is an epoch nonce or block hash of this chain');
       if (mainnet) {
         const hyp = await readTx(client, blocks, opts.hypothesesTx);
-        if (!hyp || !signedBy(hyp, opts.studyKey)) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
+        if (!hyp || !signedBy(hyp, studyKey)) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
         report.hypotheses = { tx: hyp.tx, block_no: hyp.block.block_no, time: hyp.block.time };
       }
     } else if (mainnet) {
-      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey']]) {
+      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['prereg', '--prereg'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey']]) {
         if (!opts[k]) throw refuse(`refusing a mainnet database without ${flag} (or --live-fire before the final freeze)`);
       }
       const errs = codeManifestErrors(readFileSync(opts.codeManifest, 'utf8'), codeAtStart.files);
@@ -260,11 +265,11 @@ export async function runPipeline(opts) {
         // prefix of the log.
         const codeManifestSha256 = opts.codeManifest ? sha256hex(readFileSync(opts.codeManifest)) : null;
         const checkLogText = mainnet ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
-        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx || null, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), codeManifestSha256, checkLogText, fromBlock: mainnet ? null : opts.fromBlock ?? null });
+        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx || null, preregPath: opts.prereg, studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), codeManifestSha256, checkLogText, fromBlock: mainnet ? null : opts.fromBlock ?? null });
         report.freeze_checks = v.checks;
         if (!v.ok) throw refuse(`refusing the freeze transaction: ${v.checks.filter((c) => !c.ok).map((c) => `${c.name}${c.detail && typeof c.detail === 'string' ? ` (${c.detail})` : ''}`).join('; ')}`);
         const dk = await drawKey({ client, blocks, network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: opts.drawkey || null });
-        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, code_manifest_sha256: codeManifestSha256, scan: v.scan, draw: dk, h: dk.nonce };
+        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: studyKey, hypotheses: v.hypotheses, code_manifest_sha256: codeManifestSha256, scan: v.scan, draw: dk, h: dk.nonce };
         if (freeze && freeze.h !== fresh.h) throw refuse(`refusing: run ${runId} was started with another draw key`);
         freeze = fresh;
       } else if (!freeze) {
@@ -280,7 +285,8 @@ export async function runPipeline(opts) {
     const h = freeze.h;
 
     // Snapshot. A run on the final freeze: fixed by rule, the last block of
-    // epoch N - 1, confirmed beyond rollback. A stand-in run on a test network
+    // epoch N - 1 before its randomness stabilization cutoff, with the first
+    // block of epoch N confirmed beyond rollback. A stand-in run on a test network
     // with --snapshot rule: the same. Otherwise the tip when the run starts
     // (db-sync stopped there), or on a test network a given block. A resumed
     // run keeps the block it recorded.

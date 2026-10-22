@@ -16,10 +16,22 @@
 
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { applyOverrides, defaultSettings } from './params.mjs';
+import { applyOverrides, defaultSettings, STUDY_KEY } from './params.mjs';
 import { decode as bech32decode } from './bech32.mjs';
+import { refuse } from './checklog.mjs';
 
 export const NODE_MAJOR = 24;
+
+// The study key a command reads the freeze records with: on mainnet the
+// pinned STUDY_KEY, against which any other --study-key is refused; on a test
+// network the flag as given (null when absent). `pinned` stands in for
+// STUDY_KEY in the unit tests, which cannot sign with it; no command passes it.
+export function studyKeyFor(network, given, pinned = STUDY_KEY) {
+  const key = given === undefined || given === null || given === '' ? null : String(given).toLowerCase();
+  if (network !== 'mainnet') return key;
+  if (key !== null && key !== pinned) throw refuse(`refusing: on mainnet the study key is the pinned freeze identity's (STUDY_KEY in src/params.mjs), and --study-key names another key`);
+  return pinned;
+}
 
 export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, snapshot, live = false, nodeVersion = process.version }) {
   const errors = [];
@@ -34,7 +46,7 @@ export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, s
     if (h(strataPath) !== h(defaultStrataPath)) errors.push('--strata is not the hashed strata file');
   }
   if (live && snapshot && snapshot !== 'tip') errors.push('--snapshot must be tip for a live-fire run on mainnet');
-  if (!live && snapshot && snapshot !== 'rule') errors.push('--snapshot: the study run\'s snapshot is fixed by rule (the last block of epoch N - 1)');
+  if (!live && snapshot && snapshot !== 'rule') errors.push('--snapshot: the study run\'s snapshot is fixed by rule (the last block of epoch N - 1 before its randomness stabilization cutoff)');
   const major = Number(/^v(\d+)\./.exec(nodeVersion)?.[1]);
   if (major !== NODE_MAJOR) errors.push(`Node ${nodeVersion}; the code is pinned to Node ${NODE_MAJOR}`);
   return errors;

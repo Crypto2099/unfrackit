@@ -20,11 +20,16 @@
 //     "Specification": {"msg": [strings]}). A copy without that line does not
 //     count, and a complete copy that lands first is the final freeze.
 // Which transactions the operator names (--hypotheses-tx, --freeze-tx) or the
-// document cites decides nothing: each must agree with the chain's. On a test
-// network, where one key signs many rehearsals, --from-block starts the scan
-// later; mainnet refuses it. So the study key signs nothing between the
-// hypotheses record and the final freeze, and a broadcast final record is
-// never abandoned for another: any such record would be the final.
+// document cites decides nothing: each must agree with the chain's, and the
+// document may cite any carrier of the hypotheses record's signed content,
+// since all of them are that record. On a test network, where one key signs
+// many rehearsals, --from-block starts the scan later; mainnet refuses it,
+// and on mainnet the study key is STUDY_KEY (src/params.mjs). So the study
+// key signs nothing between the hypotheses record and the final freeze, and
+// a broadcast hypotheses or final record is never abandoned and replaced by a
+// newly signed one, but resubmitted with the same bytes: a broadcast body
+// can be replayed later, and a replayed body would take the place of one of
+// the two records, so that the intended final would not pass.
 //
 // The final freeze transaction must then carry the study's final record:
 //   - its label-309 value is a CIP-190 record (CIPs@58b4dd1417, CIP-0190,
@@ -36,8 +41,10 @@
 //     "cardano-poe-record-sig-v1" followed by the canonical record without
 //     `sigs`, inside the RFC 9052 Sig_structure with the protected header as
 //     published; the key is the 32-byte protected-header kid, path 1);
-//   - the document names the study key and cites the chain's hypotheses
-//     record by its CIP-0107 URI (web+cardano://transaction/<hash>/metadata/309);
+//   - the document names the study key and cites a transaction carrying the
+//     chain's hypotheses record by its CIP-0107 URI
+//     (web+cardano://transaction/<hash>/metadata/309), and is not an item of
+//     the hypotheses record;
 //   - the document lists every other item of the record exactly once, as the
 //     freeze tool requires, in lines of <64 lowercase hex><two spaces><name>;
 //     every such line names an item, and the document does not list itself.
@@ -237,12 +244,14 @@ export async function studyRecords(client, blocks, studyKey, loTxId = 0) {
   return out;
 }
 
-// The chain's order of the study's records (see the header). msgOfTx(tx)
-// reads a transaction's label-674 message. Returns { hypotheses, final,
-// finalTx } (any may be null).
+// The chain's order of the study's records (see the header). Returns
+// { hypotheses, hypothesesCarriers, final, finalTx } (any may be null or
+// empty): hypothesesCarriers are every transaction carrying the hypotheses
+// record's signed content, the first one first.
 export async function chainOrder({ client, blocks, studyKey, docDigest, loTxId = 0 }) {
   const recs = await studyRecords(client, blocks, studyKey, loTxId);
   const hypotheses = recs[0] || null;
+  const hypothesesCarriers = hypotheses ? recs.filter((r) => r.signed === hypotheses.signed).map((r) => r.tx) : [];
   const final = hypotheses ? recs.find((r) => r.tx_id > hypotheses.tx_id && !r.record.supersedes && r.signed !== hypotheses.signed) || null : null;
   let finalTx = null;
   if (final) {
@@ -255,7 +264,7 @@ export async function chainOrder({ client, blocks, studyKey, docDigest, loTxId =
       }
     }
   }
-  return { hypotheses, final, finalTx, records: recs.length };
+  return { hypotheses, hypothesesCarriers, final, finalTx, records: recs.length };
 }
 
 // Checks the final freeze. Returns { ok, checks, freeze, hypotheses, document,
@@ -323,13 +332,18 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
   check('document_names_one_check_log', logs.length === 1, `${logs.length} line(s) named ${FREEZE_ITEM_NAMES.check_log}`);
   if (codeManifestSha256) check('code_manifest_is_the_named_one', manifests.length === 1 && manifests[0].sha256 === codeManifestSha256, codeManifestSha256);
 
-  // The hypotheses record, as the chain orders it.
+  // The hypotheses record, as the chain orders it: h is its first carrier.
+  // Every carrier of its signed content is the same record, so the document
+  // may cite any of them, and whether the final document differs is read
+  // from the signed content, never from a carrier's 674 line, which anyone
+  // copying the body may leave out or write.
   const h = order.hypotheses ? await readTx(client, blocks, order.hypotheses.tx) : null;
   const cited = [...new Set([...docText.matchAll(CITATION)].map((m) => m[1].toLowerCase()))];
-  check('document_cites_hypotheses_record', !!h && cited.includes(h.tx), h ? `web+cardano://transaction/${h.tx}/metadata/309` : null);
+  const carriers = order.hypothesesCarriers || [];
+  check('document_cites_hypotheses_record', !!h && cited.some((t) => carriers.includes(t)), h ? `web+cardano://transaction/${h.tx}/metadata/309, or another of the ${carriers.length} carrier(s) of its signed content` : null);
   if (h) {
     check('hypotheses_block_earlier', h.block.block_no < f.block.block_no, `${h.block.block_no} < ${f.block.block_no}`);
-    check('hypotheses_document_differs', !!h.msg && h.msg[0] !== docDigest);
+    check('hypotheses_document_differs', !order.hypotheses.record.digests.includes(docDigest), 'the final pre-registration must not be an item of the hypotheses record');
     if (checkLogText !== undefined) {
       const text = checkLogText || '';
       const entries = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -427,12 +441,13 @@ export async function drawKey({ client, blocks, network, block, koios, txHash = 
 // from any node from then on (IntersectMBO/ouroboros-consensus@d94473e212,
 // ouroboros-consensus-protocol, Ouroboros/Consensus/Protocol/PolyPraos.hs,
 // praosStateCandidateNonce in the block update and the epoch-boundary tick).
-// The frames are therefore fixed no later than the draw key becomes known. The database must hold the first block of
-// epoch N at least security_k blocks below its tip, and Koios must name the
-// same snapshot block, with the first block of N at least security_k below
-// Koios's tip: a rollback can then reach neither the snapshot nor any block
-// that could come before the cutoff after it. koios needs
-// snapshotBlock(epoch, cutoff), firstBlockOfEpoch(epoch) and tip().
+// The frames are therefore fixed no later than the draw key becomes known.
+// The database must hold the first block of epoch N at least security_k
+// blocks below its tip, and Koios must name the same snapshot block and the
+// same first block of N, that one at least security_k below Koios's tip: a
+// rollback can then reach neither the snapshot nor any block that could come
+// before the cutoff after it. koios needs snapshotBlock(epoch, cutoff),
+// firstBlockOfEpoch(epoch) and tip().
 export async function ruleSnapshot({ client, blocks, network, n, koios, tipBlockNo }) {
   const genesis = GENESIS[network];
   if (!genesis) throw new Error(`no genesis constants for ${network}`);
@@ -452,6 +467,7 @@ export async function ruleSnapshot({ client, blocks, network, n, koios, tipBlock
   const kt = await koios.tip();
   if (!kb || String(kb.hash).toLowerCase() !== snap.hash) throw new Error(`refusing: Koios names another last block of epoch ${epoch} before slot ${cutoff}`);
   if (!kn) throw new Error(`refusing: Koios has no block of epoch ${n}`);
+  if (String(kn.hash).toLowerCase() !== next.hash) throw new Error(`refusing: Koios names another first block of epoch ${n}`);
   const kDepth = Number(kt.block_no) - Number(kn.block_height);
   if (kDepth < FIXED.security_k) throw new Error(`refusing: the first block of epoch ${n} is ${kDepth} blocks below Koios's tip; it must be ${FIXED.security_k} deep`);
   return {

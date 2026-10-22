@@ -20,17 +20,21 @@ function credHex(i) {
   return createHash('sha256').update(`cred ${i}`).digest('hex').slice(0, 56);
 }
 
+const payCred = (i) => createHash('sha256').update(`payment ${i}`).digest().subarray(0, 28);
+
 async function fixture(db, n) {
   await db.exec(`
     CREATE TABLE study.cred (sa_id bigint PRIMARY KEY, hash_raw bytea, cred_hash bytea, header_type int, network_tag int, is_script boolean, script_hash bytea, view text);
     CREATE TABLE study.activity (win text, sa_id bigint, n_tx_key bigint, n_tx_any bigint, n_spends_key bigint, n_spends_any bigint, n_receipts bigint, n_tx bigint, n_spends bigint);
     CREATE TABLE study.state (point text, sa_id bigint, n_utxo bigint, lovelace numeric, lovelace_all numeric, lovelace_script_pay numeric, n_assets bigint, n_nft bigint, n_units numeric);
     CREATE TABLE study.paycount (point text, sa_id bigint, n_pay bigint, n_pay_key bigint);
-    CREATE TABLE public.tx_out (id bigint PRIMARY KEY, tx_id bigint, stake_address_id bigint);
+    CREATE TABLE public.tx_out (id bigint PRIMARY KEY, tx_id bigint, stake_address_id bigint, index int DEFAULT 0, value numeric DEFAULT 1000000,
+                                payment_cred bytea, address_has_script boolean DEFAULT false, data_hash bytea, inline_datum_id bigint, reference_script_id bigint);
+    CREATE TABLE public.tx_in (tx_in_id bigint, tx_out_id bigint, tx_out_index int);
   `);
   for (let i = 1; i <= n; i++) {
     const c = credHex(i);
-    await db.query(`INSERT INTO public.tx_out VALUES ($1, 1, $1)`, [i]);
+    await db.query(`INSERT INTO public.tx_out (id, tx_id, stake_address_id, payment_cred) VALUES ($1, 1, $1, $2)`, [i, payCred(i)]);
     const script = i === 3;
     const header = script ? 'f0' : 'e0';
     await db.query(`INSERT INTO study.cred VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), $4, 0, $5, $6, $7)`, [i, header + c, c, script ? 15 : 14, script, script ? Buffer.from(c, 'hex') : null, `v${i}`]);
@@ -86,6 +90,7 @@ test('stages, flow, draw order, samples and split on the fixture', async () => {
   await fixture(db, 12);
   const p = params({ guard: 6, target_a: 2, target_b: 1, target_c: 1, ada_only_n: 2 });
   await runBlock('frame', p);
+  await runBlock('txo', p);
   await runBlock('flow', p);
   const f = Object.fromEntries((await rows(`SELECT sa_id, eligible, s3, s4, s5, s6, is_script, tok, ge5, ge100 FROM study.frame WHERE frame = 'recent'`)).map((r) => [r.sa_id, r]));
   assert.equal(f[3].is_script, true);
@@ -197,11 +202,43 @@ test('flow stage 1 counts only credentials with an output at or before the snaps
   for (const i of [13, 14, 15]) {
     const c = credHex(i);
     await db.query(`INSERT INTO study.cred VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), 14, 0, false, NULL, $4)`, [i, 'e0' + c, c, `v${i}`]);
-    await db.query(`INSERT INTO public.tx_out VALUES ($1, $2, $1)`, [i, i === 15 ? 1 : 2]);
+    await db.query(`INSERT INTO public.tx_out (id, tx_id, stake_address_id, payment_cred) VALUES ($1, $2, $1, $3)`, [i, i === 15 ? 1 : 2, payCred(i)]);
   }
   const p = params();
   await runBlock('frame', p);
+  await runBlock('txo', p);
   await runBlock('flow', p);
   const [s1] = await rows(`SELECT n_in, n_out FROM study.flow WHERE frame = 'recent' AND stage_no = 1`);
   assert.equal(Number(s1.n_in), 13, 'twelve fixture credentials and the one at the snapshot, not the two after it');
+});
+
+// Flow stage 1 reads the life table, which holds exactly the outputs with a
+// stake credential up to the snapshot, instead of public.tx_out: the count is
+// the one the tx_out predicate gives, with x1_enterprise off and on.
+test('flow stage 1 from the life table equals the count from tx_out', async () => {
+  for (const x1 of [false, true]) {
+    const { db, runBlock, rows } = await freshDb();
+    await fixture(db, 12);
+    // 13 and 14 first seen after the snapshot; 15 at it; 16 after it, with an
+    // enterprise output at its payment credential before it; enterprise
+    // outputs at 1's payment credential (owned by 1 alone) and at a payment
+    // credential no stake credential owns; 1's outputs also spent, and a
+    // second output of 2 after the snapshot.
+    for (const i of [13, 14, 15, 16]) {
+      const c = credHex(i);
+      await db.query(`INSERT INTO study.cred VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), 14, 0, false, NULL, $4)`, [i, 'e0' + c, c, `v${i}`]);
+      await db.query(`INSERT INTO public.tx_out (id, tx_id, stake_address_id, payment_cred) VALUES ($1, $2, $1, $3)`, [i, i === 15 ? 1 : 2, payCred(i)]);
+    }
+    await db.query(`INSERT INTO public.tx_out (id, tx_id, stake_address_id, payment_cred) VALUES (101, 1, NULL, $1), (102, 1, NULL, $2), (103, 1, NULL, $3), (104, 2, 2, $4)`, [payCred(1), payCred(16), payCred(99), payCred(2)]);
+    await db.query(`INSERT INTO public.tx_in VALUES (1, 1, 0)`);
+    const p = params({ x1_enterprise: x1 });
+    await runBlock('frame', p);
+    await runBlock('txo', p);
+    await runBlock('flow', p);
+    const [old] = await rows(`SELECT count(*) AS n FROM study.cred c WHERE EXISTS (SELECT 1 FROM public.tx_out o WHERE o.stake_address_id = c.sa_id AND o.tx_id <= 1)`);
+    const [s1] = await rows(`SELECT n_in FROM study.flow WHERE frame = 'recent' AND stage_no = 1`);
+    assert.equal(Number(s1.n_in), Number(old.n), `x1_enterprise ${x1}`);
+    assert.equal(Number(s1.n_in), 13);
+    if (x1) assert.equal(Number((await rows(`SELECT count(*) AS n FROM study.txo WHERE via_payment`))[0].n), 1, 'the enterprise output at 1\'s payment credential is in the life table');
+  }
 });

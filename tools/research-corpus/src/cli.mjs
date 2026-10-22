@@ -17,7 +17,7 @@ import { project, rowsFromHealth } from './project.mjs';
 import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { FIXED } from './params.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, ruleSnapshot } from './freeze.mjs';
-import { codeManifestErrors, NODE_MAJOR } from './guards.mjs';
+import { codeManifestErrors, NODE_MAJOR, studyKeyFor } from './guards.mjs';
 import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath, redactCommand, closeStart } from './checklog.mjs';
 import { sha256hex } from './freeze.mjs';
 import { Koios } from './koios.mjs';
@@ -29,18 +29,20 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
   run [options]                   frames, draw, samples, split, flags, the 6.1 check and the manifest
       --run-id <id>               required; a rerun with the same id resumes
       --snapshot tip|rule|<hash> the snapshot block: on the final freeze always the rule (the last block of
-                                  epoch N - 1, confirmed 2,160 blocks deep); otherwise the tip by default (stop
-                                  db-sync there first), the rule with --stand-in-tx, or a given block
+                                  epoch N - 1 before its randomness stabilization cutoff, with the first block of
+                                  N 2,160 blocks deep); otherwise the tip by default (stop db-sync there first),
+                                  the rule with --stand-in-tx, or a given block
       --freeze-tx <tx hash>       the final freeze transaction; h is the epoch nonce its block's epoch rule names
       --hypotheses-tx <tx hash>   optional: the hypotheses freeze transaction, which must be the chain's
       --from-block <height>       test networks: start the scan for the study key's records at this block
       --prereg <file>             the final pre-registration, as frozen
-      --study-key <hex>           the freeze identity's signing public key (32 bytes)
+      --study-key <hex>           test networks: the freeze identity's signing public key (32 bytes); mainnet
+                                  uses STUDY_KEY in src/params.mjs and refuses any other
       --code-manifest <file>      the \`npm run hash\` output frozen with the final freeze (mainnet)
       --drawkey <file>            the freeze tool's drawkey.json for the final freeze (mainnet)
       --stand-in-tx <tx hash>     test networks: a transaction whose block's epoch rule stands in for the freeze's
       --live-fire                 a pre-freeze check run (any network): needs --test-h, --purpose and
-                                  --expect-network; on mainnet also --hypotheses-tx and --study-key
+                                  --expect-network; on mainnet also --hypotheses-tx
       --test-h <hex>              the stated test value of h for a live-fire run (32 bytes)
       --purpose <text>            what the live-fire run checks; written to the check log
       --keep-for-debug            keep a live-fire run's study tables (wallet-level output) after it ends
@@ -56,13 +58,15 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --work-mem <size>           session work memory (default 1GB); also --maintenance-work-mem
       --parallel-workers <n>      parallel workers per query and per index build (default 4)
       --temp-tablespaces <names>  temporary tablespaces with room for twice the study tables
-  verify-freeze --prereg --study-key [--freeze-tx] [--hypotheses-tx] [--from-block]
+  verify-freeze --prereg [--study-key] [--code-manifest] [--freeze-tx] [--hypotheses-tx] [--from-block]
                                   find the hypotheses record and the final freeze on chain, check the final
-                                  record, and print the draw key and the rule's snapshot once each is known
+                                  record, and print the draw key and the rule's snapshot once each is known;
+                                  mainnet: --code-manifest required, --study-key and --from-block as for run
   cleanup --run-id <id>           drop a live-fire run's study tables and work directory, or an a1 live-fire
                                   run's work directory; logged in the check log
   cleanup --start-seq <n> --network <n>
-                                  close the start entry a killed command left, by its sequence number
+                                  close the start entry a killed command left, by its sequence number; that
+                                  start only, never a run's tables, kept output or other starts
   own-drawn --list <file> --run <id>
                                   print, privately, how many listed stake addresses fell in each drawn sample of
                                   a run; writes nothing to the run directory, the manifest or the check log
@@ -74,10 +78,11 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
                                   read CoinGecko's Cardano Ecosystem ranking and the token registry; write the
                                   strata file's candidate list (default: data/strata-mainnet.json)
   confirm-snapshot --run-id <id>  the snapshot is still on chain, ${FIXED.security_k} or more blocks deep in the database and
-                                  in Koios, and for a snapshot by rule still the last block of its epoch
+                                  in Koios; for a snapshot by rule, the rule still names it, with the first block
+                                  of epoch N that deep
   a1 [--from-run <id> --count 20 --node-count 5] [--stake <addr> ...] [--node-stake <addr> ...]
      [--node-container <name> --node-socket <path> --magic <n>]
-     mainnet: --live-fire --purpose <text> --expect-network mainnet --hypotheses-tx --study-key
+     mainnet: --live-fire --purpose <text> --expect-network mainnet --hypotheses-tx
      [--keep-for-debug], or the final freeze options of run
                                   compare UTxO sets with Koios and the node at the database tip; --from-run
                                   takes the first credentials of a run's recent-frame draw order
@@ -122,26 +127,170 @@ const lower = (x) => (x ? x.toLowerCase() : x);
 
 // On mainnet, a1 is a study query: it runs only as a logged live-fire check
 // before the final freeze, or after it with the final freeze checked.
-async function a1Gate(c, blocks, meta, a) {
+async function a1Gate(c, blocks, meta, a, studyKey) {
   if (meta.network !== 'mainnet' || a.liveFire) return;
-  if (!a.freezeTx || !a.prereg || !a.studyKey || !a.codeManifest) throw new Error('refusing: on mainnet a1 needs --live-fire --purpose, or --freeze-tx, --prereg, --study-key and --code-manifest');
+  if (!a.freezeTx || !a.prereg || !a.codeManifest) throw new Error('refusing: on mainnet a1 needs --live-fire --purpose, or --freeze-tx, --prereg and --code-manifest');
+  const fc = finalChecks(a, meta.network);
   const errs = codeManifestErrors(readFileSync(a.codeManifest, 'utf8'), hashList());
   if (errs.length) throw new Error(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
   const tip = (await q(c, blocks, 'tip_block'))[0];
-  const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: lower(a.freezeTx), hypothesesTx: lower(a.hypothesesTx), preregPath: a.prereg, studyKey: lower(a.studyKey), codeDigests: hashList(), tipBlockNo: Number(tip.block_no), ...finalChecks(a, meta.network) });
+  const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: lower(a.freezeTx), hypothesesTx: lower(a.hypothesesTx), preregPath: a.prereg, studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), ...fc });
   if (!v.ok) throw new Error(`refusing the freeze transaction: ${v.checks.filter((x) => !x.ok).map((x) => x.name).join(', ')}`);
 }
 
 // The run's code manifest, the check log, and on a test network the block the
-// scan for the study key's records starts at.
+// scan for the study key's records starts at. On mainnet the code manifest is
+// required, so the check that the document names it always runs, and
+// --from-block is refused.
 function finalChecks(a, network) {
+  if (network === 'mainnet' && a.fromBlock !== undefined) throw refuse('refusing: --from-block is for test networks only');
+  if (network === 'mainnet' && !a.codeManifest) throw refuse('refusing: on mainnet the final-freeze checks need --code-manifest, the code manifest the final freeze names');
   const codeManifestSha256 = a.codeManifest ? sha256hex(readFileSync(a.codeManifest)) : null;
   const checkLogText = network === 'mainnet' ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
-  if (network === 'mainnet' && a.fromBlock !== undefined) throw refuse('refusing: --from-block is for test networks only');
   return { codeManifestSha256, checkLogText, fromBlock: a.fromBlock !== undefined ? Number(a.fromBlock) : null };
 }
 
 const codeFacts = () => (({ git_commit, git_dirty, node }) => ({ git_commit, git_dirty, node }))(codeVersion());
+
+// verify-freeze: finds the hypotheses record and the final freeze on chain,
+// checks the final record, and prints the draw key and the rule's snapshot
+// once each is known. Reads only. `client` lets the unit tests stand PGlite
+// in for the database.
+export async function verifyFreezeCommand(a, command, { client = null } = {}) {
+  const blocks = loadAll();
+  const c = client || (await connect(dbOpts(a)));
+  try {
+    const meta = await dbMeta(c, blocks);
+    await loggedQuery(meta.network, 'verify-freeze', { command, code: codeFacts() }, async () => {
+      const fc = finalChecks(a, meta.network);
+      const studyKey = studyKeyFor(meta.network, a.studyKey);
+      const tip = (await q(c, blocks, 'tip_block'))[0];
+      const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: lower(a.freezeTx), hypothesesTx: lower(a.hypothesesTx), preregPath: a.prereg, studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), ...fc });
+      let draw = null;
+      let snapshot = null;
+      if (v.freezeBlock) {
+        const koios = new Koios(meta.network);
+        try {
+          draw = await drawKey({ client: c, blocks, network: meta.network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: a.drawkey || null });
+          // The snapshot the rule fixes, once it is deep enough to run.
+          try {
+            const rs = await ruleSnapshot({ client: c, blocks, network: meta.network, n: draw.n, koios, tipBlockNo: Number(tip.block_no) });
+            snapshot = { block_no: Number(rs.block.block_no), hash: rs.block.hash, time: rs.block.time, rule: rs.rule, confirmation: rs.confirmation };
+          } catch (e) {
+            snapshot = { error: e.message };
+          }
+        } catch (e) {
+          draw = { error: e.message };
+        }
+      }
+      console.log(JSON.stringify({ network: meta.network, ok: v.ok, checks: v.checks, document: v.document, freeze: v.freeze, hypotheses: v.hypotheses, draw, snapshot }, null, 2));
+      if (!v.ok) process.exitCode = 2;
+    });
+  } finally {
+    if (!client) await c.end();
+  }
+}
+
+// a1: compares stake credentials' UTxO sets in the database with Koios and
+// the node. `client` lets the unit tests stand PGlite in for the database.
+export async function a1Command(a, command, { client = null } = {}) {
+  const blocks = loadAll();
+  const t0 = performance.now();
+  const runId = a.runId || `a1-${new Date().toISOString().replace(/[:.]/g, '')}`;
+  // A live-fire a1 logs its gate (connection, the hypotheses record on
+  // mainnet) as a query before its first query, and its start entry once
+  // the gate has passed, like a live-fire run.
+  let gate = null;
+  let start = null;
+  if (a.liveFire) {
+    if (!(a.purpose || '').trim()) throw refuse('refusing: a live-fire a1 needs --purpose');
+    if (!a.expectNetwork) throw refuse('refusing: a live-fire a1 needs --expect-network, so that its check-log entry is written before the first query');
+    gate = appendEntry(a.expectNetwork, 'query-start', { name: 'a1 live-fire gate', run_id: runId, command, code: codeFacts() });
+  }
+  let c = null;
+  let meta = null;
+  let error = null;
+  let r = null;
+  const body = async () => {
+    const studyKey = studyKeyFor(meta.network, a.studyKey);
+    if (a.liveFire) {
+      if (meta.network === 'mainnet') {
+        if (!/^[0-9a-f]{64}$/.test(lower(a.hypothesesTx) || '')) throw refuse('refusing: a mainnet live-fire a1 needs --hypotheses-tx (the hypotheses freeze comes first)');
+        const hyp = await readTx(c, blocks, lower(a.hypothesesTx));
+        if (!hyp || !signedBy(hyp, studyKey)) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
+      }
+      appendEntry(meta.network, 'query', { name: 'a1 live-fire gate', start_seq: gate.seq, outcome: 'succeeded', error: null, run_ms: Math.round(performance.now() - t0) });
+      gate = null;
+      start = appendEntry(meta.network, 'a1-live-fire-start', { run_id: runId, command, purpose: a.purpose, code: codeFacts() });
+    }
+    await a1Gate(c, blocks, meta, a, studyKey);
+    const node = a.nodeContainer ? { container: a.nodeContainer, socket: a.nodeSocket || '/ipc/node.socket', magic: a.magic || (meta.network === 'mainnet' ? 'mainnet' : '1') } : null;
+    let views = a.stake;
+    let nodeViews = a.nodeStake;
+    if (a.fromRun) {
+      // The first credentials in the recent frame's draw order of a run.
+      const n = Number(a.count || 20);
+      const m = Number(a.nodeCount || 5);
+      const rows = await c.query(
+        `SELECT c.view FROM study.draw_order d JOIN study.cred c ON c.sa_id = d.sa_id
+          WHERE d.frame = 'recent' AND obj_description('study.draw_order'::regclass, 'pg_class') = $1
+          ORDER BY d.k LIMIT $2`,
+        [`research-corpus run ${a.fromRun}`, n]
+      );
+      if (rows.rows.length < n) throw new Error(`run ${a.fromRun} does not own study.draw_order, or it has too few keys`);
+      views = [...views, ...rows.rows.map((x) => x.view)];
+      nodeViews = [...nodeViews, ...rows.rows.slice(0, m).map((x) => x.view)];
+    }
+    r = await a1Compare({ client: c, blocks, network: meta.network, views, nodeViews, node, log: a.liveFire ? () => {} : (x) => process.stderr.write(x + '\n') });
+    if (!a.liveFire) console.log(JSON.stringify(r, null, 2));
+  };
+  try {
+    c = client || (await connect(dbOpts(a)));
+    meta = await dbMeta(c, blocks);
+    if (a.expectNetwork && a.expectNetwork !== meta.network) throw refuse(`refusing: database is ${meta.network}, expected ${a.expectNetwork}`);
+    if (a.liveFire) await body();
+    else await loggedQuery(meta.network, 'a1', { run_id: runId, command, code: codeFacts() }, body);
+  } catch (e) {
+    error = e;
+  } finally {
+    if (c && !client) await c.end();
+  }
+  if (gate) appendEntry(a.expectNetwork, 'query', { name: 'a1 live-fire gate', start_seq: gate.seq, outcome: 'failed', error: error ? sanitizeError(error) : null, run_ms: Math.round(performance.now() - t0) });
+  if (start) {
+    // Wallet-level output (the UTxO lines that differ) goes to the run's
+    // work directory, removed unless kept; the log gets outcomes only.
+    const work = join(runDir(a.expectNetwork, runId), 'work');
+    let outputs = 'none written';
+    if (r) {
+      writePrivate(join(work, 'a1.json'), JSON.stringify(r, null, 2) + '\n');
+      outputs = 'kept for debugging';
+      if (!a.keepForDebug) {
+        try {
+          rmSync(work, { recursive: true, force: true });
+          outputs = `deleted ${new Date().toISOString()}`;
+        } catch (e) {
+          outputs = `deletion failed: ${sanitizeError(e)}`;
+        }
+      }
+    }
+    const results = r ? r.results.map((x) => ({ koios: x.error ? 'error' : x.koios.equal ? 'equal' : x.koios.explained_by_later_txs ? 'explained' : 'differs', node: x.node ? (x.node.equal ? 'equal' : x.node.explained_by_later_txs ? 'explained' : 'differs') : null })) : [];
+    const entry = appendEntry(a.expectNetwork, 'a1-live-fire', {
+      run_id: runId,
+      start_seq: start.seq,
+      command,
+      purpose: a.purpose,
+      code: codeFacts(),
+      outcome: error ? 'failed' : 'succeeded',
+      error: error ? sanitizeError(error) : null,
+      run_ms: Math.round(performance.now() - t0),
+      credentials_compared: results.length,
+      results,
+      wallet_level_output: outputs
+    });
+    console.log(JSON.stringify(entry, null, 2));
+  }
+  if (error) throw a.liveFire ? new Error(sanitizeError(error)) : error;
+}
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -189,39 +338,9 @@ async function main() {
       console.log(r.live ? JSON.stringify(r.entry, null, 2) : r.dir);
       return;
     }
-    case 'verify-freeze': {
-      const blocks = loadAll();
-      const c = await connect(dbOpts(a));
-      try {
-        const meta = await dbMeta(c, blocks);
-        await loggedQuery(meta.network, 'verify-freeze', { command, code: codeFacts() }, async () => {
-          const tip = (await q(c, blocks, 'tip_block'))[0];
-          const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: lower(a.freezeTx), hypothesesTx: lower(a.hypothesesTx), preregPath: a.prereg, studyKey: lower(a.studyKey), codeDigests: hashList(), tipBlockNo: Number(tip.block_no), ...finalChecks(a, meta.network) });
-          let draw = null;
-          let snapshot = null;
-          if (v.freezeBlock) {
-            const koios = new Koios(meta.network);
-            try {
-              draw = await drawKey({ client: c, blocks, network: meta.network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: a.drawkey || null });
-              // The snapshot the rule fixes, once it is deep enough to run.
-              try {
-                const rs = await ruleSnapshot({ client: c, blocks, network: meta.network, n: draw.n, koios, tipBlockNo: Number(tip.block_no) });
-                snapshot = { block_no: Number(rs.block.block_no), hash: rs.block.hash, time: rs.block.time, rule: rs.rule, confirmation: rs.confirmation };
-              } catch (e) {
-                snapshot = { error: e.message };
-              }
-            } catch (e) {
-              draw = { error: e.message };
-            }
-          }
-          console.log(JSON.stringify({ network: meta.network, ok: v.ok, checks: v.checks, document: v.document, freeze: v.freeze, hypotheses: v.hypotheses, draw, snapshot }, null, 2));
-          if (!v.ok) process.exitCode = 2;
-        });
-      } finally {
-        await c.end();
-      }
+    case 'verify-freeze':
+      await verifyFreezeCommand(a, command);
       return;
-    }
     case 'cleanup': {
       if (a.startSeq !== undefined) {
         // A killed command's start entry, closed by its sequence number.
@@ -328,104 +447,9 @@ async function main() {
       }
       return;
     }
-    case 'a1': {
-      const blocks = loadAll();
-      const t0 = performance.now();
-      const runId = a.runId || `a1-${new Date().toISOString().replace(/[:.]/g, '')}`;
-      // A live-fire a1 logs its gate (connection, the hypotheses record on
-      // mainnet) as a query before its first query, and its start entry once
-      // the gate has passed, like a live-fire run.
-      let gate = null;
-      let start = null;
-      if (a.liveFire) {
-        if (!(a.purpose || '').trim()) throw refuse('refusing: a live-fire a1 needs --purpose');
-        if (!a.expectNetwork) throw refuse('refusing: a live-fire a1 needs --expect-network, so that its check-log entry is written before the first query');
-        gate = appendEntry(a.expectNetwork, 'query-start', { name: 'a1 live-fire gate', run_id: runId, command, code: codeFacts() });
-      }
-      let c = null;
-      let meta = null;
-      let error = null;
-      let r = null;
-      const body = async () => {
-        if (a.liveFire) {
-          if (meta.network === 'mainnet') {
-            if (!/^[0-9a-f]{64}$/.test(lower(a.hypothesesTx) || '') || !/^[0-9a-f]{64}$/.test(lower(a.studyKey) || '')) throw refuse('refusing: a mainnet live-fire a1 needs --hypotheses-tx and --study-key (the hypotheses freeze comes first)');
-            const hyp = await readTx(c, blocks, lower(a.hypothesesTx));
-            if (!hyp || !signedBy(hyp, lower(a.studyKey))) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
-          }
-          appendEntry(meta.network, 'query', { name: 'a1 live-fire gate', start_seq: gate.seq, outcome: 'succeeded', error: null, run_ms: Math.round(performance.now() - t0) });
-          gate = null;
-          start = appendEntry(meta.network, 'a1-live-fire-start', { run_id: runId, command, purpose: a.purpose, code: codeFacts() });
-        }
-        await a1Gate(c, blocks, meta, a);
-        const node = a.nodeContainer ? { container: a.nodeContainer, socket: a.nodeSocket || '/ipc/node.socket', magic: a.magic || (meta.network === 'mainnet' ? 'mainnet' : '1') } : null;
-        let views = a.stake;
-        let nodeViews = a.nodeStake;
-        if (a.fromRun) {
-          // The first credentials in the recent frame's draw order of a run.
-          const n = Number(a.count || 20);
-          const m = Number(a.nodeCount || 5);
-          const rows = await c.query(
-            `SELECT c.view FROM study.draw_order d JOIN study.cred c ON c.sa_id = d.sa_id
-              WHERE d.frame = 'recent' AND obj_description('study.draw_order'::regclass, 'pg_class') = $1
-              ORDER BY d.k LIMIT $2`,
-            [`research-corpus run ${a.fromRun}`, n]
-          );
-          if (rows.rows.length < n) throw new Error(`run ${a.fromRun} does not own study.draw_order, or it has too few keys`);
-          views = [...views, ...rows.rows.map((x) => x.view)];
-          nodeViews = [...nodeViews, ...rows.rows.slice(0, m).map((x) => x.view)];
-        }
-        r = await a1Compare({ client: c, blocks, network: meta.network, views, nodeViews, node, log: a.liveFire ? () => {} : (x) => process.stderr.write(x + '\n') });
-        if (!a.liveFire) console.log(JSON.stringify(r, null, 2));
-      };
-      try {
-        c = await connect(dbOpts(a));
-        meta = await dbMeta(c, blocks);
-        if (a.expectNetwork && a.expectNetwork !== meta.network) throw refuse(`refusing: database is ${meta.network}, expected ${a.expectNetwork}`);
-        if (a.liveFire) await body();
-        else await loggedQuery(meta.network, 'a1', { run_id: runId, command, code: codeFacts() }, body);
-      } catch (e) {
-        error = e;
-      } finally {
-        if (c) await c.end();
-      }
-      if (gate) appendEntry(a.expectNetwork, 'query', { name: 'a1 live-fire gate', start_seq: gate.seq, outcome: 'failed', error: error ? sanitizeError(error) : null, run_ms: Math.round(performance.now() - t0) });
-      if (start) {
-        // Wallet-level output (the UTxO lines that differ) goes to the run's
-        // work directory, removed unless kept; the log gets outcomes only.
-        const work = join(runDir(a.expectNetwork, runId), 'work');
-        let outputs = 'none written';
-        if (r) {
-          writePrivate(join(work, 'a1.json'), JSON.stringify(r, null, 2) + '\n');
-          outputs = 'kept for debugging';
-          if (!a.keepForDebug) {
-            try {
-              rmSync(work, { recursive: true, force: true });
-              outputs = `deleted ${new Date().toISOString()}`;
-            } catch (e) {
-              outputs = `deletion failed: ${sanitizeError(e)}`;
-            }
-          }
-        }
-        const results = r ? r.results.map((x) => ({ koios: x.error ? 'error' : x.koios.equal ? 'equal' : x.koios.explained_by_later_txs ? 'explained' : 'differs', node: x.node ? (x.node.equal ? 'equal' : x.node.explained_by_later_txs ? 'explained' : 'differs') : null })) : [];
-        const entry = appendEntry(a.expectNetwork, 'a1-live-fire', {
-          run_id: runId,
-          start_seq: start.seq,
-          command,
-          purpose: a.purpose,
-          code: codeFacts(),
-          outcome: error ? 'failed' : 'succeeded',
-          error: error ? sanitizeError(error) : null,
-          run_ms: Math.round(performance.now() - t0),
-          credentials_compared: results.length,
-          results,
-          wallet_level_output: outputs
-        });
-        console.log(JSON.stringify(entry, null, 2));
-      }
-      if (error) throw a.liveFire ? new Error(sanitizeError(error)) : error;
+    case 'a1':
+      await a1Command(a, command);
       return;
-    }
     case 'health': {
       const c = await connect(dbOpts(a));
       try {

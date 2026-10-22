@@ -47,19 +47,23 @@ export async function chain(db = null) {
     CREATE TABLE public.epoch_param (epoch_no int PRIMARY KEY, nonce bytea, protocol_major int);
   `);
   let n = 0;
+  let t = 0;
   const block = async ({ blockNo, slot, epoch, epochSlot, time = '2026-10-01 00:00:00' }) => {
     n++;
     await db.query(`INSERT INTO public.block VALUES ($1, $2, $3, $4, $5, $6::timestamp, decode($7, 'hex'))`, [n, blockNo, slot, epoch, epochSlot, time, sha(`block ${n}`)]);
     return { id: n, hash: sha(`block ${n}`) };
   };
-  // A block with one transaction carrying a record and, or, a 674 line.
-  const add = async ({ blockNo, slot, epoch, epochSlot, body, msg, time }) => {
-    const b = await block({ blockNo, slot, epoch, epochSlot, time });
-    const hash = sha(`tx ${b.id}`);
-    await db.query(`INSERT INTO public.tx VALUES ($1, decode($2, 'hex'), $1)`, [b.id, hash]);
-    if (body) await db.query(`INSERT INTO public.tx_metadata (key, json, bytes, tx_id) VALUES (309, NULL, $1, $2)`, [body, b.id]);
-    if (msg) await db.query(`INSERT INTO public.tx_metadata (key, json, bytes, tx_id) VALUES (674, $1, '\\x00'::bytea, $2)`, [JSON.stringify({ msg: Array.isArray(msg) ? msg : [msg] }), b.id]);
+  // A transaction in block b, after the block's earlier ones, carrying a
+  // record and, or, a 674 line.
+  const tx = async (b, { body, msg } = {}) => {
+    t++;
+    const hash = sha(`tx ${t}`);
+    await db.query(`INSERT INTO public.tx VALUES ($1, decode($2, 'hex'), $3)`, [t, hash, b.id]);
+    if (body) await db.query(`INSERT INTO public.tx_metadata (key, json, bytes, tx_id) VALUES (309, NULL, $1, $2)`, [body, t]);
+    if (msg) await db.query(`INSERT INTO public.tx_metadata (key, json, bytes, tx_id) VALUES (674, $1, '\\x00'::bytea, $2)`, [JSON.stringify({ msg: Array.isArray(msg) ? msg : [msg] }), t]);
     return hash;
   };
-  return { db, add, block };
+  // A block with one transaction.
+  const add = async ({ blockNo, slot, epoch, epochSlot, body, msg, time }) => tx(await block({ blockNo, slot, epoch, epochSlot, time }), { body, msg });
+  return { db, add, block, tx };
 }
