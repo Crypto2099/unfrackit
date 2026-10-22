@@ -25,6 +25,8 @@ import { codeManifestErrors, mainnetOptionErrors } from '../../src/guards.mjs';
 import { checkLogPath, verifyLog, appendEntry } from '../../src/checklog.mjs';
 import { logPrefixDigests } from '../../src/freeze.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
+import { STUDY_KEY } from '../../src/params.mjs';
+import { verifyFreezeCommand, a1Command } from '../../src/cli.mjs';
 
 const FIXTURE_STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 const STAKE_A = 'stake1uyehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gh6ffgw';
@@ -86,7 +88,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
   writeFileSync(manifest, formatHashList().replace(/^[0-9a-f]{64}(?= {2}src\/pipeline\.mjs$)/m, '0'.repeat(64)));
   const goodManifest = join(home, 'code-manifest-good.txt');
   writeFileSync(goodManifest, formatHashList());
-  const freeze = { freezeTx: 'aa'.repeat(32), hypothesesTx: 'bb'.repeat(32), prereg: manifest, studyKey: 'cc'.repeat(32), drawkey: manifest };
+  const freeze = { freezeTx: 'aa'.repeat(32), hypothesesTx: 'bb'.repeat(32), prereg: manifest, drawkey: manifest };
   const live = (over = {}) => ({ expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p', ...over } });
   const cases = [
     [{}, /without --freeze-tx/],
@@ -103,15 +105,20 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
     [{ ...freeze, codeManifest: undefined }, /without --code-manifest/],
     [{ ...freeze, codeManifest: goodManifest, drawkey: undefined }, /without --drawkey/],
     [{ ...freeze, codeManifest: manifest }, /differs from the code manifest: differs: src\/pipeline\.mjs/],
-    // A second study run while one is recorded for the final freeze.
+    // A second study run while one is recorded for the final freeze, with the
+    // pinned study key given or left out.
     [{ ...freeze, codeManifest: goodManifest }, /already recorded for the final freeze/],
+    [{ ...freeze, codeManifest: goodManifest, studyKey: STUDY_KEY.toUpperCase() }, /already recorded for the final freeze/],
+    // Any other study key.
+    [{ ...freeze, codeManifest: goodManifest, studyKey: 'cc'.repeat(32) }, /pinned freeze identity/],
     [{ liveFire: { testH: TEST_H, purpose: 'p' } }, /needs --expect-network/],
     [{ ...live({ testH: undefined }) }, /needs --test-h/],
     [{ ...live({ purpose: undefined }) }, /needs --purpose/],
     [{ ...live(), freezeTx: 'aa'.repeat(32) }, /never a freeze or stand-in/],
     [{ ...live(), explain: true, capture: true }, /no plan capture/],
     [{ ...live(), snapshot: 'ab'.repeat(32) }, /--snapshot must be tip for a live-fire run/],
-    [{ ...live() }, /needs --hypotheses-tx and --study-key/],
+    [{ ...live() }, /needs --hypotheses-tx/],
+    [{ ...live(), hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, /pinned freeze identity/],
     [{ ...live(), caseWallets: ['stake1notanaddress'] }, /--case and --cases/]
   ];
   for (const [opts, want] of cases) await assert.rejects(run(opts), want, JSON.stringify(opts));
@@ -127,7 +134,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(entries.filter((e) => e.type === 'live-fire-start' || e.type === 'live-fire').length, 0);
   const gates = entries.filter((e) => e.type === 'query' && e.name === 'live-fire gate');
-  assert.equal(gates.length, 8);
+  assert.equal(gates.length, 9);
   for (const e of gates) {
     assert.equal(e.outcome, 'failed');
     assert.equal(entries.find((x) => x.seq === e.start_seq).type, 'query-start');
@@ -164,6 +171,35 @@ test('cleanup takes an a1 live-fire run from the check log', withHome(async (hom
   await assert.rejects(cleanupRun({ client: m.client, runId: 'nothing' }), /no live-fire run nothing/);
 }));
 
+// verify-freeze and a1 on mainnet, through the commands themselves: --from-block
+// and any study key but the pinned one are refused, and verify-freeze needs
+// the code manifest, each before a chain table is read (the stand-in database
+// fails the test on any chain query) and each logged as a failed query.
+test('verify-freeze and a1 on mainnet refuse --from-block and another study key; verify-freeze needs --code-manifest', withHome(async (home) => {
+  const m = await mainnetDb({ studyRun: false });
+  const manifest = join(home, 'code-manifest.txt');
+  writeFileSync(manifest, formatHashList());
+  const base = { prereg: manifest, freezeTx: 'aa'.repeat(32), codeManifest: manifest };
+  const opts = { client: m.client };
+  await assert.rejects(verifyFreezeCommand({ ...base, fromBlock: '1' }, 'verify-freeze', opts), /--from-block is for test networks only/);
+  await assert.rejects(verifyFreezeCommand({ ...base, codeManifest: undefined }, 'verify-freeze', opts), /need --code-manifest/);
+  await assert.rejects(verifyFreezeCommand({ ...base, studyKey: 'cc'.repeat(32) }, 'verify-freeze', opts), /pinned freeze identity/);
+  await assert.rejects(a1Command({ ...base, fromBlock: '1' }, 'a1', opts), /--from-block is for test networks only/);
+  await assert.rejects(a1Command({ ...base, studyKey: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
+  await assert.rejects(a1Command({ liveFire: true, purpose: 'p', expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
+  const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(entries.filter((e) => e.type === 'query').map((e) => [e.name, e.outcome]), [
+    ['verify-freeze', 'failed'],
+    ['verify-freeze', 'failed'],
+    ['verify-freeze', 'failed'],
+    ['a1', 'failed'],
+    ['a1', 'failed'],
+    ['a1 live-fire gate', 'failed']
+  ]);
+  assert.equal(entries.filter((e) => e.type === 'a1-live-fire-start').length, 0);
+  assert.deepEqual(verifyLog('mainnet').unclosed, []);
+}));
+
 test('a test network takes run-time options the mainnet refuses', () => {
   assert.deepEqual(mainnetOptionErrors({ set: ['guard=200000'], strataPath: DEFAULT_STRATA, defaultStrataPath: DEFAULT_STRATA, snapshot: 'tip', live: true, nodeVersion: 'v24.1.0' }), []);
   assert.deepEqual(mainnetOptionErrors({ snapshot: 'rule', nodeVersion: 'v24.1.0' }), []);
@@ -184,7 +220,9 @@ test('the code manifest: the hash output itself matches, and every difference is
 // Live-fire on mainnet: a hypotheses record signed by another key is refused
 // at the gate, and so is any run on a database holding the study's run; a run
 // past the gate is logged as live-fire (start and end entries) whatever
-// happens to it next.
+// happens to it next. The test key stands in for the pinned STUDY_KEY
+// (studyKeyPin), and the same key given as --study-key without that stand-in
+// is refused.
 test('a mainnet live-fire run needs the hypotheses record signed by the study key', withHome(async () => {
   for (const studyRun of [true, false]) {
     const m = await mainnetDb({ withChain: true, studyRun });
@@ -192,9 +230,10 @@ test('a mainnet live-fire run needs the hypotheses record signed by the study ke
     const hypDigest = sha('hypotheses');
     const good = await m.ch.add({ blockNo: 100, slot: 1000, epoch: 1, epochSlot: 10, body: metadataBytes(record([hypDigest], key)), msg: hypDigest });
     const other = await m.ch.add({ blockNo: 101, slot: 1001, epoch: 1, epochSlot: 11, body: metadataBytes(record([hypDigest], keypair())), msg: hypDigest });
-    const run = (hypothesesTx) => runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx, studyKey: key.pub.toString('hex') });
+    const run = (hypothesesTx) => runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx, studyKeyPin: key.pub.toString('hex') });
     await assert.rejects(run(other), /not in the database with a record signed by the study key/);
     if (studyRun) {
+      await assert.rejects(runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx: good, studyKey: key.pub.toString('hex') }), /pinned freeze identity/);
       await assert.rejects(run(good), /holds the study's run study1/);
       assert.deepEqual(await m.intact(), { runs: 1, params: 2, t: 'study.sample' });
     } else {
@@ -203,7 +242,7 @@ test('a mainnet live-fire run needs the hypotheses record signed by the study ke
     }
   }
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(entries.filter((e) => e.type === 'query').map((e) => e.outcome), ['failed', 'failed', 'failed', 'succeeded']);
+  assert.deepEqual(entries.filter((e) => e.type === 'query').map((e) => e.outcome), ['failed', 'failed', 'failed', 'failed', 'succeeded']);
   const starts = entries.filter((e) => e.type === 'live-fire-start');
   assert.equal(starts.length, 1, 'only the run past the gate is a live-fire run');
   const end = entries.find((e) => e.type === 'live-fire');
@@ -268,7 +307,7 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
     };
     writeFileSync(drawkey, JSON.stringify({ format: 'research-freeze-drawkey-v1', network: 'mainnet', tx_hash: drawkeyTx || f, nonce_epoch: 501, nonce: drawkeyNonce, readings: [{ source: 'koios', nonce: drawkeyNonce }, { source: 'blockfrost', nonce: drawkeyNonce }] }));
     const runId = `study-${++k}`;
-    const error = await runPipeline({ client: m.client, runId, log: () => {}, koios, freezeTx: f, prereg: finalDoc, studyKey, codeManifest: manifest, drawkey }).then(() => null, (e) => e);
+    const error = await runPipeline({ client: m.client, runId, log: () => {}, koios, freezeTx: f, prereg: finalDoc, studyKeyPin: studyKey, codeManifest: manifest, drawkey }).then(() => null, (e) => e);
     const stored = (await m.db.query(`SELECT value FROM study.param WHERE run_id = $1 AND key = 'snapshot'`, [runId])).rows[0];
     return { error, snapshot: stored ? stored.value : null, snap };
   };

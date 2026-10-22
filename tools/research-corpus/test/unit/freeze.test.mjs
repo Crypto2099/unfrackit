@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { loadAll } from '../../src/sqlfile.mjs';
 import { verifyFinalFreeze, drawKey, drawEpoch, stabilityWindow, reassemble, parseRecord, verifySignatures, logPrefixDigests, drawkeyFileErrors, ruleSnapshot, hashTable } from '../../src/freeze.mjs';
 import { decode } from '../../src/cbor.mjs';
+import { studyKeyFor } from '../../src/guards.mjs';
+import { STUDY_KEY } from '../../src/params.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 
 const blocks = loadAll();
@@ -30,10 +32,11 @@ const listing = ({ manifest = MANIFEST, log = LOG } = {}) => [...code.map((c) =>
 const docText = (key, cite, listed, extra = '') => `final text\nkey ${key.pub.toString('hex')}\nhypotheses web+cardano://transaction/${cite}/metadata/309\n\n${listed.map((l) => `${l.sha256}  ${l.name}`).join('\n')}\n${extra}`;
 
 // H at block 1000 (epoch 10), F at block 2000 (epoch 11, early: N = 12).
-// over: before(ctx) adds records before H; between(ctx) between H and F;
-// listed(default) the document's list; items(docDigest, listed) the record's
-// items; body(items, key), signer(key), msg, chunk, citeTx, copyAfter, tip,
-// extra (document text after the list).
+// over: before(ctx) adds records before H (its result is ctx.before);
+// between(ctx) between H and F; listed(default) the document's list;
+// items(docDigest, listed) the record's items; body(items, key), signer(key),
+// msg, chunk, citeTx (a hash, or a function of ctx), copyAfter, tip, extra
+// (document text after the list).
 async function scenario(over = {}) {
   const key = keypair();
   const dir = mkdtempSync(join(tmpdir(), 'rc-freeze-'));
@@ -41,11 +44,12 @@ async function scenario(over = {}) {
   const hypDoc = Buffer.from(`hypotheses text\nkey ${key.pub.toString('hex')}\n`);
   const hypDigest = sha(hypDoc);
   const ctx = { key, add, hypDigest };
-  if (over.before) await over.before(ctx);
+  if (over.before) ctx.before = await over.before(ctx);
   const hypTx = await add({ blockNo: 1000, slot: 50000, epoch: 10, epochSlot: 1000, body: metadataBytes(over.hypBody ? over.hypBody(key, hypDigest) : record([hypDigest], key)), msg: hypDigest });
   ctx.hypTx = hypTx;
   const listed = over.listed ? over.listed(listing()) : listing();
-  const text = docText(key, over.citeTx || hypTx, listed, over.extra || '');
+  const cite = typeof over.citeTx === 'function' ? over.citeTx(ctx) : over.citeTx;
+  const text = docText(key, cite || hypTx, listed, over.extra || '');
   const finalDigest = sha(Buffer.from(text));
   const items = over.items ? over.items(finalDigest, listed) : [finalDigest, ...listed.map((l) => l.sha256)];
   const signer = over.signer ? over.signer(key) : key;
@@ -106,6 +110,8 @@ test('refusals: another signer, a body changed after signing, a non-canonical re
     // An item the document does not list, and a listed line that is no item.
     [{ items: (d, listed) => [d, ...listed.map((l) => l.sha256), sha('unlisted')] }, 'document_lists_every_other_item'],
     [{ listed: (l) => [...l, { sha256: sha('not an item'), name: 'extra.txt' }], items: (d, listed) => [d, ...listed.filter((x) => x.name !== 'extra.txt').map((x) => x.sha256)] }, 'document_lists_every_other_item'],
+    // An item listed twice, though the record carries it once.
+    [{ listed: (l) => [...l, l[0]], items: (d, listed) => [d, ...new Set(listed.map((x) => x.sha256))] }, 'document_lists_every_other_item'],
     // Two code manifests, or none; no check-log prefix.
     [{ listed: (l) => [...l, { sha256: sha('another manifest'), name: 'code-manifest.txt' }] }, 'document_names_one_code_manifest'],
     [{ listed: (l) => l.filter((x) => x.name !== 'code-manifest.txt') }, 'document_names_one_code_manifest'],
@@ -129,6 +135,10 @@ test('copies neither block the final nor stand in for it: replays, retypes, co-s
     // naming the document's digest.
     async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(c.body, 50) }),
     async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, msg: ['see', c.finalDigest] }),
+    // Carriers of the final record whose 674 line holds the digest among other
+    // lines: not exactly the document's digest, so not the final freeze.
+    async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(c.body, 50), msg: [c.finalDigest, 'x'] }),
+    async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(c.body, 50), msg: ['x', c.finalDigest] }),
     // A replay of the hypotheses record, a retype of it, both records
     // co-signed by a stranger (the final's without its 674 line).
     async (c) => {
@@ -166,6 +176,89 @@ test('copies neither block the final nor stand in for it: replays, retypes, co-s
   }
 });
 
+test('a bare copy of the hypotheses record landing first blocks no final: the document may cite any carrier of its signed content', async () => {
+  // A stranger's copy of H's body, without H's 674 line, one block ahead of
+  // the key holder's H: the copy is the hypotheses record's first carrier.
+  const before = async (c) => c.add({ blockNo: 999, slot: 49000, epoch: 10, epochSlot: 900, body: metadataBytes(record([c.hypDigest], c.key), 40) });
+  for (const cite of ['the copy', "the key holder's own"]) {
+    const s = await scenario({ before, citeTx: cite === 'the copy' ? (c) => c.before : undefined });
+    try {
+      const v = await verifyFinalFreeze({ ...s.args, hypothesesTx: null });
+      assert.deepEqual(failed(v), [], `the document cites ${cite}`);
+      assert.equal(v.hypotheses.tx, s.ctx.before);
+      assert.equal(v.freeze.tx, s.freezeTx);
+      // --hypotheses-tx must name the chain's first carrier.
+      assert.deepEqual(failed(await verifyFinalFreeze(s.args)), ['hypotheses_tx_is_the_chains']);
+      assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, hypothesesTx: s.ctx.before })), []);
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
+test('records in the same block are ordered by transaction', async () => {
+  const at = (blockNo, epoch, epochSlot) => ({ blockNo, slot: epoch * 432000 + epochSlot, epoch, epochSlot });
+  const run = async (build) => {
+    const key = keypair();
+    const dir = mkdtempSync(join(tmpdir(), 'rc-block-'));
+    const { db, add, block, tx } = await chain();
+    const hypDigest = sha('hypotheses, in a shared block');
+    const hBody = metadataBytes(record([hypDigest], key));
+    // The final document citing tx, and its record body.
+    const final = (cite) => {
+      const text = docText(key, cite, listing());
+      writeFileSync(join(dir, 'final.md'), text);
+      const d = sha(Buffer.from(text));
+      return { d, raw: record([d, ...listing().map((l) => l.sha256)], key) };
+    };
+    try {
+      const r = await build({ key, add, block, tx, hBody, hypDigest, final });
+      const v = await verifyFinalFreeze({ client: db, blocks, preregPath: join(dir, 'final.md'), studyKey: key.pub.toString('hex'), codeDigests: code, tipBlockNo: 9000 });
+      return { v, ...r };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  // H and F in one block, H first: F is the chain's final freeze, but not in a
+  // later block than the hypotheses record.
+  let r = await run(async (c) => {
+    const b = await c.block(at(1000, 10, 1000));
+    const h = await c.tx(b, { body: c.hBody, msg: c.hypDigest });
+    const f = c.final(h);
+    return { F: await c.tx(b, { body: metadataBytes(f.raw), msg: f.d }) };
+  });
+  assert.deepEqual(failed(r.v), ['hypotheses_block_earlier']);
+  assert.equal(r.v.freeze.tx, r.F);
+  // A bare copy of H ahead of the key holder's H in its block: the copy is the
+  // first carrier, and the document citing the key holder's H passes.
+  r = await run(async (c) => {
+    const b = await c.block(at(1000, 10, 1000));
+    const copy = await c.tx(b, { body: metadataBytes(record([c.hypDigest], c.key), 40) });
+    const h = await c.tx(b, { body: c.hBody, msg: c.hypDigest });
+    const f = c.final(h);
+    await c.add({ ...at(2000, 11, 5000), body: metadataBytes(f.raw), msg: f.d });
+    return { copy };
+  });
+  assert.deepEqual(failed(r.v), []);
+  assert.equal(r.v.hypotheses.tx, r.copy);
+  // A complete copy of F in F's block: ahead of F it is the final freeze,
+  // after F it is not.
+  for (const ahead of [true, false]) {
+    r = await run(async (c) => {
+      const h = await c.add({ ...at(1000, 10, 1000), body: c.hBody, msg: c.hypDigest });
+      const f = c.final(h);
+      const b = await c.block(at(2000, 11, 5000));
+      const carriers = [{ body: metadataBytes(f.raw, 40), msg: f.d }, { body: metadataBytes(f.raw), msg: f.d }];
+      if (!ahead) carriers.reverse();
+      const first = await c.tx(b, carriers[0]);
+      const second = await c.tx(b, carriers[1]);
+      return { first, second };
+    });
+    assert.deepEqual(failed(r.v), [], ahead ? 'the copy ahead' : 'the copy after');
+    assert.equal(r.v.freeze.tx, r.first, 'the first carrier in the block is the final freeze');
+  }
+});
+
 test('the chain decides the order: a second final, a second hypotheses record, a replayed one, a stray record of the key', async () => {
   // The key holder's other final before this one: it is the chain's final.
   const other = await scenario({
@@ -190,6 +283,19 @@ test('the chain decides the order: a second final, a second hypotheses record, a
   } finally {
     stray.cleanup();
   }
+  // A hypotheses body the key signed, broadcast and abandoned before the
+  // hypotheses record, replayed by anyone ahead of it: it is the chain's
+  // hypotheses record, the key holder's hypotheses record is the chain's final
+  // record, and nothing passes.
+  const abandoned = await scenario({ before: async (c) => c.add({ blockNo: 999, slot: 49000, epoch: 10, epochSlot: 900, body: metadataBytes(record([sha('an abandoned first hypotheses body')], c.key)) }) });
+  try {
+    const v = await verifyFinalFreeze({ ...abandoned.args, hypothesesTx: null });
+    for (const n of ['final_tx_carries_the_document', 'freeze_tx_is_the_chains', 'document_cites_hypotheses_record']) assert.ok(failed(v).includes(n), n);
+    assert.equal(v.hypotheses.tx, abandoned.ctx.before);
+    assert.equal((await verifyFinalFreeze({ ...abandoned.args, freezeTx: null, hypothesesTx: null })).ok, false);
+  } finally {
+    abandoned.cleanup();
+  }
   // After a passing final F1 (citing Ha), a second hypotheses record Hb, or a
   // replay of Ha, and a final F2 citing it: F2 is never the chain's final.
   for (const replay of [false, true]) {
@@ -203,7 +309,11 @@ test('the chain decides the order: a second final, a second hypotheses record, a
       writeFileSync(join(s.dir, 'final2.md'), text2);
       assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, tipBlockNo: 9000 })), [], 'F1 stays the final');
       const v2 = await verifyFinalFreeze({ ...s.args, tipBlockNo: 9000, freezeTx: F2, hypothesesTx: Hb, preregPath: join(s.dir, 'final2.md') });
-      for (const n of ['hypotheses_tx_is_the_chains', 'final_tx_carries_the_document', 'freeze_tx_is_the_chains', 'document_cites_hypotheses_record']) assert.ok(failed(v2).includes(n), `${replay ? 'replay' : 'second record'}: ${n}`);
+      // A replay of Ha is a carrier of the hypotheses record, so F2 may cite
+      // it; F2 is refused on the order either way.
+      const want = ['hypotheses_tx_is_the_chains', 'final_tx_carries_the_document', 'freeze_tx_is_the_chains', ...(replay ? [] : ['document_cites_hypotheses_record'])];
+      for (const n of want) assert.ok(failed(v2).includes(n), `${replay ? 'replay' : 'second record'}: ${n}`);
+      if (replay) assert.ok(!failed(v2).includes('document_cites_hypotheses_record'));
     } finally {
       s.cleanup();
     }
@@ -219,6 +329,51 @@ test('one record carrying two document digests yields no final: each document mu
     assert.ok(failed(v).includes('document_lists_every_other_item'), failed(v).join());
   } finally {
     s.cleanup();
+  }
+});
+
+test('two freeze identities on one chain: mainnet reads the pinned key only, so the second final is no final; test networks take the flag', async () => {
+  assert.equal(STUDY_KEY, '8e050bfd8d687a27025f9bd5805a13501329dac58092f1c702ff626dc0780cfe');
+  assert.equal(studyKeyFor('mainnet'), STUDY_KEY);
+  assert.equal(studyKeyFor('mainnet', STUDY_KEY.toUpperCase()), STUDY_KEY);
+  assert.throws(() => studyKeyFor('mainnet', 'cc'.repeat(32)), /pinned freeze identity/);
+  assert.equal(studyKeyFor('preprod'), null);
+  // K1 and K2 each publish a hypotheses record and a final freeze, and both
+  // documents name both keys. The tests cannot sign with STUDY_KEY, so K1
+  // stands in for it as the pin.
+  const k1 = keypair();
+  const k2 = keypair();
+  const hex = (k) => k.pub.toString('hex');
+  const dir = mkdtempSync(join(tmpdir(), 'rc-keys-'));
+  const { db, add } = await chain();
+  try {
+    const both = `keys ${hex(k1)} ${hex(k2)}`;
+    const h1 = await add({ blockNo: 1000, slot: 50000, epoch: 10, epochSlot: 1000, body: metadataBytes(record([sha('hyp1')], k1)), msg: sha('hyp1') });
+    const h2 = await add({ blockNo: 1001, slot: 50020, epoch: 10, epochSlot: 1020, body: metadataBytes(record([sha('hyp2')], k2)), msg: sha('hyp2') });
+    const doc = (cite, tag) => `final ${tag}\n${both}\nweb+cardano://transaction/${cite}/metadata/309\n\n${listing().map((l) => `${l.sha256}  ${l.name}`).join('\n')}\n`;
+    const t1 = doc(h1, 'one');
+    const t2 = doc(h2, 'two');
+    writeFileSync(join(dir, 'd1.md'), t1);
+    writeFileSync(join(dir, 'd2.md'), t2);
+    const d1 = sha(Buffer.from(t1));
+    const d2 = sha(Buffer.from(t2));
+    // F1 early in epoch 11 (N = 12), F2 after epoch 11's cutoff (N = 13).
+    const f1 = await add({ blockNo: 2000, slot: 4800000, epoch: 11, epochSlot: 5000, body: metadataBytes(record([d1, ...listing().map((l) => l.sha256)], k1)), msg: d1 });
+    const f2 = await add({ blockNo: 2600, slot: 5100000, epoch: 11, epochSlot: 300000, body: metadataBytes(record([d2, ...listing().map((l) => l.sha256)], k2)), msg: d2 });
+    const verify = (studyKey, freezeTx, file) => verifyFinalFreeze({ client: db, blocks, freezeTx, preregPath: join(dir, file), studyKey, codeDigests: code, tipBlockNo: 9000 });
+    // A test network: the flag decides, and each identity has a valid final.
+    assert.deepEqual(failed(await verify(studyKeyFor('preprod', hex(k1)), f1, 'd1.md')), []);
+    assert.deepEqual(failed(await verify(studyKeyFor('preprod', hex(k2)), f2, 'd2.md')), []);
+    // Mainnet: the second key is refused before anything is read, and under
+    // the pinned key F2 is no record of the study.
+    assert.throws(() => studyKeyFor('mainnet', hex(k2), hex(k1)), /pinned freeze identity/);
+    const pinned = studyKeyFor('mainnet', undefined, hex(k1));
+    assert.equal(pinned, hex(k1));
+    assert.deepEqual(failed(await verify(pinned, f1, 'd1.md')), []);
+    const second = await verify(pinned, f2, 'd2.md');
+    for (const n of ['final_tx_carries_the_document', 'freeze_tx_is_the_chains', 'signed_by_study_key']) assert.ok(failed(second).includes(n), n);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -269,6 +424,9 @@ test('the snapshot by rule: the last block of epoch N - 1 before its cutoff, wit
   await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios(snap.hash, 3000), tipBlockNo: 2460 }), /first block of epoch 10 is 2159 blocks below the database tip/);
   await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios('00'.repeat(32), 3000), tipBlockNo: 2461 }), /Koios names another/);
   await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios(snap.hash, 2460), tipBlockNo: 2461 }), /Koios's tip/);
+  // Koios's first block of epoch N is compared by hash, not only by height.
+  const otherFirst = { ...koios(snap.hash, 3000), firstBlockOfEpoch: async () => ({ hash: 'ee'.repeat(32), block_height: 301 }) };
+  await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: otherFirst, tipBlockNo: 2461 }), /Koios names another first block of epoch 10/);
   await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 11, koios: koios(snap.hash, 3000), tipBlockNo: 2461 }), /does not yet hold epoch 11/);
 });
 

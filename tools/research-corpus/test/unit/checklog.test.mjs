@@ -45,7 +45,9 @@ test('append, chain, tamper detection, kept outputs', () => {
 test('sanitize replaces counts, addresses and hashes; a refusal keeps its own numbers', () => {
   assert.equal(sanitize('step check_61_table: 12 rows, 3,400 wallets, 0.05 share'), 'step check_61_table: # rows, # wallets, # share');
   assert.equal(sanitize('Key (tx_out_id)=(123456) already exists'), 'Key (tx_out_id)=(#) already exists');
-  assert.equal(sanitize('transaction 0183bce3b177 not found; x5_reward29'), 'transaction 0183bce3b177 not found; x5_reward29');
+  // A word holding a digit is replaced whole; a snake_case name is kept.
+  assert.equal(sanitize('transaction 0183bce3b177 not found; x5_reward29'), 'transaction # not found; x5_reward29');
+  assert.equal(sanitize('row37, 1e5 and 12h30m at abc0x1f4 (v1.2)'), '#, # and # at # (#.#)');
   assert.equal(
     sanitize('Koios GET /account_txs?_stake_address=stake1uyehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gh6ffgw: 500'),
     'Koios GET /account_txs?_stake_address=<bech32>: #'
@@ -98,6 +100,67 @@ test('a run resumed to a clean finish settles its earlier starts, kept output an
     }
     v = verifyLog('mainnet');
     assert.deepEqual([v.kept_not_cleaned, v.unclosed, v.failed_deletions], [[], [], []]);
+  } finally {
+    if (prev === undefined) delete process.env.RESEARCH_CORPUS_HOME;
+    else process.env.RESEARCH_CORPUS_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('cleanup --start-seq closes that start only: kept output and other starts of the run stay reported', () => {
+  const home = mkdtempSync(join(tmpdir(), 'rc-log4-'));
+  const prev = process.env.RESEARCH_CORPUS_HOME;
+  process.env.RESEARCH_CORPUS_HOME = home;
+  try {
+    // A live-fire run X kept for debugging (its tables remain).
+    const gx = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'X' });
+    appendEntry('mainnet', 'query', { name: 'live-fire gate', start_seq: gx.seq, outcome: 'succeeded' });
+    const sx = appendEntry('mainnet', 'live-fire-start', { run_id: 'X' });
+    appendEntry('mainnet', 'live-fire', { run_id: 'X', start_seq: sx.seq, outcome: 'failed', wallet_level_output: 'kept for debugging' });
+    // A live-fire run Y killed after its gate (no end entry; its tables remain).
+    const gy = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'Y' });
+    appendEntry('mainnet', 'query', { name: 'live-fire gate', start_seq: gy.seq, outcome: 'succeeded' });
+    const sy = appendEntry('mainnet', 'live-fire-start', { run_id: 'Y' });
+    // Later gate attempts of X and Y, killed during the gate, closed by hand.
+    const gx2 = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'X' });
+    const gy2 = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'Y' });
+    const closed = closeStart('mainnet', gx2.seq, 'cleanup --start-seq');
+    assert.equal(closed.type, 'start-closed');
+    closeStart('mainnet', gy2.seq, 'cleanup --start-seq');
+    const v = verifyLog('mainnet');
+    assert.deepEqual(v.kept_not_cleaned.map((x) => x.run_id), ['X']);
+    assert.deepEqual(v.unclosed.map((x) => x.seq), [sy.seq]);
+    assert.throws(() => closeStart('mainnet', gx2.seq), /not an unclosed start/);
+  } finally {
+    if (prev === undefined) delete process.env.RESEARCH_CORPUS_HOME;
+    else process.env.RESEARCH_CORPUS_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a clean finish settles only the same query of the same run', () => {
+  const home = mkdtempSync(join(tmpdir(), 'rc-log5-'));
+  const prev = process.env.RESEARCH_CORPUS_HOME;
+  process.env.RESEARCH_CORPUS_HOME = home;
+  try {
+    const killed = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'g' });
+    const open = () => verifyLog('mainnet').unclosed.map((x) => x.seq);
+    // Another run's clean gate, another query of the same run, a failed
+    // gate of the same run, and another run's clean live-fire finish settle
+    // nothing.
+    const other = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'h' });
+    appendEntry('mainnet', 'query', { name: 'live-fire gate', start_seq: other.seq, outcome: 'succeeded' });
+    const run = appendEntry('mainnet', 'query-start', { name: 'run', run_id: 'g' });
+    appendEntry('mainnet', 'query', { name: 'run', start_seq: run.seq, outcome: 'succeeded' });
+    const failedGate = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'g' });
+    appendEntry('mainnet', 'query', { name: 'live-fire gate', start_seq: failedGate.seq, outcome: 'failed' });
+    const lf = appendEntry('mainnet', 'live-fire-start', { run_id: 'h' });
+    appendEntry('mainnet', 'live-fire', { run_id: 'h', start_seq: lf.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-10-22T00:00:00Z' });
+    assert.deepEqual(open(), [killed.seq]);
+    // The same query of the same run, finished cleanly, settles it.
+    const again = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'g' });
+    appendEntry('mainnet', 'query', { name: 'live-fire gate', start_seq: again.seq, outcome: 'succeeded' });
+    assert.deepEqual(open(), []);
   } finally {
     if (prev === undefined) delete process.env.RESEARCH_CORPUS_HOME;
     else process.env.RESEARCH_CORPUS_HOME = prev;

@@ -62,6 +62,16 @@ export const READINGS = {
 
 export const NETWORK_TAG = { mainnet: 1, preprod: 0, preview: 0 };
 
+// The freeze identity's Ed25519 signing public key: the 32-byte protected-header
+// kid of every record the study signs (CIP-190, "Signer-key identification",
+// path 1). A kid authenticates no name by itself (CIP-190, "Reporting signature
+// results"), so the study names its key here, in the public source. On
+// mainnet every command that reads the study's records
+// uses this key and refuses any other --study-key, so a second identity cannot
+// yield a second valid final; test networks take --study-key, since
+// rehearsals sign with other keys.
+export const STUDY_KEY = '8e050bfd8d687a27025f9bd5805a13501329dac58092f1c702ff626dc0780cfe';
+
 // The names under which the final pre-registration lists the code manifest
 // (the `npm run hash` output) and the frozen check-log prefix, in its lines of
 // <64 lowercase hex><two spaces><name>; each must appear exactly once.

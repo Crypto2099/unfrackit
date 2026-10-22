@@ -106,10 +106,14 @@ CREATE TABLE study.flow AS
 WITH n0 AS (
   -- Stake credentials with at least one output at or before the snapshot.
   -- stake_address has no tx_id, so a credential's first appearance is read
-  -- from tx_out, bounded by transaction ID like every other step.
+  -- from its outputs, bounded by transaction ID like every other step. The
+  -- life table holds exactly those outputs (tx_out rows with a
+  -- stake_address_id and tx_id <= snap_tx; its x1_enterprise rows carry only
+  -- credentials already there), so it is read instead of public.tx_out, on
+  -- its sa_id index and with no filter left to apply.
   SELECT count(*) AS n
     FROM study.cred c
-   WHERE EXISTS (SELECT 1 FROM public.tx_out o WHERE o.stake_address_id = c.sa_id AND o.tx_id <= {{snap_tx}}::bigint)
+   WHERE EXISTS (SELECT 1 FROM study.txo t WHERE t.sa_id = c.sa_id)
 ),
 st AS (
   SELECT fr.frame,
