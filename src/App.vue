@@ -203,8 +203,10 @@
           </v-col>
           <v-col class="text-start text-md-end">
             <p>
-              Released without warranty as open source under <a href="https://creativecommons.org/licenses/by/4.0/"
-                                                                target="_blank">CC-By-4.0 License</a> <br/> <a
+              Released without warranty as open source: code under
+              <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank">Apache-2.0</a>,
+              documentation under
+              <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> <br/> <a
                 href="https://github.com/crypto2099/unfrackit" target="_blank"> View Project on GitHub
               <v-icon>mdi-github</v-icon>
             </a>
