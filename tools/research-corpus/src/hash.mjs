@@ -69,7 +69,9 @@ function git(args) {
 
 export function codeVersion() {
   const pkg = JSON.parse(readFileSync(join(TOOL_DIR, 'package.json'), 'utf8'));
-  const status = git(['status', '--porcelain', '--', '.']);
+  // Dirty means a change to a hashed path; files outside them (a draft PR
+  // body, the README) do not change what runs.
+  const status = git(['status', '--porcelain', '--', ...HASHED_DIRS, ...HASHED_FILES]);
   return {
     git_commit: git(['rev-parse', 'HEAD']),
     git_dirty: status === null ? null : status.length > 0,

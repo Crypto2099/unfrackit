@@ -13,6 +13,11 @@
 // sequence number and the SHA-256 of the whole file before it was appended,
 // so an edit to an earlier line breaks every later `prev`. One file per
 // network: ${home}/check-log/<network>.jsonl.
+//
+// A live-fire run writes a start entry before its first database query and an
+// end entry naming the start's sequence number; an interrupted run leaves the
+// start unclosed, which `verifyLog` reports, as it reports kept or undeleted
+// wallet-level output.
 
 import { readFileSync, existsSync, appendFileSync, chmodSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -24,13 +29,25 @@ export function checkLogPath(network) {
   return join(homeDir(), 'check-log', `${network}.jsonl`);
 }
 
-// Error text with every number that is not part of an identifier replaced,
-// so a count inside a database or check message cannot reach the log.
-export function sanitize(message) {
-  return String(message)
-    .replace(/(?<![\w.])\d[\d,._]*(?![\w])/g, '#')
-    .slice(0, 500);
+// A refusal the code itself raises: its fixed text carries no count, so only
+// addresses and hashes are redacted from it.
+export class Refusal extends Error {}
+export const refuse = (message) => new Refusal(message);
+
+// Error text with every bech32 string (an address, a stake address) and every
+// hex run of 20 or more characters (a hash, a key, a credential) replaced, and,
+// unless the error is one of the code's own refusals, every number that is not
+// part of an identifier, so neither wallet-level data nor a count inside a
+// database or provider message can reach the log.
+export function sanitize(message, { refusal = false } = {}) {
+  let t = String(message)
+    .replace(/\b[a-z][a-z0-9_]*1[02-9ac-hj-np-z]{20,}\b/g, '<bech32>')
+    .replace(/\b[0-9a-fA-F]{20,}\b/g, '<hex>');
+  if (!refusal) t = t.replace(/(?<![\w.])\d[\d,._]*(?![\w])/g, '#');
+  return t.slice(0, 500);
 }
+
+export const sanitizeError = (e) => sanitize(e && e.message !== undefined ? e.message : e, { refusal: e instanceof Refusal });
 
 function readLines(path) {
   if (!existsSync(path)) return { text: '', entries: [] };
@@ -69,9 +86,40 @@ export function verifyLog(network) {
   });
   if (text && !text.endsWith('\n')) errors.push('no final newline');
   const open = new Map();
+  const starts = new Map();
+  const failedDeletions = [];
   for (const e of entries) {
+    if (e.type === 'live-fire-start' || e.type === 'a1-live-fire-start' || e.type === 'query-start') starts.set(e.seq, e);
+    if (e.start_seq !== undefined && e.start_seq !== null) starts.delete(e.start_seq);
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
-    if (e.type === 'cleanup' && e.outcome === 'succeeded') open.delete(e.run_id);
+    if ((e.type === 'live-fire' || e.type === 'a1-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
+      failedDeletions.push({ run_id: e.run_id, seq: e.seq, wallet_level_output: e.wallet_level_output });
+    }
+    if (e.type === 'cleanup' && e.outcome === 'succeeded') {
+      open.delete(e.run_id);
+      for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
+    }
   }
-  return { path, entries: entries.length, errors, kept_not_cleaned: [...open.entries()].map(([run_id, seq]) => ({ run_id, seq })), sha256: createHash('sha256').update(text).digest('hex') };
+  const unclosed = [...starts.values()].map((e) => ({ seq: e.seq, type: e.type, run_id: e.run_id || null, date: e.date }));
+  return { path, entries: entries.length, errors, unclosed, kept_not_cleaned: [...open.entries()].map(([run_id, seq]) => ({ run_id, seq })), failed_deletions: failedDeletions, sha256: createHash('sha256').update(text).digest('hex') };
+}
+
+// Runs fn as a logged query when the network is mainnet: a start entry
+// before fn, an end entry after it naming the start, with the outcome and run
+// time only. Before the final freeze every query of the study's code against
+// mainnet is logged; after it, logging changes nothing the freeze recorded,
+// since the frozen log is a prefix of the log.
+export async function loggedQuery(network, name, fields, fn, now = () => Date.now()) {
+  if (network !== 'mainnet') return fn();
+  const start = appendEntry(network, 'query-start', { name, ...fields });
+  const t0 = now();
+  let error = null;
+  try {
+    return await fn();
+  } catch (e) {
+    error = e;
+    throw e;
+  } finally {
+    appendEntry(network, 'query', { name, start_seq: start.seq, outcome: error ? 'failed' : 'succeeded', error: error ? sanitizeError(error) : null, run_ms: now() - t0 });
+  }
 }

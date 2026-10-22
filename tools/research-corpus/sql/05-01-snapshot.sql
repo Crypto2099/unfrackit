@@ -83,6 +83,15 @@ SELECT m.key, encode(m.bytes, 'hex') AS bytes, m.json::text AS json
  WHERE t.hash = {{tx_hash}} AND m.key IN (309, 674)
  ORDER BY m.key;
 
+-- Label-309 and label-674 metadata of the transactions strictly between two
+-- transaction ids (through tx_metadata(tx_id)), for the check that the final
+-- freeze is the first transaction carrying its record.
+-- @query tx_metadata_between
+SELECT encode(t.hash, 'hex') AS tx, m.tx_id, m.key, encode(m.bytes, 'hex') AS bytes, m.json::text AS json
+  FROM public.tx_metadata m JOIN public.tx t ON t.id = m.tx_id
+ WHERE m.tx_id > {{lo}} AND m.tx_id < {{hi}} AND m.key IN (309, 674)
+ ORDER BY m.tx_id, m.key;
+
 -- @query epoch_nonce
 SELECT epoch_no, encode(nonce, 'hex') AS nonce, protocol_major FROM public.epoch_param WHERE epoch_no = {{epoch_no}};
 

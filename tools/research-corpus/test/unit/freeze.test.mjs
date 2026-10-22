@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { encode } from '../lib/cbor-encode.mjs';
 import { loadAll } from '../../src/sqlfile.mjs';
-import { verifyFinalFreeze, drawKey, drawEpoch, stabilityWindow, reassemble, parseRecord, verifySignatures } from '../../src/freeze.mjs';
+import { verifyFinalFreeze, drawKey, drawEpoch, stabilityWindow, reassemble, parseRecord, verifySignatures, logPrefixDigests, drawkeyFileErrors } from '../../src/freeze.mjs';
 import { decode } from '../../src/cbor.mjs';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
@@ -29,14 +29,15 @@ function keypair() {
 }
 
 // A signed record body. `tamper` changes the body after signing.
-function record(digests, key, { tamper = false, unsorted = false } = {}) {
+function record(digests, key, { tamper = false, unsorted = false, supersedes = null } = {}) {
   const items = digests.map((d) => ({ hashes: { 'sha2-256': Buffer.from(d, 'hex') } }));
-  const toSign = Buffer.concat([Buffer.from('cardano-poe-record-sig-v1'), encode({ v: 1, items })]);
+  const body0 = supersedes ? { v: 1, items, supersedes: Buffer.from(supersedes, 'hex') } : { v: 1, items };
+  const toSign = Buffer.concat([Buffer.from('cardano-poe-record-sig-v1'), encode(body0)]);
   const prot = encode(new Map([[1, -8], [4, key.pub]]));
   const sig = sign(null, encode(['Signature1', prot, Buffer.alloc(0), toSign]), key.privateKey);
   const cose = encode([prot, {}, null, sig]);
   const signedItems = tamper ? [...items, { hashes: { 'sha2-256': Buffer.alloc(32, 7) } }] : items;
-  return encode({ v: 1, items: signedItems, sigs: [{ cose_sign1: cose }] }, { sortKeys: !unsorted });
+  return encode({ ...body0, items: signedItems, sigs: [{ cose_sign1: cose }] }, { sortKeys: !unsorted });
 }
 
 const metadataBytes = (body, size = 64) => {
@@ -79,11 +80,17 @@ async function scenario(over = {}) {
   const items = over.items ? over.items(finalDigest, code) : [finalDigest, ...code.map((c) => c.sha256)];
   const signer = over.signer ? over.signer(key) : key;
   const body = over.body ? over.body(items, signer) : record(items, signer);
+  // A copy of the record (or of the 674 line) in a transaction before the
+  // final freeze: the record's body republished, as CIP-190 allows anyone to.
+  let copyTx = null;
+  if (over.copyBefore === 'body') copyTx = await add({ blockNo: 1500, slot: 75000, epoch: 11, epochSlot: 1000, body: metadataBytes(body, 50) });
+  if (over.copyBefore === 'msg') copyTx = await add({ blockNo: 1500, slot: 75000, epoch: 11, epochSlot: 1000, msg: finalDigest });
   const freezeTx = await add({ blockNo: 2000, slot: 100000, epoch: 11, epochSlot: 5000, body: metadataBytes(body, over.chunk || 64), msg: over.msg || finalDigest });
+  if (over.copyAfter) await add({ blockNo: 2500, slot: 120000, epoch: 11, epochSlot: 9000, body: metadataBytes(body), msg: finalDigest });
   writeFileSync(join(dir, 'final.md'), finalDoc);
   writeFileSync(join(dir, 'hyp.md'), hypDoc);
   const args = { client: db, blocks, freezeTx, hypothesesTx: hypTx, preregPath: join(dir, 'final.md'), studyKey: key.pub.toString('hex'), codeDigests: code, tipBlockNo: over.tip || 5000 };
-  return { db, dir, key, hypTx, freezeTx, args, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { db, dir, key, hypTx, freezeTx, copyTx, finalDigest, items, args, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const failed = (v) => v.checks.filter((c) => !c.ok).map((c) => c.name);
@@ -124,7 +131,10 @@ test('refusals: another signer, a body changed after signing, missing code diges
     [{ body: (items, key) => record(items, key, { unsorted: true }) }, 'label_309_record'],
     [{ chunk: 65 }, 'label_309_record'],
     [{ msg: 'ab'.repeat(32) }, 'label_674_is_document_digest'],
-    [{ citeTx: 'cd'.repeat(32) }, 'document_cites_hypotheses_record']
+    [{ citeTx: 'cd'.repeat(32) }, 'document_cites_hypotheses_record'],
+    [{ body: (items, key) => record(items, key, { supersedes: 'ef'.repeat(32) }) }, 'record_has_no_supersedes'],
+    [{ copyBefore: 'body' }, 'first_carrier_of_the_record'],
+    [{ copyBefore: 'msg' }, 'first_carrier_of_the_record']
   ];
   for (const [over, name] of cases) {
     const s = await scenario(over);
@@ -179,4 +189,78 @@ test('the draw key: the database nonce of epoch N, cross-checked with Koios; ref
   await assert.rejects(drawKey({ client: db, blocks, network: 'preprod', block, koios: koios('cd'.repeat(32)) }), /differs between the database and Koios/);
   await assert.rejects(drawKey({ client: db, blocks, network: 'preprod', block, koios: koios(null) }), /no nonce/);
   await assert.rejects(drawKey({ client: db, blocks, network: 'preprod', block, koios: koios(nonce, { securityparam: '432' }) }), /genesis/);
+  const dir = mkdtempSync(join(tmpdir(), 'rc-drawkey-'));
+  try {
+    const file = join(dir, 'drawkey.json');
+    const doc = { format: 'research-freeze-drawkey-v1', network: 'preprod', tx_hash: 'cd'.repeat(32), nonce_epoch: 322, nonce, readings: [{ source: 'koios', at: 't1', nonce }, { source: 'blockfrost', at: 't2', nonce }] };
+    writeFileSync(file, JSON.stringify(doc));
+    const withFile = await drawKey({ client: db, blocks, network: 'preprod', block, koios: koios(nonce), txHash: 'cd'.repeat(32), drawkeyFile: file });
+    assert.deepEqual(withFile.readings.freeze_tool.map((r) => r.source), ['koios', 'blockfrost']);
+    writeFileSync(file, JSON.stringify({ ...doc, readings: [doc.readings[0], { ...doc.readings[1], nonce: 'ef'.repeat(32) }] }));
+    await assert.rejects(drawKey({ client: db, blocks, network: 'preprod', block, koios: koios(nonce), txHash: 'cd'.repeat(32), drawkeyFile: file }), /drawkey\.json differs: blockfrost reading differs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the first carrier passes; copies after it do not matter; a copy before it is the first carrier', async () => {
+  const later = await scenario({ copyAfter: true });
+  try {
+    assert.deepEqual(failed(await verifyFinalFreeze(later.args)), []);
+  } finally {
+    later.cleanup();
+  }
+  const s = await scenario({ copyBefore: 'body' });
+  try {
+    const v = await verifyFinalFreeze(s.args);
+    assert.match(v.checks.find((c) => c.name === 'first_carrier_of_the_record').detail, new RegExp(s.copyTx));
+    // The copy itself, with the same 674 line absent, is the first carrier of
+    // the record but has no 674 line: refused on that.
+    const v2 = await verifyFinalFreeze({ ...s.args, freezeTx: s.copyTx });
+    assert.deepEqual(failed(v2), ['label_674_is_document_digest']);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('run-time digests must be items, a prefix of the check log must be frozen, and live-fire follows the hypotheses', async () => {
+  const lines = [JSON.stringify({ seq: 1, type: 'health', date: '2001-01-01T00:00:00Z' }), JSON.stringify({ seq: 2, type: 'live-fire-start', date: '2999-01-01T00:00:00Z' })];
+  const frozenText = lines.join('\n') + '\n';
+  const laterText = frozenText + JSON.stringify({ seq: 3, type: 'query-start', date: '2999-01-02T00:00:00Z' }) + '\n';
+  const frozenDigest = logPrefixDigests(frozenText).at(-1);
+  const extra = 'e1'.repeat(32);
+  const s = await scenario({ items: (d, code) => [d, ...code.map((c) => c.sha256), extra, frozenDigest] });
+  try {
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, requiredItems: [{ name: 'code_manifest', sha256: extra }], checkLogText: laterText })), []);
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, requiredItems: [{ name: 'consented_commitment', sha256: 'e2'.repeat(32) }] })), ['consented_commitment_is_an_item']);
+    const other = JSON.stringify({ seq: 1, type: 'live-fire-start', date: '2001-01-01T00:00:00Z' }) + '\n';
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, checkLogText: other })), ['check_log_frozen', 'live_fire_after_hypotheses']);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('the hypotheses URI is matched whole', async () => {
+  const s = await scenario({ citeTx: null });
+  try {
+    const fake = s.args.preregPath;
+    const { readFileSync, writeFileSync } = await import('node:fs');
+    writeFileSync(fake, readFileSync(fake, 'utf8').replace('/metadata/309', '/metadata/3090'));
+    const v = await verifyFinalFreeze(s.args);
+    assert.ok(failed(v).includes('document_cites_hypotheses_record'));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("the freeze tool's drawkey.json must agree on the transaction, the epoch and both readings", () => {
+  const nonce = 'ab'.repeat(32);
+  const doc = { format: 'research-freeze-drawkey-v1', network: 'mainnet', tx_hash: 'cd'.repeat(32), nonce_epoch: 600, nonce, readings: [{ source: 'koios', nonce }, { source: 'blockfrost', nonce }] };
+  const want = { network: 'mainnet', txHash: 'cd'.repeat(32), n: 600, nonce };
+  assert.deepEqual(drawkeyFileErrors(doc, want), []);
+  assert.deepEqual(drawkeyFileErrors({ ...doc, nonce_epoch: 601 }, want), ['epoch 601']);
+  assert.deepEqual(drawkeyFileErrors({ ...doc, readings: [{ source: 'koios', nonce }, { source: 'blockfrost', nonce: 'ef'.repeat(32) }] }, want), ['blockfrost reading differs']);
+  assert.deepEqual(drawkeyFileErrors({ ...doc, readings: [{ source: 'koios', nonce }] }, want), ['no blockfrost reading']);
+  assert.deepEqual(drawkeyFileErrors({ ...doc, tx_hash: 'ee'.repeat(32) }, want), [`transaction ${'ee'.repeat(32)}`]);
+  assert.deepEqual(drawkeyFileErrors({ format: 'other' }, want), ['not a research-freeze drawkey.json']);
 });

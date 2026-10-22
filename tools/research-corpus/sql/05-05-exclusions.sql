@@ -21,9 +21,9 @@
 --                                                those present at the point
 --                                                (x12_history false)
 --   n_pay_key                                    the same count over key payment
---                                                credentials only; reported beside
---                                                the cap, which counts every
---                                                credential (X12's accepted default)
+--                                                credentials only, which the cap
+--                                                reads (decided 2026-10-21); n_pay
+--                                                is reported beside it
 --
 -- n_assets counts distinct assets (policy and name). n_nft counts the assets
 -- held as non-fungible by the classification rule of section 6.2 over the

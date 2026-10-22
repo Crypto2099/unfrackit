@@ -67,9 +67,11 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     flow: report.flow,
     frame_report: report.frame_report,
     draw: report.draw,
-    consented: { matched: report.consented.matched, in_prefix: report.consented_in_prefix },
+    consented: { matched: report.consented.matched, in_bounds: report.consented_in_bounds },
     strata: report.strata.map((s) => ({ ord: s.ord, stratum: s.stratum, part: s.part, class: s.class, policy: s.policy, asset_name: s.asset_name, n_recent: s.n_recent, n_peak: s.n_peak })),
-    strata_fungible_floor: report.ft_floor,
+    // Holder counts are published for candidates at or above the floor only;
+    // the rule needs no more, and a thin candidate's count can be a handful.
+    strata_fungible_floor: report.ft_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.ft_floor ? r.n_holders : null, below_floor: !r.named && r.n_holders < run.settings.ft_floor })),
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
     check_6_1: report.check_61,

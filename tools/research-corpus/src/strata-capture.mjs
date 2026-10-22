@@ -8,13 +8,19 @@
 //    capitalization (/coins/markets?category=cardano-ecosystem&order=
 //    market_cap_desc): the endpoint, the response's Date header, the time it
 //    was read and the SHA-256 of the raw response are recorded.
-// 2. Exclusions, in ranking order: ADA itself (coin id cardano); stablecoins,
-//    and bridged or wrapped assets, read as CoinGecko's own categories for the
-//    coin (any category whose name contains "stablecoin", "bridged" or
-//    "wrapped") or a coin id or name that says bridged or wrapped; rulings
-//    given in an exclusions file (coin id, reason, source) for cases the
-//    categories miss; coins with no Cardano native asset listed; and the
-//    tokens named in part 1, which come first.
+// 2. Exclusions, in ranking order: ADA itself (coin id cardano); the rulings
+//    of the rulings file (data/strata-rulings.json: coin id, reason, source);
+//    stablecoins, and bridged or wrapped assets, read as CoinGecko's own
+//    categories for the coin (any category whose name contains "stablecoin",
+//    "bridged" or "wrapped") or a coin id or name that says bridged or
+//    wrapped; a coin whose CoinGecko asset_platform_id is not cardano, whose
+//    Cardano token is therefore a bridge copy of an asset first issued on
+//    another chain, unless the rulings file lists it as first issued on
+//    Cardano; coins with no Cardano native asset listed; and the tokens named
+//    in part 1, which come first. The working definition (2026-10-21): an
+//    asset is bridged or wrapped when its Cardano token is issued by a bridge
+//    against an asset whose original issuance is on another chain; a token
+//    first issued on Cardano and later bridged out is not.
 // 3. Mapping: CoinGecko's Cardano contract is the policy id followed by the
 //    asset name in hex, or the policy id alone, or a CIP-14 fingerprint. A
 //    policy alone is resolved to the one registry subject under that policy,
@@ -88,7 +94,10 @@ export function resolveSubject(contract, symbol, subjects, tickerOf) {
   return { subject: null, reason: 'no Cardano native asset listed' };
 }
 
-export async function captureStrata({ named, exclusions = [], ownSources = {}, maxCandidates = 40, spacingMs = 15000, fetchImpl = fetch, now = () => new Date(), tool = null, log = () => {} }) {
+// rulings: { exclusions: [{ coingecko_id, reason, source }], cardano_first: [{ coingecko_id, reason, source }] }.
+export async function captureStrata({ named, rulings = {}, ownSources = {}, maxCandidates = 40, spacingMs = 15000, fetchImpl = fetch, now = () => new Date(), tool = null, log = () => {} }) {
+  const exclusions = rulings.exclusions || [];
+  const cardanoFirst = new Map((rulings.cardano_first || []).map((r) => [r.coingecko_id, r]));
   if (!Array.isArray(named) || !named.length) throw new Error('capture-strata needs the named rows of part 1');
   let last = 0;
   const get = async (url, { spaced = false } = {}) => {
@@ -174,6 +183,12 @@ export async function captureStrata({ named, exclusions = [], ownSources = {}, m
       excluded.push({ ...base, reason: why });
       continue;
     }
+    const platform = detail.asset_platform_id ?? null;
+    base.asset_platform_id = platform;
+    if (platform !== 'cardano' && !cardanoFirst.has(coin.id)) {
+      excluded.push({ ...base, reason: `bridged: CoinGecko asset_platform_id ${platform === null ? 'is empty' : `is ${platform}`}, so the Cardano token is not the original issuance` });
+      continue;
+    }
     const contract = detail.detail_platforms?.cardano?.contract_address || detail.platforms?.cardano || null;
     if (!contract) {
       excluded.push({ ...base, reason: 'no Cardano native asset listed' });
@@ -209,6 +224,7 @@ export async function captureStrata({ named, exclusions = [], ownSources = {}, m
     candidates.push({
       rank: candidates.length + 1,
       ...base,
+      cardano_first: cardanoFirst.has(coin.id) ? cardanoFirst.get(coin.id) : undefined,
       project: `${coin.name} (${coin.symbol.toUpperCase()})`,
       stratum: `${coin.name} (${coin.symbol.toUpperCase()})`,
       policy,
@@ -232,7 +248,7 @@ export async function captureStrata({ named, exclusions = [], ownSources = {}, m
       tool: tool ? `research-corpus capture-strata at ${tool}` : 'research-corpus capture-strata',
       coingecko: { category: 'cardano-ecosystem', ranking: rankingPages, details, rate_spacing_ms: spacingMs },
       registry: { repository: `github.com/${REG_REPO}`, commit, tree_sha256: treeR.sha256, subjects: subjects.length },
-      exclusion_rulings: exclusions,
+      rulings,
       confirmed_by_adam: CONFIRMED.map((c) => ({ ...c, date: '2026-10-21', note: 'policy id confirmed by Adam K. Dean from his own knowledge; also matches the Cardano Foundation token registry' }))
     }
   };

@@ -21,6 +21,7 @@
 
 import { performance } from 'node:perf_hooks';
 import { readFileSync, rmSync, existsSync } from 'node:fs';
+import { consentedCommitment } from './consented.mjs';
 import { join, resolve } from 'node:path';
 import { loadAll } from './sqlfile.mjs';
 import { connect, applySession, dbMeta, checkHistoryIntact, q, qBound } from './db.mjs';
@@ -30,13 +31,14 @@ import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { codeVersion, hashList, TOOL_DIR } from './hash.mjs';
 import { buildManifest } from './manifest.mjs';
 import { check61 } from './check61.mjs';
-import { verifyFinalFreeze, drawKey, readTx } from './freeze.mjs';
+import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex } from './freeze.mjs';
 import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, caseWalletErrors } from './guards.mjs';
-import { appendEntry, sanitize } from './checklog.mjs';
+import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog } from './checklog.mjs';
 import { Koios } from './koios.mjs';
 
 const HEX32 = /^[0-9a-f]{64}$/;
 export const DEFAULT_STRATA = join(TOOL_DIR, 'data', 'strata-mainnet.json');
+export const DEFAULT_RULINGS = join(TOOL_DIR, 'data', 'strata-rulings.json');
 const STRATA_FORMAT = 'research-corpus-strata-v2';
 
 // The strata file: the named rows of part 1 and the CoinGecko candidates of
@@ -76,24 +78,21 @@ async function loadParams(client, runId) {
 
 const num = (x) => (x === null || x === undefined ? x : Number(x));
 const numRow = (r, keep = []) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, keep.includes(k) || typeof v === 'boolean' ? v : num(v)]));
-const frac = (n, d) => (Number(d) > 0 ? Math.round((Number(n) / Number(d)) * 10000) / 10000 : null);
 
-// Per-field parse coverage, the only data-derived numbers a live-fire run
-// keeps: the share of rows or epochs in which each field the code reads was
-// present and parsed, rounded to four places.
+// Per-field parse coverage, kept as true or false only: whether every row or
+// epoch the code reads had the field present and parsed. A share would be a
+// statistic of the chain; a boolean says whether the parser works.
 function parseCoverage(report) {
   const p = {};
-  if (report.cred_checks) p['stake_address.hash_raw'] = frac(report.cred_checks.n - ['bad_length', 'bad_header', 'bad_script_flag', 'bad_script_hash', 'bad_network'].reduce((s, k) => s + report.cred_checks[k], 0), report.cred_checks.n);
-  if (report.txo_counts) p['tx_out.payment_cred'] = frac(report.txo_counts.n_txo - report.txo_counts.n_txo_payment_cred_null, report.txo_counts.n_txo);
+  if (report.cred_checks) p['stake_address.hash_raw'] = ['bad_length', 'bad_header', 'bad_script_flag', 'bad_script_hash', 'bad_network'].every((k) => report.cred_checks[k] === 0);
+  if (report.txo_counts) p['tx_out.payment_cred'] = report.txo_counts.n_txo_payment_cred_null === 0;
   if (report.era_coverage) {
-    p['epoch_param.fees'] = frac(report.era_coverage.n_fees, report.era_coverage.n_epochs);
-    p['epoch_param.min_utxo'] = frac(report.era_coverage.n_min_utxo, report.era_coverage.n_epochs);
-    p['epoch_param.max_val_size'] = frac(report.era_coverage.n_max_val_size, report.era_coverage.n_epochs);
+    const e = report.era_coverage;
+    p['epoch_param.fees'] = e.n_fees === e.n_epochs;
+    p['epoch_param.min_utxo'] = e.n_min_utxo === e.n_epochs;
+    p['epoch_param.max_val_size'] = e.n_max_val_size === e.n_epochs;
   }
-  if (report.unfrackit) {
-    p['tx_metadata[674].json'] = frac(report.unfrackit.n_674 - report.unfrackit.n_674_json_null, report.unfrackit.n_674);
-    p['tx_metadata[674].json.msg'] = frac(report.unfrackit.n_674_msg_array, report.unfrackit.n_674 - report.unfrackit.n_674_json_null);
-  }
+  if (report.unfrackit) p['tx_metadata[674].json'] = report.unfrackit.n_674_json_null === 0;
   return p;
 }
 
@@ -109,6 +108,12 @@ function functionalChecks(report) {
   return c;
 }
 
+// Aggregate tables a kept live-fire run drops anyway: each is a count of the
+// population one query away. The wallet-level tables stay for debugging the
+// failing step; their outputs, steps and anything after them are recomputed
+// on a resumed run.
+const LIVE_FIRE_AGGREGATES = ['study.flow', 'study.draw_summary', 'study.ft_floor', 'study.nft_top', 'study.unfrackit_tx'];
+
 export async function runPipeline(opts) {
   const live = opts.liveFire || null;
   const t0 = performance.now();
@@ -117,19 +122,34 @@ export async function runPipeline(opts) {
   const log = live ? () => {} : say;
   const codeAtStart = codeVersion();
   const blocks = loadAll();
+  const code = { git_commit: codeAtStart.git_commit, git_dirty: codeAtStart.git_dirty, node: codeAtStart.node };
+  // A live-fire run is logged before its first database query, so even an
+  // interrupted run leaves an entry; the end entry closes it.
+  let startEntry = null;
+  if (live) {
+    if (!opts.expectNetwork) throw refuse('refusing: a live-fire run needs --expect-network, so that its check-log entry is written before the first query');
+    startEntry = appendEntry(opts.expectNetwork, 'live-fire-start', { run_id: opts.runId, command: opts.command || null, purpose: live.purpose || null, test_h: live.testH || null, code });
+  }
   // opts.client lets the unit tests stand a stub in for the database.
-  const client = opts.client || (await connect(opts.db || {}));
+  let client = null;
   const report = { run_id: opts.runId };
-  let network = null;
+  let network = live ? opts.expectNetwork : null;
   let runner = null;
   let error = null;
   let dir = null;
   let result = null;
+  // Set once this invocation has created or resumed a live-fire run: only
+  // then may it drop that run's tables.
+  let ownsLiveRun = false;
+  // A study run on mainnet is logged too, as a query.
+  let queryStart = null;
   try {
+    client = opts.client || (await connect(opts.db || {}));
     const meta = await dbMeta(client, blocks);
+    if (opts.expectNetwork && opts.expectNetwork !== meta.network) throw refuse(`refusing: database is ${meta.network}, expected ${opts.expectNetwork}`);
     network = meta.network;
     report.network = network;
-    if (opts.expectNetwork && opts.expectNetwork !== network) throw new Error(`refusing: database is ${network}, expected ${opts.expectNetwork}`);
+    if (!live && network === 'mainnet') queryStart = appendEntry(network, 'query-start', { name: 'run', run_id: opts.runId, command: opts.command || null, code });
     report.probes = await checkHistoryIntact(client, blocks, meta);
     const mainnet = network === 'mainnet';
     const mode = live ? 'live-fire' : mainnet ? 'study' : 'test';
@@ -140,24 +160,38 @@ export async function runPipeline(opts) {
       if (opts.capture) errors.push('no plan capture under EXPLAIN ANALYZE on mainnet');
       if (opts.hmacKey) errors.push('mainnet runs use the study key in secret/hmac.key');
       if (opts.standInTx) errors.push('a stand-in for h is for test networks only');
-      if (errors.length) throw new Error(`refusing: ${errors.join('; ')}`);
-    }
-    if (live) {
-      if (!HEX32.test(live.testH || '')) throw new Error('refusing: a live-fire run needs --test-h <64 lowercase hex>');
-      if (!live.purpose || !live.purpose.trim()) throw new Error('refusing: a live-fire run needs --purpose');
-      if (opts.freezeTx || opts.standInTx) throw new Error('refusing: a live-fire run uses a stated test h, never a freeze or stand-in transaction');
-      if (opts.capture) throw new Error('refusing: a live-fire run may use --explain, not --capture');
-    } else if (mainnet) {
-      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['hypothesesTx', '--hypotheses-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest']]) {
-        if (!opts[k]) throw new Error(`refusing a mainnet database without ${flag} (or --live-fire before the final freeze)`);
-      }
-      const errs = codeManifestErrors(readFileSync(opts.codeManifest, 'utf8'), codeAtStart.files);
-      if (errs.length) throw new Error(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
+      if (errors.length) throw refuse(`refusing: ${errors.join('; ')}`);
     }
     const consentedViews = opts.consented ? readStakeList(opts.consented, 'the consented file') : [];
     const caseViews = checkStakeAddresses([...new Set([...(opts.caseWallets || []), ...(opts.casesFile ? readStakeList(opts.casesFile, 'the cases file') : [])])], '--case and --cases');
     const caseErrs = caseWalletErrors(caseViews, consentedViews);
-    if (caseErrs.length) throw new Error(`refusing: ${caseErrs.join('; ')}`);
+    if (caseErrs.length) throw refuse(`refusing: ${caseErrs.join('; ')}`);
+    if (live) {
+      if (!HEX32.test(live.testH || '')) throw refuse('refusing: a live-fire run needs --test-h <64 lowercase hex>');
+      if (!live.purpose || !live.purpose.trim()) throw refuse('refusing: a live-fire run needs --purpose');
+      if (opts.freezeTx || opts.standInTx) throw refuse('refusing: a live-fire run uses a stated test h, never a freeze or stand-in transaction');
+      if (opts.capture) throw refuse('refusing: a live-fire run may use --explain, not --capture');
+      if (mainnet) {
+        // The hypotheses are frozen before the first live-fire query.
+        if (!HEX32.test(opts.hypothesesTx || '') || !HEX32.test(opts.studyKey || '')) throw refuse('refusing: a mainnet live-fire run needs --hypotheses-tx and --study-key (the hypotheses freeze comes first)');
+        const hyp = await readTx(client, blocks, opts.hypothesesTx);
+        if (!hyp || !signedBy(hyp, opts.studyKey)) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
+        report.hypotheses = { tx: hyp.tx, block_no: hyp.block.block_no, time: hyp.block.time };
+      }
+    } else if (mainnet) {
+      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['hypothesesTx', '--hypotheses-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey'], ['consented', '--consented'], ['consentedSha256', '--consented-sha256']]) {
+        if (!opts[k]) throw refuse(`refusing a mainnet database without ${flag} (or --live-fire before the final freeze)`);
+      }
+      const errs = codeManifestErrors(readFileSync(opts.codeManifest, 'utf8'), codeAtStart.files);
+      if (errs.length) throw refuse(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
+    }
+    // The consented file's salted commitment, when one is given.
+    let consentedDigest = null;
+    if (opts.consentedSha256) {
+      if (!opts.consented) throw refuse('refusing: --consented-sha256 needs --consented');
+      consentedDigest = consentedCommitment(opts.consented, opts.consentedSalt);
+      if (consentedDigest !== opts.consentedSha256.toLowerCase()) throw refuse('refusing: the consented file and its salt do not give the committed digest');
+    }
 
     const session = await applySession(client, opts.session || {});
     for (const lib of ['schema', 'cip67', 'strata_fn']) {
@@ -166,22 +200,38 @@ export async function runPipeline(opts) {
 
     const runId = opts.runId;
     const existing = await client.query('SELECT network FROM study.run WHERE run_id = $1', [runId]);
-    if (existing.rows.length && existing.rows[0].network !== network) throw new Error(`run ${runId} belongs to ${existing.rows[0].network}`);
-    if (live) {
-      const real = await client.query(`SELECT run_id FROM study.param WHERE key = 'freeze' AND value->>'role' = 'final-freeze' AND run_id <> $1`, [runId]);
-      if (real.rows.length) throw new Error(`refusing: this database holds the study's run ${real.rows[0].run_id}; live-fire runs would overwrite its tables`);
+    if (existing.rows.length && existing.rows[0].network !== network) throw refuse(`refusing: run ${runId} belongs to ${existing.rows[0].network}`);
+    const finals = (
+      await client.query(
+        `SELECT p.run_id, (SELECT c.value FROM study.param c WHERE c.run_id = p.run_id AND c.key = 'confirm_snapshot') AS confirm
+           FROM study.param p WHERE p.key = 'freeze' AND p.value->>'role' = 'final-freeze' AND p.run_id <> $1 ORDER BY p.run_id`,
+        [runId]
+      )
+    ).rows;
+    if (live && finals.length) throw refuse(`refusing: this database holds the study's run ${finals[0].run_id}; live-fire runs would overwrite its tables`);
+    // One study run per final freeze: another is allowed only when every
+    // earlier one's snapshot was found rolled back by confirm-snapshot.
+    let restartAfter = [];
+    if (opts.freezeTx && finals.length) {
+      const standing = finals.filter((f) => !(f.confirm && f.confirm.on_chain === false));
+      if (standing.length) throw refuse(`refusing: the study's run ${standing[0].run_id} is already recorded for the final freeze; a second run is allowed only after confirm-snapshot finds its snapshot rolled back`);
+      restartAfter = finals.map((f) => f.run_id);
     }
+    const stored0 = existing.rows.length ? await loadParams(client, runId) : {};
+    if (stored0.mode && stored0.mode !== mode) throw refuse(`refusing: run ${runId} was started in ${stored0.mode} mode`);
     if (!existing.rows.length) await client.query('INSERT INTO study.run (run_id, network) VALUES ($1, $2)', [runId, network]);
-    const stored = await loadParams(client, runId);
-    if (stored.mode && stored.mode !== mode) throw new Error(`run ${runId} was started in ${stored.mode} mode`);
     await storeParam(client, runId, 'mode', mode);
+    if (live) ownsLiveRun = true;
+    const stored = await loadParams(client, runId);
+    if (restartAfter.length) await storeParam(client, runId, 'restart_after_rollback_of', restartAfter);
+    report.restart_after_rollback_of = restartAfter.length ? restartAfter : null;
     dir = runDir(network, runId);
 
     // Settings: fixed values and readings, with overrides. A resumed run must
     // use the settings it started with.
     const settings = applyOverrides(defaultSettings(), opts.set || []);
     const canonical = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]));
-    if (stored.settings && canonical(stored.settings) !== canonical(settings)) throw new Error(`run ${runId} was started with other settings; use a new run id`);
+    if (stored.settings && canonical(stored.settings) !== canonical(settings)) throw refuse(`refusing: run ${runId} was started with other settings; use a new run id`);
     await storeParam(client, runId, 'settings', settings);
     await storeParam(client, runId, 'db', { network, version: meta.version, schema_version: meta.schemaVersion, extra_migrations: meta.extraMigrations });
     await storeParam(client, runId, 'session', session);
@@ -213,29 +263,37 @@ export async function runPipeline(opts) {
     let freeze = stored.freeze;
     if (live) {
       const testH = live.testH;
-      if (freeze && freeze.h !== testH) throw new Error(`run ${runId} was started with another test h`);
+      if (freeze && freeze.h !== testH) throw refuse(`refusing: run ${runId} was started with another test h`);
       const used = (await q(client, blocks, 'test_h_in_use', { h: { type: 'bytea', value: testH } }))[0];
-      if (used.nonce || used.block_hash) throw new Error('refusing: the test h is an epoch nonce or block hash of this chain');
+      if (used.nonce || used.block_hash) throw refuse('refusing: the test h is an epoch nonce or block hash of this chain');
       freeze = { role: 'live-fire test h', h: testH };
     } else {
       const given = opts.freezeTx || opts.standInTx;
       if (freeze && given && given.toLowerCase() !== freeze.tx) throw new Error(`run ${runId} was started with ${freeze.role} transaction ${freeze.tx}`);
       if (opts.freezeTx) {
-        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: snapshot.block_no });
+        // Digests given at run time that must be items of the final record:
+        // the code manifest, so the path-by-path comparison is the frozen
+        // one; the consented file's commitment; and, on mainnet, a prefix of
+        // the check log.
+        const requiredItems = [];
+        if (opts.codeManifest) requiredItems.push({ name: 'code_manifest', sha256: sha256hex(readFileSync(opts.codeManifest)) });
+        if (consentedDigest) requiredItems.push({ name: 'consented_commitment', sha256: consentedDigest });
+        const checkLogText = mainnet ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
+        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: snapshot.block_no, requiredItems, checkLogText });
         report.freeze_checks = v.checks;
-        if (!v.ok) throw new Error(`refusing the freeze transaction: ${v.checks.filter((c) => !c.ok).map((c) => `${c.name}${c.detail && typeof c.detail === 'string' ? ` (${c.detail})` : ''}`).join('; ')}`);
-        const dk = await drawKey({ client, blocks, network, block: v.freezeBlock, koios });
-        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, draw: dk, h: dk.nonce };
+        if (!v.ok) throw refuse(`refusing the freeze transaction: ${v.checks.filter((c) => !c.ok).map((c) => `${c.name}${c.detail && typeof c.detail === 'string' ? ` (${c.detail})` : ''}`).join('; ')}`);
+        const dk = await drawKey({ client, blocks, network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: opts.drawkey || null });
+        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, code_manifest_sha256: requiredItems.find((x) => x.name === 'code_manifest')?.sha256 || null, consented_commitment: consentedDigest, draw: dk, h: dk.nonce };
         if (freeze && freeze.h !== fresh.h) throw new Error(`run ${runId} was started with another draw key`);
         freeze = fresh;
       } else if (!freeze) {
-        if (!HEX32.test((opts.standInTx || '').toLowerCase())) throw new Error('give --stand-in-tx <64 hex> (test networks), --freeze-tx with its checks, or --live-fire');
+        if (!HEX32.test((opts.standInTx || '').toLowerCase())) throw refuse('refusing: give --stand-in-tx <64 hex> (test networks), --freeze-tx with its checks, or --live-fire');
         const s = await readTx(client, blocks, opts.standInTx.toLowerCase());
         if (!s) throw new Error(`transaction ${opts.standInTx} is not in the database`);
         const dk = await drawKey({ client, blocks, network, block: s.block, koios });
         freeze = { tx: s.tx, role: 'stand-in', block_no: s.block.block_no, slot_no: s.block.slot_no, epoch_no: s.block.epoch_no, epoch_slot_no: s.block.epoch_slot_no, block_hash: s.block.hash, time: s.block.time, draw: dk, h: dk.nonce };
       }
-      if (!(snapshot.block_no > freeze.block_no)) throw new Error(`refusing: snapshot block ${snapshot.block_no} is not after the freeze block ${freeze.block_no}`);
+      if (!(snapshot.block_no > freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is not after the freeze block ${freeze.block_no}`);
     }
     await storeParam(client, runId, 'freeze', freeze);
     report.freeze = freeze;
@@ -256,7 +314,7 @@ export async function runPipeline(opts) {
     oc.passed = failedOrder.length === 0;
     await storeParam(client, runId, 'order_check', live ? { passed: oc.passed } : oc);
     report.order_check = oc;
-    if (failedOrder.length) throw new Error(`order check failed (${failedOrder.join(', ')}); transaction-id ranges cannot stand for windows`);
+    if (failedOrder.length) throw refuse(`order check failed (${failedOrder.join(', ')}); transaction-id ranges cannot stand for windows`);
 
     // Windows (pre-registration section 5.3).
     await runner.run('epoch_counts');
@@ -341,7 +399,6 @@ export async function runPipeline(opts) {
     // The draw and the samples.
     await runner.run('draw');
     report.draw = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'guard_reached']));
-    report.consented_in_prefix = (await q(client, blocks, 'consented_in_prefix')).map((r) => ({ frame: r.frame, random_prefix: num(r.random_prefix), ada_only_prefix: num(r.ada_only_prefix) }));
     const strata = loadStrataList(opts.strataList || DEFAULT_STRATA, settings);
     await runner.run('strata_list_table', {}, async (c) => {
       await qBound(c, blocks, 'strata_list_load', [JSON.stringify(strata.named)]);
@@ -365,7 +422,8 @@ export async function runPipeline(opts) {
     report.check_61 = numRow((await q(client, blocks, 'check_61_counts'))[0], ['direct_valid']);
     report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'stratum']));
     report.split_overall = numRow((await q(client, blocks, 'split_overall'))[0]);
-    report.sample_bounds = (await q(client, blocks, 'sample_bounds', runner.params)).map((r) => ({ ...r, n: num(r.n), consented_at_or_below: num(r.consented_at_or_below) }));
+    report.sample_bounds = (await q(client, blocks, 'sample_bounds')).map((r) => ({ ...r, n: num(r.n) }));
+    report.consented_in_bounds = (await q(client, blocks, 'consented_in_bounds', runner.params)).map((r) => ({ frame: r.frame, random: num(r.random), ada_only: num(r.ada_only), strata: num(r.strata) }));
     report.pointer_wallets = numRow((await q(client, blocks, 'pointer_wallets'))[0]);
 
     // Prior-treated and franken flags.
@@ -390,7 +448,7 @@ export async function runPipeline(opts) {
 
     // Code version and manifest.
     const codeAtEnd = codeVersion();
-    if (JSON.stringify(codeAtEnd.files) !== JSON.stringify(codeAtStart.files)) throw new Error('refusing to write the manifest: a hashed file changed during the run; run again with a new run id');
+    if (JSON.stringify(codeAtEnd.files) !== JSON.stringify(codeAtStart.files)) throw refuse('refusing to write the manifest: a hashed file changed during the run; run again with a new run id');
     report.code_version = codeAtStart;
     await storeParam(client, runId, 'code_version', report.code_version);
     report.steps = runner.timings.map((t) => ({ name: t.name, file: t.file, ms: Math.round(t.ms), rows: t.rows }));
@@ -404,30 +462,40 @@ export async function runPipeline(opts) {
     return result;
   } catch (e) {
     error = e;
-    throw live ? new Error(sanitize(e.message)) : e;
+    throw live ? new Error(sanitizeError(e)) : e;
   } finally {
     if (live) {
-      let outputs = 'kept for debugging';
+      let outputs = 'none written';
       let dropped = null;
-      if (!live.keep) {
+      if (ownsLiveRun && client) {
         try {
-          dropped = (await dropRunTables(client, opts.runId)).length;
-          if (dir && existsSync(join(dir, 'work'))) rmSync(join(dir, 'work'), { recursive: true, force: true });
-          outputs = `deleted ${new Date().toISOString()}`;
+          // Drop only a run this invocation created or resumed as live-fire,
+          // and only while it is still recorded as one.
+          const m = (await client.query(`SELECT value #>> '{}' AS m FROM study.param WHERE run_id = $1 AND key = 'mode'`, [opts.runId])).rows[0];
+          if (!m || m.m !== 'live-fire') throw new Error('the run is not recorded as live-fire');
+          if (live.keep) {
+            for (const t of LIVE_FIRE_AGGREGATES) await client.query(`DROP TABLE IF EXISTS ${t}`);
+            outputs = 'kept for debugging';
+          } else {
+            dropped = (await dropRunTables(client, opts.runId)).length;
+            if (dir && existsSync(join(dir, 'work'))) rmSync(join(dir, 'work'), { recursive: true, force: true });
+            outputs = `deleted ${new Date().toISOString()}`;
+          }
         } catch (e) {
-          outputs = `deletion failed: ${sanitize(e.message)}`;
+          outputs = `deletion failed: ${sanitizeError(e)}`;
         }
       }
       const steps = runner ? runner.timings.filter((t) => t.kind === 'step').map((t) => ({ name: t.name, ok: true, ms: Math.round(t.ms) })) : [];
       if (runner && runner.failed) steps.push({ name: runner.failed.name, ok: false, ms: Math.round(runner.failed.ms) });
       const entry = {
         run_id: opts.runId,
+        start_seq: startEntry ? startEntry.seq : null,
         command: opts.command || null,
         purpose: live.purpose || null,
         test_h: live.testH || null,
-        code: { git_commit: codeAtStart.git_commit, git_dirty: codeAtStart.git_dirty, node: codeAtStart.node },
+        code,
         outcome: error ? 'failed' : 'succeeded',
-        error: error ? sanitize(error.message) : null,
+        error: error ? sanitizeError(error) : null,
         run_ms: Math.round(performance.now() - t0),
         steps,
         checks: functionalChecks(report),
@@ -436,7 +504,7 @@ export async function runPipeline(opts) {
         wallet_level_output: outputs,
         study_tables_dropped: dropped !== null
       };
-      if (network) {
+      if (network && startEntry) {
         const logged = appendEntry(network, 'live-fire', entry);
         if (dir) {
           writeJson(join(dir, 'live-fire.json'), logged);
@@ -445,35 +513,53 @@ export async function runPipeline(opts) {
         if (result) result.entry = logged;
       }
     }
-    await client.end();
+    if (queryStart) appendEntry(network, 'query', { name: 'run', start_seq: queryStart.seq, outcome: error ? 'failed' : 'succeeded', error: error ? sanitizeError(error) : null, run_ms: Math.round(performance.now() - t0) });
+    if (client && !opts.client) await client.end();
   }
 }
 
-// Drops a live-fire run's study tables and work directory, and logs when.
-export async function cleanupRun({ db, runId, command }) {
-  const client = await connect(db || {});
+// Drops a live-fire run's study tables and work directory, or removes an a1
+// live-fire run's work directory, and logs when. An unclosed start entry of
+// the run (an interrupted run) is closed by the cleanup entry.
+export async function cleanupRun({ db, runId, command, client: given = null }) {
+  const client = given || (await connect(db || {}));
   try {
     const blocks = loadAll();
     const meta = await dbMeta(client, blocks);
-    const mode = (await client.query(`SELECT value #>> '{}' AS m FROM study.param WHERE run_id = $1 AND key = 'mode'`, [runId])).rows[0];
-    if (!mode) throw new Error(`no run ${runId} in this database`);
-    if (mode.m !== 'live-fire') throw new Error(`refusing: run ${runId} is a ${mode.m} run; cleanup is for live-fire runs`);
+    const network = meta.network;
+    const reg = (await client.query('SELECT to_regclass($1) AS t', ['study.param'])).rows[0].t;
+    const mode = reg ? (await client.query(`SELECT value #>> '{}' AS m FROM study.param WHERE run_id = $1 AND key = 'mode'`, [runId])).rows[0] : null;
+    const log = verifyLog(network);
+    const text = existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '';
+    const entries = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const isA1 = entries.some((e) => e.run_id === runId && (e.type === 'a1-live-fire' || e.type === 'a1-live-fire-start'));
+    if (!mode && !isA1) throw refuse(`refusing: no live-fire run ${runId} in this database or the check log`);
+    if (mode && mode.m !== 'live-fire') throw refuse(`refusing: run ${runId} is a ${mode.m} run; cleanup is for live-fire runs`);
     let outcome = 'succeeded';
     let error = null;
     let n = 0;
     try {
-      n = (await dropRunTables(client, runId)).length;
-      const work = join(runDir(meta.network, runId), 'work');
+      if (mode) n = (await dropRunTables(client, runId)).length;
+      const work = join(runDir(network, runId), 'work');
       if (existsSync(work)) rmSync(work, { recursive: true, force: true });
     } catch (e) {
       outcome = 'failed';
-      error = sanitize(e.message);
+      error = sanitizeError(e);
     }
-    const entry = appendEntry(meta.network, 'cleanup', { run_id: runId, command: command || null, outcome, error, wallet_level_output: outcome === 'succeeded' ? `deleted ${new Date().toISOString()}` : 'not deleted', tables_dropped: n });
+    const open = log.unclosed.find((x) => x.run_id === runId);
+    const entry = appendEntry(network, 'cleanup', {
+      run_id: runId,
+      start_seq: open ? open.seq : null,
+      command: command || null,
+      outcome,
+      error,
+      wallet_level_output: outcome === 'succeeded' ? `deleted ${new Date().toISOString()}` : `deletion failed: ${error}`,
+      tables_dropped: n
+    });
     if (error) throw new Error(error);
     return entry;
   } finally {
-    await client.end();
+    if (!given) await client.end();
   }
 }
 

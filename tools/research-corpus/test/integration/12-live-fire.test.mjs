@@ -4,18 +4,20 @@
 // T14. The live-fire mode end to end on preprod, as it will run on mainnet
 // before the final freeze: a stated test h (refused when it is a real epoch
 // nonce or block hash), no row count in what the run prints or writes, no
-// report, manifest or raw list, plain EXPLAIN plans with their numbers
-// stripped, one check-log entry per run with the functional outcome only, the
-// run's study tables dropped at the end, or kept for debugging and then
-// dropped by `cleanup`, which logs when. This test runs last: the live-fire
-// runs replace the study tables the earlier tests read.
+// report, manifest or raw list, plain EXPLAIN plans reduced to their shape, a
+// start entry and an end entry per run in the check log with the functional
+// outcome only, the run's study tables dropped at the end, or kept for
+// debugging without the aggregate tables and then dropped by `cleanup`,
+// which logs when. A refused live-fire run under another run's id drops
+// nothing. This test runs last: the live-fire runs replace the study tables
+// the earlier tests read.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { db, record, TAG } from './env.mjs';
+import { db, record, TAG, RUN_B } from './env.mjs';
 import { runPipeline, cleanupRun } from '../../src/pipeline.mjs';
 import { checkLogPath, verifyLog } from '../../src/checklog.mjs';
 import { runDir } from '../../src/paths.mjs';
@@ -38,6 +40,12 @@ test('T14 live-fire runs: no counts, check log, tables dropped or kept and clean
     // Refused: a real epoch nonce or block hash as the test h.
     const nonce = (await c.query(`SELECT encode(nonce, 'hex') AS n FROM epoch_param WHERE nonce IS NOT NULL ORDER BY epoch_no DESC LIMIT 1`)).rows[0].n;
     await assert.rejects(runPipeline({ ...common, runId: `${TAG}-lf0`, liveFire: { testH: nonce, purpose: 'refusal check' } }), /epoch nonce or block hash/);
+    // Refused under T10's run id: that run's tables stay.
+    const tablesB = (await markedTables(c, RUN_B)).sort();
+    if (tablesB.length) {
+      await assert.rejects(runPipeline({ ...common, runId: RUN_B, liveFire: { testH: TEST_H, purpose: 'refusal under another run' } }), /was started in test mode/);
+      assert.deepEqual((await markedTables(c, RUN_B)).sort(), tablesB, `${RUN_B} keeps its tables`);
+    }
     const before = verifyLog('preprod').entries;
 
     // Kept for debugging, with plans.
@@ -49,14 +57,17 @@ test('T14 live-fire runs: no counts, check log, tables dropped or kept and clean
     assert.equal(e1.wallet_level_output, 'kept for debugging');
     assert.ok(e1.steps.length >= 25 && e1.steps.every((s) => s.ok && typeof s.ms === 'number' && !('rows' in s)));
     for (const v of Object.values(e1.checks)) assert.equal(typeof v, 'boolean');
-    for (const v of Object.values(e1.parse)) assert.ok(v === null || (v >= 0 && v <= 1));
-    assert.ok((await markedTables(c, `${TAG}-lf1`)).length > 20, 'study tables kept');
+    for (const v of Object.values(e1.parse)) assert.equal(typeof v, 'boolean');
+    const keptTables = await markedTables(c, `${TAG}-lf1`);
+    assert.ok(keptTables.length > 20, 'study tables kept');
+    for (const t of ['flow', 'draw_summary', 'ft_floor', 'nft_top', 'unfrackit_tx']) assert.ok(!keptTables.includes(t), `aggregate ${t} dropped although kept`);
+    assert.equal(e1.start_seq, e1.seq - 1);
     const dir1 = runDir('preprod', `${TAG}-lf1`);
     assert.deepEqual(readdirSync(dir1).sort(), ['live-fire.json', 'plans.json']);
     const plans = JSON.parse(readFileSync(join(dir1, 'plans.json'), 'utf8'));
     const planText = JSON.stringify(plans);
     assert.ok(planText.includes('Node Type'));
-    assert.ok(!/"(Plan Rows|Actual Rows|Total Cost|Startup Cost|Plan Width)"/.test(planText), 'plan numbers stripped');
+    assert.ok(!/"(Plan Rows|Actual Rows|Total Cost|Startup Cost|Plan Width|Workers Planned|Planned Partitions|JIT)"/.test(planText), 'plan numbers stripped');
     const stepRows = (await c.query(`SELECT count(*) FILTER (WHERE rows IS NOT NULL) AS n FROM study.step WHERE run_id = $1`, [`${TAG}-lf1`])).rows[0];
     assert.equal(Number(stepRows.n), 0, 'no step row count stored');
     assert.ok(!lines.some((l) => /\d+ rows|\d+ wallets|\d+\/\d+/.test(l)), 'no count printed');
@@ -77,8 +88,10 @@ test('T14 live-fire runs: no counts, check log, tables dropped or kept and clean
 
     const v = verifyLog('preprod');
     assert.deepEqual(v.errors, []);
-    assert.equal(v.entries, before + 3);
+    assert.equal(v.entries, before + 5, 'two start and end pairs and a cleanup');
     assert.deepEqual(v.kept_not_cleaned.filter((x) => x.run_id.startsWith(TAG)), []);
+    assert.deepEqual(v.unclosed.filter((x) => (x.run_id || '').startsWith(TAG)), []);
+    assert.deepEqual(v.failed_deletions.filter((x) => (x.run_id || '').startsWith(TAG)), []);
     record('T14', { check_log: checkLogPath('preprod'), entries: [e1, ce, gone.entry], printed: lines });
   } finally {
     await c.end();
