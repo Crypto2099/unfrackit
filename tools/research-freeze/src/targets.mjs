@@ -32,8 +32,9 @@ import { CONFIRMATION_THRESHOLD, journalEntries } from './journal.mjs';
 import { recordFromChain, recordFromBytes } from './verify.mjs';
 import { RECORD_URI_RE } from './manifest.mjs';
 import { decode } from './cbor.mjs';
-import { witnessedBy } from './tx.mjs';
-import { equalBytes, UserError } from './util.mjs';
+import { payerCheck, hasLabel309 } from './tx.mjs';
+import { citedRecords } from './hashing.mjs';
+import { equalBytes, fromHex, sha256, toHex, UserError } from './util.mjs';
 
 function readReport(store, network, txHash) {
   const f = path.join(store.runDir(network, txHash), 'report.json');
@@ -72,8 +73,8 @@ export async function confirmedRecord({ store, koios, bf = null, network, txHash
   }
   const rec = await recordFromChain(koios, txHash);
   if (rec.verdict !== 'valid') throw new UserError(`${where}: the record read from chain is ${rec.verdict} (${rec.issues.join('; ')})`);
-  const paid = witnessedBy(rec.txBytes, paymentKeyHash);
-  if (!paid.ok) throw new UserError(`${where} was not paid by this identity: ${paid.reason}`);
+  const paid = payerCheck(rec.txBytes, txHash, paymentKeyHash);
+  if (!paid.paid) throw new UserError(`${where} was not paid by this identity: ${paid.reason}`);
   if (rec.signers.length !== 1 || rec.signers[0] !== publicKeyHex) {
     throw new UserError(`${where} is signed by ${rec.signers.join(', ') || 'no valid key'}, not by this identity's ${publicKeyHex}`);
   }
@@ -99,12 +100,13 @@ export async function confirmedRecord({ store, koios, bf = null, network, txHash
     signer: rec.signers[0],
     items: rec.items,
     keys: [...decode(rec.body, { canonical: true }).keys()],
+    message: rec.message,
     stage: report?.stage || null,
     kind: report?.kind || null
   };
 }
 
-const strip = ({ items: _items, keys: _keys, ...t }) => t;
+const strip = ({ items: _items, keys: _keys, message: _message, ...t }) => t;
 
 // Every target of a manifest. A retype also carries every item of the record
 // it supersedes, with identical digests in the same order.
@@ -136,14 +138,30 @@ export async function checkTargets({ store, koios, bf = null, network, manifest,
 // - otherwise, the one cited URI that names a hypotheses-stage run of this
 //   home.
 //
+// The shape alone cannot tell a hypotheses record from a core-only final
+// freeze, so a named record must be shown to be the hypotheses stage: by this
+// home's run directory or journal entry when either exists, else by its own
+// document (`hypothesesDocument`), whose SHA-256 must be the record's CIP-20
+// line and whose text must cite no transaction of this identity. A final
+// freeze's document always cites the hypotheses record; the hypotheses
+// document comes first and cites none.
+//
 // Other cited URIs are reported, not checked.
-export async function checkCitedHypotheses({ store, koios, bf = null, network, cited, publicKeyHex, paymentKeyHash, hypothesesHash }) {
+export async function checkCitedHypotheses({ store, koios, bf = null, network, cited, publicKeyHex, paymentKeyHash, hypothesesHash, hypothesesDocument, address }) {
   let hash;
+  let needDocument = false;
   if (hypothesesHash) {
     if (!/^[0-9a-f]{64}$/.test(hypothesesHash)) throw new UserError(`--hypotheses must be a 64-digit lowercase transaction hash: ${hypothesesHash}`);
     if (!cited.includes(hypothesesHash)) throw new UserError(`the final-stage document does not cite the hypotheses record ${hypothesesHash} (it cites ${cited.length ? cited.join(', ') : 'no record URI'})`);
     const report = readReport(store, network, hypothesesHash);
-    if (report && report.stage !== 'hypotheses') throw new UserError(`${hypothesesHash} is a ${report.stage ? `${report.stage}-stage` : report.kind} run of this home, not the hypotheses record`);
+    const entry = journalEntries(store, network).find((e) => e.txHash === hypothesesHash);
+    for (const [what, stage, kind] of [['run', report?.stage, report?.kind], ['journal entry', entry?.stage, entry?.kind]]) {
+      if ((what === 'run' ? report : entry) && stage !== 'hypotheses') throw new UserError(`${hypothesesHash} is a ${stage ? `${stage}-stage` : kind || 'unstaged'} ${what} of this home, not the hypotheses record`);
+    }
+    needDocument = !report && !entry;
+    if (needDocument && !hypothesesDocument) {
+      throw new UserError(`this home has no run directory or journal entry for ${hypothesesHash}, so its stage is unknown; pass its document with --hypotheses-document <file> to show that it is the hypotheses record`);
+    }
     hash = hypothesesHash;
   } else {
     const hyps = cited.filter((h) => readReport(store, network, h)?.stage === 'hypotheses');
@@ -158,32 +176,65 @@ export async function checkCitedHypotheses({ store, koios, bf = null, network, c
   }
   const t = await confirmedRecord({ store, koios, bf, network, txHash: hash, publicKeyHex, paymentKeyHash, role: 'the hypotheses record the document cites' });
   if (t.keys.join() !== 'v,sigs,items') throw new UserError(`the hypotheses record ${hash} is not a core-only freeze record (its top-level keys are ${t.keys.join(', ')})`);
-  return { ...strip(t), other_cited: cited.filter((h) => h !== hash) };
+  let documentCheck = null;
+  if (needDocument) {
+    const bytes = new Uint8Array(fs.readFileSync(hypothesesDocument));
+    const digest = toHex(sha256(bytes));
+    if (!t.message || t.message.length !== 1 || t.message[0] !== digest) {
+      throw new UserError(`${hypothesesDocument} has SHA-256 ${digest}, but the record ${hash} carries the document digest ${t.message ? t.message.join(', ') : 'none'}`);
+    }
+    const ownTxs = await addressHistory({ koios, bf, address });
+    const citedOwn = citedRecords(new TextDecoder().decode(bytes)).hashes.filter((h) => ownTxs.has(h) && h !== hash);
+    if (citedOwn.length) {
+      throw new UserError(`the document of ${hash} cites ${citedOwn.join(', ')}, a transaction of this identity, so it is a later stage's document, not the hypotheses record's`);
+    }
+    documentCheck = { file: hypothesesDocument, sha256: digest, cites_own: [] };
+  }
+  return { ...strip(t), other_cited: cited.filter((h) => h !== hash), document_check: documentCheck };
 }
 
-// Records signed by this identity that sit on chain at its payment address
-// but are not in this home's journal. A restored home's journal may predate
-// a record the lost home sent, the final freeze included; the address
-// history shows every transaction this identity paid for, so it is read from
-// Koios and, when a project id is present (always on mainnet), from
-// Blockfrost, and every transaction in either history that the journal does
-// not know is opened. One that this identity paid for and that carries a
-// label-309 record signed by its key is reported; so is one that neither
-// provider can return or that cannot be read, since nothing can be said about
-// it. Anyone can send a transaction to the address, including a replay of one
-// of this identity's signed bodies; a record in a transaction this identity
-// did not pay for is listed as a replay and does not count.
-export async function unknownRecordsOnChain({ store, koios, bf = null, network, address, publicKeyHex, paymentKeyHash, exclude = [] }) {
-  const known = new Set([...journalEntries(store, network).map((e) => e.txHash), ...exclude]);
+// The transactions of the identity's payment address, from Koios and, when
+// a project ID is present, Blockfrost; either provider listing one is
+// enough, and every one listed becomes readable from both.
+async function addressHistory({ koios, bf, address }) {
+  koios.addresses.add(address);
   const hashes = new Set((await koios.addressTxs(address)).map((t) => t.txHash));
-  if (bf) for (const t of await bf.addressTxs(address)) hashes.add(t.txHash);
-  // A transaction either provider lists for the address is read from both.
+  if (bf) {
+    bf.addresses.add(address);
+    for (const t of await bf.addressTxs(address)) hashes.add(t.txHash);
+  }
   for (const h of hashes) {
     koios.historyTxs.add(h);
     if (bf) bf.historyTxs.add(h);
   }
+  return hashes;
+}
+
+// Records this identity paid for that sit on chain at its payment address
+// but that this home's journal does not know, or knows only as abandoned (an
+// entry abandoned on wrong provider answers may have landed). A restored
+// home's journal may predate a record the lost home sent, the final freeze
+// included; the address history shows every transaction this identity paid
+// for, because each one spends UTxOs of that address.
+//
+// Each unknown transaction is first read only far enough to decide who paid
+// for it (payerCheck: the body hashed as sent, and a verifying witness from
+// this identity's payment key), with a walker that accepts any well-formed
+// CBOR. A transaction this identity did not pay for is skipped without
+// reading anything else of it, whatever it carries: anyone can send to the
+// address, including malformed metadata or a replay of one of this
+// identity's signed bodies, and none of that can stop the scan. A
+// transaction this identity paid for is reported when it carries a label-309
+// record signed by its key, or a label-309 value that cannot be parsed or
+// does not validate. Provider faults are reported too, since nothing can be
+// said about such a transaction: the two providers returning different
+// bytes, neither returning any, or bytes that are not a transaction with the
+// requested hash.
+export async function unknownRecordsOnChain({ store, koios, bf = null, network, address, publicKeyHex, paymentKeyHash, exclude = [] }) {
+  const known = new Set([...journalEntries(store, network).filter((e) => e.state !== 'abandoned').map((e) => e.txHash), ...exclude]);
+  const hashes = await addressHistory({ koios, bf, address });
   const found = [];
-  const replays = [];
+  let skipped = 0;
   for (const h of hashes) {
     if (known.has(h)) continue;
     const kCbor = await koios.txCbor(h);
@@ -197,15 +248,33 @@ export async function unknownRecordsOnChain({ store, koios, bf = null, network, 
       found.push({ tx_hash: h, reason: 'neither provider returns its CBOR' });
       continue;
     }
-    const rec = recordFromBytes(h, cbor);
-    if (rec.verdict === 'none') continue;
-    if (rec.verdict === 'unverifiable') {
-      found.push({ tx_hash: h, reason: `it cannot be read: ${rec.issues.join('; ')}` });
+    let bytes;
+    let payer;
+    try {
+      bytes = fromHex(cbor);
+      payer = payerCheck(bytes, h, paymentKeyHash);
+    } catch (e) {
+      found.push({ tx_hash: h, reason: `the provider's bytes are not a well-formed transaction: ${e.message}` });
       continue;
     }
-    if (!rec.signers?.includes(publicKeyHex)) continue;
-    if (witnessedBy(rec.txBytes, paymentKeyHash).ok) found.push({ tx_hash: h, reason: 'this identity paid for it, and it carries a label-309 record signed by this identity\'s key' });
-    else replays.push(h);
+    if (!payer.bound) {
+      found.push({ tx_hash: h, reason: `the provider's bytes are not this transaction: ${payer.reason}` });
+      continue;
+    }
+    if (!payer.paid) {
+      skipped++;
+      continue;
+    }
+    if (!hasLabel309(bytes)) continue;
+    let rec;
+    try {
+      rec = recordFromBytes(h, cbor);
+    } catch (e) {
+      found.push({ tx_hash: h, reason: `this identity paid for it, and its label-309 value cannot be parsed: ${e.message}` });
+      continue;
+    }
+    if (rec.verdict !== 'valid') found.push({ tx_hash: h, reason: `this identity paid for it, and its label-309 value is ${rec.verdict} (${rec.issues.join('; ')})` });
+    else if (rec.signers.includes(publicKeyHex)) found.push({ tx_hash: h, reason: 'this identity paid for it, and it carries a label-309 record signed by this identity\'s key' });
   }
-  return { found, replays };
+  return { found, skipped };
 }

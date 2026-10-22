@@ -140,7 +140,7 @@ test('a chain-only target must have been paid by this identity: a replay of its 
   const replay = await prepareRun({ manifest: { kind: 'freeze', messageItems: [0] }, hashed: ITEMS, coreOnly: false, id: { signing: s.identity.id.signing, payment: other.id.payment }, utxos: [{ txHash: 'cc'.repeat(32), index: 0, coin: 9000000n, assets: [] }], params, network: 'preprod', ttl: 9000, paymentKeyHash: other.pub.payment_key_hash });
   assert.equal(toHex(replay.signed.body), toHex(s.target.body), 'the same signed body');
   s.f.chain.txs[replay.tx.hash] = { cbor: toHex(replay.tx.bytes), confirmations: 50 };
-  await assert.rejects(check(s, retype({ hash: replay.tx.hash })), /was not paid by this identity: its witness is from the key with hash/);
+  await assert.rejects(check(s, retype({ hash: replay.tx.hash })), /was not paid by this identity: no witness from this identity's payment key verifies over its body/);
 });
 
 test('on mainnet a target needs Blockfrost: its depth there and byte-identical CBOR, and a verify that cross-checked', async () => {
@@ -162,6 +162,8 @@ test('on mainnet a target needs Blockfrost: its depth there and byte-identical C
   await assert.rejects(checkTargets({ ...args, bf: shallow.bf() }), /14 blocks deep on Blockfrost/);
   const differs = fakeBlockfrost('mainnet', { txs: { [target.hash]: { cbor: target.cbor.replace(/.{2}$/, '00'), block: block.blockfrost } }, tip: { height: 1014 } });
   await assert.rejects(checkTargets({ ...args, bf: differs.bf() }), /CBOR differs between Koios and Blockfrost/);
+  const unknown = fakeBlockfrost('mainnet', { tip: { height: 1014 } });
+  await assert.rejects(checkTargets({ ...args, bf: unknown.bf() }), /Blockfrost does not know the transaction/);
   // A mainnet target whose verify did not cross-check is refused.
   const report = JSON.parse(fs.readFileSync(path.join(target.dir, 'report.json'), 'utf8'));
   store.updateRunFile(target.dir, 'report.json', JSON.stringify({ ...report, verified: VALID }));

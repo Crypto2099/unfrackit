@@ -16,6 +16,7 @@ import { Store } from '../src/store.mjs';
 import { restoreIdentity, normalizeTyped } from '../src/restore.mjs';
 import { tempHome } from './helpers.mjs';
 import { testIdentity, seededMnemonic } from './fixtures.mjs';
+import { journal, journalEntry } from '../src/journal.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 
@@ -122,7 +123,7 @@ test('restore refuses keys that another identity of the home already has: the re
   const real = testIdentity(store, 'testfreeze', 'the real identity');
   await assert.rejects(
     restoreIdentity({ store, name: 'rehearsal', expectSigningKey: real.pub.signing_public_key, streams: terminal([real.signingMnemonic, real.paymentMnemonic]) }),
-    /give the keys of identity "testfreeze"/
+    /already recorded in this home for identity "testfreeze" on mainnet/
   );
   assert.equal(store.hasIdentity('rehearsal'), false, 'nothing was written');
 });
@@ -164,6 +165,20 @@ test('a restore whose second write fails leaves no mnemonic file behind, so the 
   assert.deepEqual(fs.readdirSync(dir), [], 'no mnemonic file and no temporary file');
   const again = await restoreIdentity({ store, name: 'rehearsal', expectSigningKey: src.pub.signing_public_key, streams: terminal([src.signingMnemonic, src.paymentMnemonic]) });
   assert.equal(again.facts.signing_public_key, src.pub.signing_public_key, 'the next attempt succeeds');
+});
+
+test('a --signing-key this home already used for another network or identity name is refused before any word is asked for', async () => {
+  const real = source('the real identity');
+  const store = new Store(tempHome());
+  store.ensure();
+  // Only a mainnet journal entry remains of the real identity.
+  journal(store, journalEntry({ network: 'mainnet', txHash: 'ab'.repeat(32), cbor: '00', ttl: 1, inputs: [], run: '/gone', kind: 'freeze', stage: 'final', identity: 'freeze', signingPublicKey: real.pub.signing_public_key }));
+  const t = terminal([real.signingMnemonic, real.paymentMnemonic]);
+  await assert.rejects(restoreIdentity({ store, name: 'rehearsal', expectSigningKey: real.pub.signing_public_key, streams: t }), /already recorded in this home for identity "freeze" on mainnet .*"rehearsal" signs preprod records/);
+  assert.doesNotMatch(t.shown(), /mnemonic \(24 words/);
+  await assert.rejects(restoreIdentity({ store, name: 'other', expectSigningKey: real.pub.signing_public_key, streams: terminal([real.signingMnemonic, real.paymentMnemonic]) }), /identity "freeze" on mainnet/);
+  const ok = await restoreIdentity({ store, name: 'archive', expectSigningKey: source('unrelated').pub.signing_public_key, streams: terminal([source('unrelated').signingMnemonic, source('unrelated').paymentMnemonic]) });
+  assert.equal(ok.facts.networks[0], 'mainnet', 'an unrecorded key restores');
 });
 
 test('typed words are normalized: case, spacing and the numbers of a numbered list', () => {

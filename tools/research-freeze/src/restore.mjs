@@ -15,7 +15,7 @@
 // the real key a preprod identity. A key that another identity of the home
 // already has is refused. Neither mnemonic file may exist already.
 
-import { deriveIdentity, publicFacts } from './keys.mjs';
+import { deriveIdentity, publicFacts, networksFor } from './keys.mjs';
 import { askHidden, requireTty } from './tty.mjs';
 import { UserError } from './util.mjs';
 
@@ -41,6 +41,20 @@ function compareFacts(derived, existing) {
   return diffs;
 }
 
+// A key this home has already recorded under another identity name, or for
+// a network the name does not sign for, is refused: restoring it under this
+// name would give the key a second identity, or let it sign for the other
+// network.
+function refuseKeyUsedElsewhere(store, name, key) {
+  const allowed = networksFor(name);
+  const clash = store.signingKeyRecords(key).filter((r) => (r.name && r.name !== name) || !allowed.includes(r.network));
+  if (clash.length) {
+    throw new UserError(
+      `the signing key ${key} is already recorded in this home for ${clash.map((r) => `${r.name ? `identity "${r.name}"` : 'an unnamed identity'} on ${r.network} (${r.where})`).join('; ')}; "${name}" signs ${allowed.join(', ')} records, so restoring it under this name is refused`
+    );
+  }
+}
+
 export async function restoreIdentity({ store, name, expectSigningKey, streams = { stdin: process.stdin, stdout: process.stdout } }) {
   requireTty('restore', streams);
   if (expectSigningKey !== undefined && !/^[0-9a-f]{64}$/.test(expectSigningKey)) throw new UserError('--signing-key must be 64 lowercase hex digits');
@@ -50,6 +64,7 @@ export async function restoreIdentity({ store, name, expectSigningKey, streams =
   if (!existing && !expectSigningKey) {
     throw new UserError(`identity "${name}" has no public.json in ${store.home}; pass --signing-key <hex> with the signing key the identity is known by, so the words are checked against it`);
   }
+  if (expectSigningKey) refuseKeyUsedElsewhere(store, name, expectSigningKey);
   streams.stdout.write(`Restoring identity "${name}" in ${store.home}. The words are not shown as you type.\n`);
   const signingMnemonic = normalizeTyped(await askHidden('Signing mnemonic (24 words, one line): ', streams));
   const paymentMnemonic = normalizeTyped(await askHidden('Payment mnemonic (24 words, one line): ', streams));
@@ -62,6 +77,7 @@ export async function restoreIdentity({ store, name, expectSigningKey, streams =
     const diffs = compareFacts(facts, existing);
     if (diffs.length) throw new UserError(`the mnemonics do not give this identity's public.json; nothing was written:\n  ${diffs.join('\n  ')}`);
   }
+  refuseKeyUsedElsewhere(store, name, facts.signing_public_key);
   for (const other of store.identityNames().filter((n) => n !== name && store.hasPublic(n))) {
     const p = store.readPublic(other);
     if (p.signing_public_key === facts.signing_public_key || p.payment_key_hash === facts.payment_key_hash) {

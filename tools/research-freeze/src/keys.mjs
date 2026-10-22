@@ -161,11 +161,18 @@ export function newMnemonicPair(random = crypto.randomBytes) {
   return { signingMnemonic: mnemonicFromEntropy(a), paymentMnemonic: mnemonicFromEntropy(b) };
 }
 
+// The networks an identity signs for, decided by its name: the throwaway
+// `rehearsal` identity signs preprod records, every other identity mainnet
+// ones.
+export function networksFor(name) {
+  return name === 'rehearsal' ? ['preprod'] : ['mainnet'];
+}
+
 export function publicFacts(name, identity) {
   return {
     format: 'research-freeze-identity-v1',
     name,
-    networks: name === 'rehearsal' ? ['preprod'] : ['mainnet'],
+    networks: networksFor(name),
     signing_public_key: toHex(identity.signing.publicKey),
     signing_derivation: `CIP-190 HKDF-SHA-256, salt empty, info "${SIGNING_INFO}"; seed = entropy of a ${MNEMONIC_WORDS}-word BIP-39 mnemonic, no passphrase`,
     payment_public_key: toHex(identity.payment.publicKey),

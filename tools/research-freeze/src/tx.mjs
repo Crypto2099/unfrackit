@@ -9,8 +9,8 @@
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { sliceTxComponents, unwrapAuxiliaryData, auxiliaryDataHashFromTxBody, bindTransactionBytes } from '@cardanowall/sdk-ts/verifier';
 import { reassembleLabel309Value } from '@cardanowall/poe-standard';
-import { blake2b256 } from '@cardanowall/crypto-core/hash';
-import { decode, mapGet, Tagged, textStrings } from './cbor.mjs';
+import { blake2b256, blake2b224 } from '@cardanowall/crypto-core/hash';
+import { decode, mapGet, Tagged, textStrings, arraySpans, mapSpans, majorAt, untag, uintAt, bytesAt } from './cbor.mjs';
 import { nodeVerify } from './keys.mjs';
 import { expectedAuxiliaryBytes, LABEL_MSG, LABEL_POE } from './record.mjs';
 import { containsMarker, equalBytes, fromHex, stringContainsMarker, toHex, UserError } from './util.mjs';
@@ -213,21 +213,60 @@ export function assertSweep(bytes, expect) {
   return { txHash, fee, size: bytes.length, checks };
 }
 
-// Whether a transaction read from chain was paid by this identity: its
-// witness set holds exactly one vkey witness, from the payment key with this
-// hash, verifying against the body hash. A replay of one of the identity's
-// signed record bodies in someone else's transaction fails this, which is
-// what tells the original from the replay (CIP-190, "Signature replay").
-export function witnessedBy(bytes, paymentKeyHash) {
-  const fixed = CSL.FixedTransaction.from_bytes(bytes);
-  const bodyHash = blake2b256(new Uint8Array(fixed.raw_body()));
-  const ws = decode(new Uint8Array(fixed.raw_witness_set()));
-  if (![...ws.keys()].every((k) => k === 0)) return { ok: false, reason: 'the witness set holds more than vkey witnesses' };
-  const vkeys = setItems(mapGet(ws, 0));
-  if (!Array.isArray(vkeys) || vkeys.length !== 1) return { ok: false, reason: `the transaction carries ${Array.isArray(vkeys) ? vkeys.length : 0} vkey witnesses, not one` };
-  const [vk, sig] = vkeys[0];
-  const keyHash = toHex(CSL.PublicKey.from_bytes(vk).hash().to_bytes());
-  if (keyHash !== paymentKeyHash) return { ok: false, reason: `its witness is from the key with hash ${keyHash}, not this identity's payment key ${paymentKeyHash}` };
-  if (!nodeVerify(vk, bodyHash, sig)) return { ok: false, reason: 'its payment witness does not verify against the body hash' };
-  return { ok: true };
+// Who paid for a transaction read from chain, decided from its bytes alone
+// with a walker that accepts any well-formed CBOR (indefinite lengths, tags,
+// non-canonical integers), so no transaction anyone can put on chain makes
+// the decision throw. The body must hash to the requested transaction hash.
+// The transaction was paid by this identity when its witness set holds a
+// vkey witness whose key hashes to this identity's payment key hash and whose
+// signature verifies over the body hash: only this identity's key can make
+// that witness, and a replay of one of its signed record bodies inside
+// someone else's transaction carries none (CIP-190, "Signature replay").
+// Other witnesses may be present as well.
+export function payerCheck(bytes, txHash, paymentKeyHash) {
+  const top = arraySpans(bytes, 0);
+  if (top.length < 2 || top[top.length - 1][1] !== bytes.length) throw new Error('not a transaction: a top-level array of at least two items covering every byte');
+  const bodyHash = blake2b256(bytes.subarray(top[0][0], top[0][1]));
+  if (toHex(bodyHash) !== txHash) return { bound: false, paid: false, reason: `its body hashes to ${toHex(bodyHash)}, not to ${txHash}` };
+  const ws = untag(bytes, top[1][0]);
+  if (majorAt(bytes, ws) !== 5) return { bound: true, paid: false, reason: 'its witness set is not a map' };
+  for (const e of mapSpans(bytes, ws)) {
+    if (uintAt(bytes, e.key[0]) !== 0n) continue;
+    const list = untag(bytes, e.value[0]);
+    if (majorAt(bytes, list) !== 4) continue;
+    for (const [w] of arraySpans(bytes, list)) {
+      if (majorAt(bytes, w) !== 4) continue;
+      const parts = arraySpans(bytes, w);
+      if (parts.length !== 2) continue;
+      const vk = bytesAt(bytes, parts[0][0]);
+      const sig = bytesAt(bytes, parts[1][0]);
+      if (!vk || !sig || vk.length !== 32 || sig.length !== 64) continue;
+      if (toHex(blake2b224(vk)) !== paymentKeyHash) continue;
+      if (nodeVerify(vk, bodyHash, sig)) return { bound: true, paid: true };
+    }
+  }
+  return { bound: true, paid: false, reason: 'no witness from this identity\'s payment key verifies over its body' };
+}
+
+// Whether a transaction's metadata has a label-309 entry, read with the same
+// walker, in any of the three auxiliary-data forms (a metadata map; an array
+// whose first item is the map; tag 259 wrapping a map whose key 0 is the map).
+export function hasLabel309(bytes) {
+  const top = arraySpans(bytes, 0);
+  const auxSpan = top.length >= 4 ? top[3] : top.length === 3 && majorAt(bytes, top[2][0]) !== 7 ? top[2] : null;
+  if (!auxSpan) return false;
+  let p = auxSpan[0];
+  if (majorAt(bytes, p) === 7) return false; // null
+  let metadata = null;
+  if (majorAt(bytes, p) === 6) {
+    p = untag(bytes, p);
+    if (majorAt(bytes, p) !== 5) return false;
+    const zero = mapSpans(bytes, p).find((e) => uintAt(bytes, e.key[0]) === 0n);
+    metadata = zero ? zero.value[0] : null;
+  } else if (majorAt(bytes, p) === 4) {
+    const items = arraySpans(bytes, p);
+    metadata = items.length ? items[0][0] : null;
+  } else if (majorAt(bytes, p) === 5) metadata = p;
+  if (metadata === null || majorAt(bytes, metadata) !== 5) return false;
+  return mapSpans(bytes, metadata).some((e) => uintAt(bytes, e.key[0]) === 309n);
 }

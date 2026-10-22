@@ -205,3 +205,145 @@ export function* textStrings(v) {
     }
   } else if (v instanceof Tagged) yield* textStrings(v.value);
 }
+
+// A lenient walker for chain data, which is well-formed CBOR but not
+// necessarily canonical: it accepts indefinite lengths, tags, floats and
+// simple values anywhere, and returns byte spans rather than values, so a
+// transaction body can be hashed exactly as it was sent. It is used to decide
+// who paid for a transaction before anything else of it is read.
+
+function walkHead(bytes, pos) {
+  if (pos >= bytes.length) throw new Error('CBOR: truncated input');
+  const ib = bytes[pos];
+  const major = ib >> 5;
+  const ai = ib & 0x1f;
+  if (ai < 24) return { major, ai, arg: BigInt(ai), next: pos + 1 };
+  if (ai <= 27) {
+    const len = 1 << (ai - 24);
+    if (pos + 1 + len > bytes.length) throw new Error('CBOR: truncated argument');
+    let v = 0n;
+    for (let i = 0; i < len; i++) v = (v << 8n) | BigInt(bytes[pos + 1 + i]);
+    return { major, ai, arg: v, next: pos + 1 + len };
+  }
+  if (ai === 31 && major >= 2 && major <= 5) return { major, ai, arg: null, next: pos + 1 };
+  if (ai === 31 && major === 7) throw new Error('CBOR: unexpected break');
+  throw new Error(`CBOR: reserved additional information ${ai}`);
+}
+
+// The end of the item that starts at `pos`.
+export function skipItem(bytes, pos) {
+  const h = walkHead(bytes, pos);
+  const untilBreak = (p, step) => {
+    for (;;) {
+      if (p >= bytes.length) throw new Error('CBOR: truncated indefinite item');
+      if (bytes[p] === 0xff) return p + 1;
+      p = step(p);
+    }
+  };
+  switch (h.major) {
+    case 0:
+    case 1:
+    case 7:
+      return h.next;
+    case 2:
+    case 3: {
+      if (h.arg === null) return untilBreak(h.next, (p) => skipItem(bytes, p));
+      const end = h.next + Number(h.arg);
+      if (end > bytes.length) throw new Error('CBOR: truncated string');
+      return end;
+    }
+    case 4: {
+      if (h.arg === null) return untilBreak(h.next, (p) => skipItem(bytes, p));
+      let p = h.next;
+      for (let i = 0n; i < h.arg; i++) p = skipItem(bytes, p);
+      return p;
+    }
+    case 5: {
+      if (h.arg === null) return untilBreak(h.next, (p) => skipItem(bytes, skipItem(bytes, p)));
+      let p = h.next;
+      for (let i = 0n; i < h.arg; i++) p = skipItem(bytes, skipItem(bytes, p));
+      return p;
+    }
+    case 6:
+      return skipItem(bytes, h.next);
+    default:
+      throw new Error('CBOR: unreachable major type');
+  }
+}
+
+// The position of the item a tag wraps (or `pos` itself when untagged).
+export function untag(bytes, pos) {
+  let p = pos;
+  while (walkHead(bytes, p).major === 6) p = walkHead(bytes, p).next;
+  return p;
+}
+
+export function majorAt(bytes, pos) {
+  return walkHead(bytes, pos).major;
+}
+
+// The spans [start, end) of an array's elements, definite or indefinite.
+export function arraySpans(bytes, pos) {
+  const h = walkHead(bytes, pos);
+  if (h.major !== 4) throw new Error('CBOR: not an array');
+  const out = [];
+  let p = h.next;
+  if (h.arg === null) {
+    while (bytes[p] !== 0xff) {
+      if (p >= bytes.length) throw new Error('CBOR: truncated array');
+      const e = skipItem(bytes, p);
+      out.push([p, e]);
+      p = e;
+    }
+  } else {
+    for (let i = 0n; i < h.arg; i++) {
+      const e = skipItem(bytes, p);
+      out.push([p, e]);
+      p = e;
+    }
+  }
+  return out;
+}
+
+// The key and value spans of a map's entries, definite or indefinite.
+export function mapSpans(bytes, pos) {
+  const h = walkHead(bytes, pos);
+  if (h.major !== 5) throw new Error('CBOR: not a map');
+  const out = [];
+  let p = h.next;
+  const one = () => {
+    const ke = skipItem(bytes, p);
+    const ve = skipItem(bytes, ke);
+    out.push({ key: [p, ke], value: [ke, ve] });
+    p = ve;
+  };
+  if (h.arg === null) {
+    while (bytes[p] !== 0xff) {
+      if (p >= bytes.length) throw new Error('CBOR: truncated map');
+      one();
+    }
+  } else for (let i = 0n; i < h.arg; i++) one();
+  return out;
+}
+
+// An unsigned integer at `pos`, or null when the item is not one.
+export function uintAt(bytes, pos) {
+  const h = walkHead(bytes, pos);
+  return h.major === 0 ? h.arg : null;
+}
+
+// A byte string at `pos` (chunks of an indefinite one joined), or null.
+export function bytesAt(bytes, pos) {
+  const h = walkHead(bytes, pos);
+  if (h.major !== 2) return null;
+  if (h.arg !== null) return bytes.slice(h.next, h.next + Number(h.arg));
+  const parts = [];
+  let p = h.next;
+  while (bytes[p] !== 0xff) {
+    const c = walkHead(bytes, p);
+    if (c.major !== 2 || c.arg === null) throw new Error('CBOR: bad byte-string chunk');
+    parts.push(bytes.slice(c.next, c.next + Number(c.arg)));
+    p = c.next + Number(c.arg);
+  }
+  return concat(...parts);
+}

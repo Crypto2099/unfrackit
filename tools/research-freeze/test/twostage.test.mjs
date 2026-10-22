@@ -7,6 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Store } from '../src/store.mjs';
@@ -209,6 +210,8 @@ test('drawkey fails on a nonce disagreement or absence, before N starts, before 
     [{ bfBlockOverride: { slot: 136598400 + 101601 } }, started, /Blockfrost contradicts itself/],
     // Koios answers with the parameters of another epoch.
     [{ epochParams: { 321: { epoch_no: 320, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: { epoch: 321, nonce: NONCE, protocol_major_ver: 11 } } }, started, /parameters returned are for epoch 320 \(Koios\)/],
+    // Blockfrost answers with the parameters of another epoch.
+    [{ epochParams: { 321: { epoch_no: 321, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: { epoch: 320, nonce: NONCE, protocol_major_ver: 11 } } }, started, /parameters returned are for epoch 321 \(Koios\) and 320 \(Blockfrost\)/],
     // The plan recomputed now differs from the one wait recorded.
     [{ epochParams: { 321: { epoch_no: 321, nonce: NONCE, protocol_major: 11 } }, bfEpochParams: { 321: { epoch: 321, nonce: NONCE, protocol_major_ver: 11 } } }, (f) => { started(f); const file = path.join(f.run.dir, 'report.json'); const r = JSON.parse(fs.readFileSync(file, 'utf8')); r.draw.cutoff_slot -= 1; f.store.updateRunFile(f.run.dir, 'report.json', JSON.stringify(r)); }, /draw plan differs from the recorded one: cutoff_slot/],
     [{ blockfrostBlock: blockOf({ hash: 'cc'.repeat(32), slot: 136598400 + 101600, epoch: 320, epochSlot: 101600 }) }, started, /freeze block differs: block_hash/]
@@ -277,6 +280,17 @@ test('wait never replaces what it recorded: other facts are refused, equal ones 
   assert.equal(fs.readFileSync(file, 'utf8'), first);
 });
 
+test('wait refuses to replace a recorded draw plan that differs', async () => {
+  const f = await finalRun();
+  await waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick });
+  const file = path.join(f.run.dir, 'report.json');
+  const first = fs.readFileSync(file, 'utf8');
+  // Same block, but a genesis that gives another window, so another plan.
+  const other = fakeChain('preprod', { txs: f.k.chain.txs, genesis: { securityparam: '2000' } });
+  await assert.rejects(waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: other.koios({ txHashes: [f.run.hash], addresses: [f.run.report.payment_address] }), waitOptions: quick }), /already recorded another draw plan .* stabilisation_window/);
+  assert.equal(fs.readFileSync(file, 'utf8'), first);
+});
+
 test('wait keeps the confirmation even when the draw plan cannot be computed', async () => {
   const f = await finalRun({ epochParams: { 320: { epoch_no: 320, protocol_major: 12, protocol_minor: 0 } } });
   await assert.rejects(waitRun({ store: f.store, dir: f.run.dir, log: () => {}, koios: f.koios, waitOptions: quick }), /protocol version 12/);
@@ -287,25 +301,57 @@ test('wait keeps the confirmation even when the draw plan cannot be computed', a
 
 // A final freeze stays buildable after a home loss: --hypotheses names the
 // hypotheses record, which is read from chain.
-test('--hypotheses: the named record must be cited, on chain, paid and signed by this identity, and a core-only freeze', async () => {
+// A final freeze stays buildable after a home loss: --hypotheses names the
+// hypotheses record, which is read from chain, and its document shows it is
+// the hypotheses stage.
+test('--hypotheses: the named record must be cited, on chain, paid and signed by this identity, a core-only freeze, and shown to be the hypotheses stage', async () => {
   const lost = await home();
-  const H = await hypotheses(lost);
+  const dir = tempDir();
+  const docItem = (text) => {
+    const digest = new Uint8Array(crypto.createHash('sha256').update(text).digest());
+    return hashedItems([{ type: 'StudyRegistration', document: true, ids: [{ id: '10.5281/zenodo.1', id_type: 'DOI', relation: 'IsPartOf' }], digest }]);
+  };
+  const hText = 'Hypotheses, frozen before the checks.\n';
+  fs.writeFileSync(path.join(dir, 'h.md'), hText);
+  const H = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, coreOnly: true, items: docItem(hText), utxoTag: 'c' });
+  // A core-only final freeze: same shape, and its document cites H.
+  const fText = `Final. Hypotheses record: ${recordUri(H.hash)}\n`;
+  fs.writeFileSync(path.join(dir, 'f.md'), fText);
+  const F = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, coreOnly: true, items: docItem(fText), utxoTag: 'd' });
   const typed = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, utxoTag: 'e' });
-  // A fresh home with the same keys and no run directories.
+  // A fresh home with the same keys and no run directory or journal entry.
   const h = await home();
-  const f = fakeChain('preprod', { txs: { [H.hash]: { cbor: H.cbor, confirmations: 30 }, [typed.hash]: { cbor: typed.cbor, confirmations: 30 } } });
-  const args = { store: h.store, koios: f.koios(), network: 'preprod', publicKeyHex: h.identity.pub.signing_public_key, paymentKeyHash: h.identity.pub.payment_key_hash };
+  const txs = { [H.hash]: { cbor: H.cbor, confirmations: 30 }, [F.hash]: { cbor: F.cbor, confirmations: 30 }, [typed.hash]: { cbor: typed.cbor, confirmations: 30 } };
+  const f = fakeChain('preprod', { txs, history: [H.hash, F.hash, typed.hash] });
+  const address = h.identity.pub.addresses.preprod;
+  const args = { store: h.store, koios: f.koios(), network: 'preprod', publicKeyHex: h.identity.pub.signing_public_key, paymentKeyHash: h.identity.pub.payment_key_hash, address };
   await assert.rejects(checkCitedHypotheses({ ...args, cited: [H.hash] }), /cites no hypotheses-stage record .* --hypotheses <hash>/);
-  const t = await checkCitedHypotheses({ ...args, cited: [H.hash], hypothesesHash: H.hash });
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [H.hash], hypothesesHash: H.hash }), /stage is unknown; pass its document with --hypotheses-document/);
+  const t = await checkCitedHypotheses({ ...args, cited: [H.hash], hypothesesHash: H.hash, hypothesesDocument: path.join(dir, 'h.md') });
   assert.equal(t.source, 'chain');
-  await assert.rejects(checkCitedHypotheses({ ...args, cited: ['9f'.repeat(32)], hypothesesHash: H.hash }), /does not cite the hypotheses record/);
-  await assert.rejects(checkCitedHypotheses({ ...args, cited: [typed.hash], hypothesesHash: typed.hash }), /not a core-only freeze record/);
-  await assert.rejects(checkCitedHypotheses({ ...args, paymentKeyHash: 'ab'.repeat(28), cited: [H.hash], hypothesesHash: H.hash }), /was not paid by this identity/);
+  assert.equal(t.document_check.sha256, crypto.createHash('sha256').update(hText).digest('hex'));
+  // The core-only final has the right shape, but its document cites H.
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [F.hash], hypothesesHash: F.hash, hypothesesDocument: path.join(dir, 'f.md') }), new RegExp(`cites ${H.hash}, a transaction of this identity, so it is a later stage's document`));
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [F.hash], hypothesesHash: F.hash, hypothesesDocument: path.join(dir, 'h.md') }), /h\.md has SHA-256 .* but the record .* carries the document digest/);
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: ['9f'.repeat(32)], hypothesesHash: H.hash, hypothesesDocument: path.join(dir, 'h.md') }), /does not cite the hypotheses record/);
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: ['AB'.repeat(32)], hypothesesHash: 'AB'.repeat(32) }), /64-digit lowercase transaction hash/);
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [typed.hash], hypothesesHash: typed.hash, hypothesesDocument: path.join(dir, 'h.md') }), /not a core-only freeze record/);
+  await assert.rejects(checkCitedHypotheses({ ...args, paymentKeyHash: 'ab'.repeat(28), cited: [H.hash], hypothesesHash: H.hash, hypothesesDocument: path.join(dir, 'h.md') }), /was not paid by this identity/);
+  // A journal entry of another stage settles it without a document.
+  journal(h.store, journalEntry({ network: 'preprod', txHash: F.hash, cbor: F.cbor, ttl: 1, inputs: F.p.tx.inputs, run: '/gone', kind: 'freeze', stage: 'final' }));
+  await assert.rejects(checkCitedHypotheses({ ...args, cited: [F.hash], hypothesesHash: F.hash }), /is a final-stage journal entry of this home, not the hypotheses record/);
   // In the home that has the runs, --hypotheses cannot name a run of another stage.
-  const g = fakeChain('preprod', { txs: { [typed.hash]: { cbor: typed.cbor, confirmations: 30 } } });
   const report = JSON.parse(fs.readFileSync(path.join(typed.dir, 'report.json'), 'utf8'));
   lost.store.updateRunFile(typed.dir, 'report.json', JSON.stringify({ ...report, stage: 'final' }));
-  await assert.rejects(checkCitedHypotheses({ store: lost.store, koios: g.koios(), network: 'preprod', publicKeyHex: lost.identity.pub.signing_public_key, paymentKeyHash: lost.identity.pub.payment_key_hash, cited: [typed.hash], hypothesesHash: typed.hash }), /final-stage run of this home, not the hypotheses record/);
+  await assert.rejects(checkCitedHypotheses({ store: lost.store, koios: fakeChain('preprod', { txs }).koios(), network: 'preprod', publicKeyHex: lost.identity.pub.signing_public_key, paymentKeyHash: lost.identity.pub.payment_key_hash, address, cited: [typed.hash], hypothesesHash: typed.hash }), /final-stage run of this home, not the hypotheses record/);
+});
+
+test('--hypotheses applies to a final build only, and --hypotheses-document goes with it', async () => {
+  const h = await home();
+  const f = fakeChain('preprod');
+  await assert.rejects(build({ store: h.store, koios: f.koios(), cli: {}, manifestPath: '/nowhere.json', network: 'preprod', identityName: 'rehearsal', stage: 'hypotheses', coreOnly: true, hypothesesHash: 'ab'.repeat(32) }), /applies to a final-stage freeze only/);
+  await assert.rejects(build({ store: h.store, koios: f.koios(), cli: {}, manifestPath: '/nowhere.json', network: 'preprod', identityName: 'rehearsal', stage: 'final', hypothesesDocument: '/x.md' }), /goes with --hypotheses/);
+  assert.deepEqual(f.calls, []);
 });
 
 test('build refuses a mainnet final while another final is journaled, before any request', async () => {

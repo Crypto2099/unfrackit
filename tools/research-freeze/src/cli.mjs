@@ -25,10 +25,12 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
                                              recreate an identity from its two typed mnemonics (interactive terminal only)
   hash <manifest> [--identity <name>] [--stage <stage>]
                                              hash every file and run the byte-form and document checks
-  build <manifest> --network <n> [--stage hypotheses|final] [--hypotheses <hash>] [--identity <name>] [--core-only]
+  build <manifest> --network <n> [--stage hypotheses|final] [--hypotheses <hash> [--hypotheses-document <file>]]
+        [--identity <name>] [--core-only]
                                              build, sign and check the record and its transaction; submits nothing
                                              (a freeze names its stage; the hypotheses stage is core-only; --hypotheses
-                                             names the cited hypotheses record when this home has no run for it)
+                                             names the cited hypotheses record when this home has no run for it, and
+                                             --hypotheses-document gives its document when the home has no record of it)
   check <run>                                re-run the offline checks on a run directory
   submit <run>                               submit the run's exact signed bytes (mainnet: interactive confirmation)
   wait <run>                                 wait for 15 confirmations and record the block facts
@@ -99,7 +101,7 @@ async function main() {
   const store = new Store();
   store.assertSafe();
   // Temporary secrets left by a killed process are removed before anything else.
-  for (const f of store.cleanTmp()) note(`removed a temporary file left by an earlier run: tmp/${f}`);
+  for (const f of store.cleanTmp()) note(`removed a temporary file left by an earlier run: ${f}`);
 
   switch (cmd) {
     case 'init': {
@@ -172,7 +174,7 @@ async function main() {
       const pub = store.readPublic(name);
       const cli = Cardanowall.require();
       const koios = koiosFor(store, network, { addresses: [pub.addresses[network]] });
-      const r = await build({ store, koios, bf: blockfrostFor(store, network), cli, manifestPath: args[0], network, identityName: name, coreOnly: Boolean(flags['core-only']), stage: flags.stage, hypothesesHash: flags.hypotheses, log: note });
+      const r = await build({ store, koios, bf: blockfrostFor(store, network), cli, manifestPath: args[0], network, identityName: name, coreOnly: Boolean(flags['core-only']), stage: flags.stage, hypothesesHash: flags.hypotheses, hypothesesDocument: flags['hypotheses-document'], log: note });
       say(`built ${r.report.kind}${r.report.stage ? `, stage ${r.report.stage}` : ''}${r.report.core_only ? ' (core-only)' : ''} record on ${network}: ${r.tx.hash}`);
       if (r.report.hypotheses_record) say(`  its document cites the hypotheses record ${r.report.hypotheses_record}, confirmed and signed by the same key`);
       say(`  record ${r.report.record_bytes} bytes in ${r.report.label_309_chunks} chunks; transaction ${r.tx.size} bytes; fee ${tada(r.tx.fee)} ADA; TTL slot ${r.report.ttl}`);
