@@ -173,6 +173,7 @@ export async function runPipeline(opts) {
       if (opts.capture) errors.push('no plan capture under EXPLAIN ANALYZE on mainnet');
       if (opts.hmacKey) errors.push('mainnet runs use the study key in secret/hmac.key');
       if (opts.standInTx) errors.push('a stand-in for h is for test networks only');
+      if (opts.fromBlock !== undefined && opts.fromBlock !== null) errors.push('--from-block is for test networks only: on mainnet the scan for the study key\'s records starts at genesis');
       if (errors.length) throw refuse(`refusing: ${errors.join('; ')}`);
     }
     if (finalRun && opts.snapshot && opts.snapshot !== 'rule') throw refuse('refusing: the snapshot of a run on the final freeze is fixed by rule (the last block of epoch N - 1); give no --snapshot');
@@ -192,7 +193,7 @@ export async function runPipeline(opts) {
         report.hypotheses = { tx: hyp.tx, block_no: hyp.block.block_no, time: hyp.block.time };
       }
     } else if (mainnet) {
-      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['hypothesesTx', '--hypotheses-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey']]) {
+      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey']]) {
         if (!opts[k]) throw refuse(`refusing a mainnet database without ${flag} (or --live-fire before the final freeze)`);
       }
       const errs = codeManifestErrors(readFileSync(opts.codeManifest, 'utf8'), codeAtStart.files);
@@ -218,6 +219,8 @@ export async function runPipeline(opts) {
     if (stored0.mode && stored0.mode !== mode) throw refuse(`refusing: run ${runId} was started in ${stored0.mode} mode`);
     if (!existing.rows.length) await client.query('INSERT INTO study.run (run_id, network) VALUES ($1, $2)', [runId, network]);
     await storeParam(client, runId, 'mode', mode);
+    // Set again when this invocation finishes the run.
+    await client.query(`DELETE FROM study.param WHERE run_id = $1 AND key = 'finished'`, [runId]);
     if (live) {
       ownsLiveRun = true;
       appendEntry(network, 'query', { name: 'live-fire gate', start_seq: gateStart.seq, outcome: 'succeeded', error: null, run_ms: Math.round(performance.now() - t0) });
@@ -251,18 +254,17 @@ export async function runPipeline(opts) {
       const given = opts.freezeTx || opts.standInTx;
       if (freeze && given && given.toLowerCase() !== freeze.tx) throw refuse(`refusing: run ${runId} was started with ${freeze.role} transaction ${freeze.tx}`);
       if (opts.freezeTx) {
-        // Digests given at run time that must be items of the final record
-        // and named in the pre-registration: the code manifest, so the
-        // path-by-path comparison is the frozen one; and, on mainnet, a
-        // prefix of the check log.
-        const requiredItems = [];
-        if (opts.codeManifest) requiredItems.push({ name: 'code_manifest', sha256: sha256hex(readFileSync(opts.codeManifest)) });
+        // The code manifest given at run time must be the one the
+        // pre-registration names, so the path-by-path comparison is the
+        // frozen one; on mainnet, the check-log prefix it names must be a
+        // prefix of the log.
+        const codeManifestSha256 = opts.codeManifest ? sha256hex(readFileSync(opts.codeManifest)) : null;
         const checkLogText = mainnet ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
-        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), requiredItems, checkLogText });
+        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx || null, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), codeManifestSha256, checkLogText, fromBlock: mainnet ? null : opts.fromBlock ?? null });
         report.freeze_checks = v.checks;
         if (!v.ok) throw refuse(`refusing the freeze transaction: ${v.checks.filter((c) => !c.ok).map((c) => `${c.name}${c.detail && typeof c.detail === 'string' ? ` (${c.detail})` : ''}`).join('; ')}`);
         const dk = await drawKey({ client, blocks, network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: opts.drawkey || null });
-        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, code_manifest_sha256: requiredItems.find((x) => x.name === 'code_manifest')?.sha256 || null, draw: dk, h: dk.nonce };
+        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, code_manifest_sha256: codeManifestSha256, scan: v.scan, draw: dk, h: dk.nonce };
         if (freeze && freeze.h !== fresh.h) throw refuse(`refusing: run ${runId} was started with another draw key`);
         freeze = fresh;
       } else if (!freeze) {
@@ -289,7 +291,7 @@ export async function runPipeline(opts) {
       let chosen;
       let rule = null;
       if (byRule) {
-        const rs = await ruleSnapshot({ client, blocks, n: freeze.draw.n, koios, tipBlockNo: Number(tip.block_no) });
+        const rs = await ruleSnapshot({ client, blocks, network, n: freeze.draw.n, koios, tipBlockNo: Number(tip.block_no) });
         b = rs.block;
         chosen = 'rule';
         rule = { ...rs.rule, confirmation: rs.confirmation };
@@ -464,6 +466,7 @@ export async function runPipeline(opts) {
     writeJson(join(dir, 'timings.json'), runner.timings);
     writeJson(join(dir, 'manifest.json'), manifest);
     writePrivate(join(dir, 'README.txt'), 'Private run directory of the research-corpus tool. Raw lists name stake addresses; only manifest.json is meant for publication.\n');
+    await storeParam(client, runId, 'finished', { at: new Date().toISOString() });
     result = { runId, dir, report, manifest, timings: runner.timings };
     return result;
   } catch (e) {
@@ -587,6 +590,13 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
 // stake addresses in each drawn sample of a run and returns the counts; it
 // writes nothing to the run directory, the manifest or the check log.
 export async function ownDrawn(client, runId, views) {
+  // Only a finished run that drew with the study's key: the study run of a
+  // final freeze, or on a test network a test run. Never a live-fire run
+  // (kept or not), never a run in progress.
+  const p = await loadParams(client, runId);
+  const study = p.mode === 'study' && p.freeze && p.freeze.role === 'final-freeze';
+  if (!(study || p.mode === 'test')) throw refuse(`refusing: run ${runId} is ${p.mode ? `a ${p.mode} run` : 'not recorded'}; own-drawn reads only the study run of a final freeze (or a test run on a test network)`);
+  if (!p.finished) throw refuse(`refusing: run ${runId} has not finished`);
   const owner = (await client.query('SELECT obj_description(to_regclass($1), $2) AS c', ['study.sample', 'pg_class'])).rows[0].c;
   if (owner !== mark(runId)) throw refuse(`refusing: study.sample does not belong to run ${runId}`);
   const rows = (

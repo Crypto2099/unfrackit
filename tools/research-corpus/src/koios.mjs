@@ -68,8 +68,14 @@ export class Koios {
     return { nonce: r ? r.nonce : null, read_at: new Date().toISOString() };
   }
 
-  async lastBlockOfEpoch(epochNo) {
-    const rows = await this.request('GET', `/blocks?epoch_no=eq.${Number(epochNo)}&order=block_height.desc&limit=1&select=hash,block_height,epoch_no,abs_slot`);
+  // The last block of an epoch before a slot (the snapshot by rule).
+  async snapshotBlock(epochNo, cutoffSlot) {
+    const rows = await this.request('GET', `/blocks?epoch_no=eq.${Number(epochNo)}&abs_slot=lt.${Number(cutoffSlot)}&order=block_height.desc&limit=1&select=hash,block_height,epoch_no,abs_slot`);
+    return rows[0] || null;
+  }
+
+  async firstBlockOfEpoch(epochNo) {
+    const rows = await this.request('GET', `/blocks?epoch_no=eq.${Number(epochNo)}&order=block_height.asc&limit=1&select=hash,block_height,epoch_no,abs_slot`);
     return rows[0] || null;
   }
 

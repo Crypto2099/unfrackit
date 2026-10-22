@@ -6,70 +6,74 @@
 // chunk array inside a single-label metadata map). The records follow
 // CIP-190 (CIPs@58b4dd1417, CIP-0190: "Record model", "Canonical CBOR",
 // "Metadata label 309 and the chunk-array transport", "Signed payload and
-// Sig_structure", "Signer-key identification", path 1).
+// Sig_structure", "Signer-key identification", path 1). The order of the
+// records is the chain's: the study key's first record is the hypotheses
+// record, the first later one with other signed content is the final.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadAll } from '../../src/sqlfile.mjs';
-import { verifyFinalFreeze, drawKey, drawEpoch, stabilityWindow, reassemble, parseRecord, verifySignatures, logPrefixDigests, drawkeyFileErrors, ruleSnapshot } from '../../src/freeze.mjs';
+import { verifyFinalFreeze, drawKey, drawEpoch, stabilityWindow, reassemble, parseRecord, verifySignatures, logPrefixDigests, drawkeyFileErrors, ruleSnapshot, hashTable } from '../../src/freeze.mjs';
 import { decode } from '../../src/cbor.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 
 const blocks = loadAll();
+const code = [{ path: 'src/a.mjs', sha256: sha('a') }, { path: 'sql/b.sql', sha256: sha('b') }];
+const MANIFEST = sha('the code manifest');
+const LOG = sha('');
 
+// The other items a final document lists, as the freeze tool writes them.
+const listing = ({ manifest = MANIFEST, log = LOG } = {}) => [...code.map((c) => ({ sha256: c.sha256, name: c.path.split('/').pop() })), { sha256: manifest, name: 'code-manifest.txt' }, { sha256: log, name: 'check-log.jsonl' }];
+const docText = (key, cite, listed, extra = '') => `final text\nkey ${key.pub.toString('hex')}\nhypotheses web+cardano://transaction/${cite}/metadata/309\n\n${listed.map((l) => `${l.sha256}  ${l.name}`).join('\n')}\n${extra}`;
+
+// H at block 1000 (epoch 10), F at block 2000 (epoch 11, early: N = 12).
+// over: before(ctx) adds records before H; between(ctx) between H and F;
+// listed(default) the document's list; items(docDigest, listed) the record's
+// items; body(items, key), signer(key), msg, chunk, citeTx, copyAfter, tip,
+// extra (document text after the list).
 async function scenario(over = {}) {
   const key = keypair();
   const dir = mkdtempSync(join(tmpdir(), 'rc-freeze-'));
+  const { db, add } = await chain();
   const hypDoc = Buffer.from(`hypotheses text\nkey ${key.pub.toString('hex')}\n`);
   const hypDigest = sha(hypDoc);
-  const code = [{ path: 'src/a.mjs', sha256: sha('a') }, { path: 'sql/b.sql', sha256: sha('b') }];
-  const { db, add } = await chain();
+  const ctx = { key, add, hypDigest };
+  if (over.before) await over.before(ctx);
   const hypTx = await add({ blockNo: 1000, slot: 50000, epoch: 10, epochSlot: 1000, body: metadataBytes(over.hypBody ? over.hypBody(key, hypDigest) : record([hypDigest], key)), msg: hypDigest });
-  const finalDoc = Buffer.from(`final text\nkey ${key.pub.toString('hex')}\nhypotheses web+cardano://transaction/${over.citeTx || hypTx}/metadata/309\n${over.docExtra || ''}`);
-  const finalDigest = sha(finalDoc);
-  const items = over.items ? over.items(finalDigest, code) : [finalDigest, ...code.map((c) => c.sha256)];
+  ctx.hypTx = hypTx;
+  const listed = over.listed ? over.listed(listing()) : listing();
+  const text = docText(key, over.citeTx || hypTx, listed, over.extra || '');
+  const finalDigest = sha(Buffer.from(text));
+  const items = over.items ? over.items(finalDigest, listed) : [finalDigest, ...listed.map((l) => l.sha256)];
   const signer = over.signer ? over.signer(key) : key;
   const body = over.body ? over.body(items, signer) : record(items, signer);
-  // A copy of the record (or of the 674 line) in a transaction before the
-  // final freeze: the record's body republished, as CIP-190 allows anyone to.
-  let copyTx = null;
-  if (over.copyBefore === 'body') copyTx = await add({ blockNo: 1500, slot: 75000, epoch: 11, epochSlot: 1000, body: metadataBytes(body, 50) });
-  if (over.copyBefore === 'full') copyTx = await add({ blockNo: 1500, slot: 75000, epoch: 11, epochSlot: 1000, body: metadataBytes(body, 50), msg: finalDigest });
-  if (over.copyBefore === 'msg') copyTx = await add({ blockNo: 1500, slot: 75000, epoch: 11, epochSlot: 1000, msg: ['see', finalDigest] });
-  // A second final record by the key holder, for a byte-different document.
-  if (over.secondFinal) {
-    const otherDigest = sha(Buffer.concat([finalDoc, Buffer.from('\n')]));
-    copyTx = await add({ blockNo: 1500, slot: 75000, epoch: 11, epochSlot: 1000, body: metadataBytes(record([otherDigest, ...code.map((c) => c.sha256)], key)), msg: otherDigest });
-  }
-  // A replay of the hypotheses record, a retype of it, and copies of both
-  // records with a stranger's co-signature added, between the two.
-  if (over.hypCopies) {
-    await add({ blockNo: 1200, slot: 60000, epoch: 10, epochSlot: 9000, body: metadataBytes(record([hypDigest], key)) });
-    await add({ blockNo: 1300, slot: 65000, epoch: 10, epochSlot: 9500, body: metadataBytes(record([hypDigest], key, { supersedes: hypTx })) });
-    await add({ blockNo: 1350, slot: 66000, epoch: 10, epochSlot: 9600, body: metadataBytes(record([hypDigest], key, { cosigners: [keypair()] })) });
-    await add({ blockNo: 1400, slot: 70000, epoch: 10, epochSlot: 9700, body: metadataBytes(record(items, signer, { cosigners: [keypair()] })) });
-  }
-  const freezeTx = await add({ blockNo: 2000, slot: 100000, epoch: 11, epochSlot: 5000, body: metadataBytes(body, over.chunk || 64), msg: over.msg || finalDigest });
-  if (over.copyAfter) await add({ blockNo: 2500, slot: 120000, epoch: 11, epochSlot: 9000, body: metadataBytes(body), msg: finalDigest });
-  writeFileSync(join(dir, 'final.md'), finalDoc);
+  Object.assign(ctx, { finalDigest, items, body, listed });
+  if (over.between) ctx.between = await over.between(ctx);
+  const freezeTx = await add({ blockNo: 2000, slot: 4800000, epoch: 11, epochSlot: 5000, body: metadataBytes(body, over.chunk || 64), msg: over.msg || finalDigest });
+  if (over.copyAfter) await add({ blockNo: 2500, slot: 4820000, epoch: 11, epochSlot: 25000, body: metadataBytes(body), msg: finalDigest });
+  writeFileSync(join(dir, 'final.md'), text);
   writeFileSync(join(dir, 'hyp.md'), hypDoc);
   const args = { client: db, blocks, freezeTx, hypothesesTx: hypTx, preregPath: join(dir, 'final.md'), studyKey: key.pub.toString('hex'), codeDigests: code, tipBlockNo: over.tip || 5000 };
-  return { db, dir, key, hypTx, freezeTx, copyTx, finalDigest, items, args, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { db, dir, key, hypTx, freezeTx, ctx, finalDigest, items, args, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const failed = (v) => v.checks.filter((c) => !c.ok).map((c) => c.name);
+const detail = (v, name) => v.checks.find((c) => c.name === name).detail;
 
-test('a final freeze record passes every check', async () => {
+test('a final freeze record passes every check, with the transactions named or found on chain', async () => {
   const s = await scenario();
   try {
     const v = await verifyFinalFreeze(s.args);
     assert.deepEqual(failed(v), []);
-    assert.equal(v.ok, true);
     assert.equal(v.freeze.tx, s.freezeTx);
     assert.equal(v.hypotheses.tx, s.hypTx);
+    const found = await verifyFinalFreeze({ ...s.args, freezeTx: null, hypothesesTx: null });
+    assert.deepEqual(failed(found), []);
+    assert.equal(found.freeze.tx, s.freezeTx);
+    assert.deepEqual(hashTable(readFileSync(s.args.preregPath, 'utf8')).map((t) => t.name), ['a.mjs', 'b.sql', 'code-manifest.txt', 'check-log.jsonl']);
   } finally {
     s.cleanup();
   }
@@ -79,29 +83,33 @@ test('the hypotheses record is refused as the final one, with either document', 
   const s = await scenario();
   try {
     const v1 = await verifyFinalFreeze({ ...s.args, freezeTx: s.hypTx });
-    assert.equal(v1.ok, false);
-    for (const n of ['label_674_is_document_digest', 'document_is_an_item', 'hypotheses_tx_differs', 'code_files_are_items']) assert.ok(failed(v1).includes(n), n);
+    assert.ok(failed(v1).includes('freeze_tx_is_the_chains'));
     const v2 = await verifyFinalFreeze({ ...s.args, freezeTx: s.hypTx, preregPath: join(s.dir, 'hyp.md') });
-    assert.equal(v2.ok, false);
-    assert.ok(failed(v2).includes('document_cites_one_study_record'));
+    for (const n of ['final_tx_carries_the_document', 'freeze_tx_is_the_chains', 'document_cites_hypotheses_record', 'hypotheses_document_differs']) assert.ok(failed(v2).includes(n), n);
   } finally {
     s.cleanup();
   }
 });
 
-test('refusals: another signer, a body changed after signing, missing code digests, a shallow block, a non-canonical record, an oversized chunk', async () => {
+test('refusals: another signer, a body changed after signing, a non-canonical record, an oversized chunk, a superseding record, missing code, a shallow block, another 674 line or citation, the list of items', async () => {
   const cases = [
-    [{ signer: () => keypair() }, 'signed_by_study_key'],
-    [{ body: (items, key) => record(items, key, { tamper: true }) }, 'signed_by_study_key'],
-    [{ items: (d, code) => [d, code[0].sha256] }, 'code_files_are_items'],
+    [{ signer: () => keypair() }, 'final_record_on_chain'],
+    [{ body: (items, key) => record(items, key, { tamper: true }) }, 'final_record_on_chain'],
+    [{ body: (items, key) => record(items, key, { unsorted: true }) }, 'final_record_on_chain'],
+    [{ chunk: 65 }, 'final_record_on_chain'],
+    [{ body: (items, key) => record(items, key, { supersedes: 'ef'.repeat(32) }) }, 'final_record_on_chain'],
+    [{ items: (d, listed) => [d, ...listed.filter((l) => l.name !== 'b.sql').map((l) => l.sha256)] }, 'code_files_are_items'],
+    [{ items: (d, listed) => [d, ...listed.filter((l) => l.name !== 'b.sql').map((l) => l.sha256)] }, 'document_lists_every_other_item'],
     [{ tip: 2100 }, 'freeze_block_depth'],
-    [{ body: (items, key) => record(items, key, { unsorted: true }) }, 'label_309_record'],
-    [{ chunk: 65 }, 'label_309_record'],
-    [{ msg: 'ab'.repeat(32) }, 'label_674_is_document_digest'],
-    [{ citeTx: 'cd'.repeat(32) }, 'document_cites_one_study_record'],
-    [{ body: (items, key) => record(items, key, { supersedes: 'ef'.repeat(32) }) }, 'record_has_no_supersedes'],
-    [{ copyBefore: 'full' }, 'first_carrier_of_the_record'],
-    [{ secondFinal: true }, 'no_other_study_record']
+    [{ msg: 'ab'.repeat(32) }, 'final_tx_carries_the_document'],
+    [{ citeTx: 'cd'.repeat(32) }, 'document_cites_hypotheses_record'],
+    // An item the document does not list, and a listed line that is no item.
+    [{ items: (d, listed) => [d, ...listed.map((l) => l.sha256), sha('unlisted')] }, 'document_lists_every_other_item'],
+    [{ listed: (l) => [...l, { sha256: sha('not an item'), name: 'extra.txt' }], items: (d, listed) => [d, ...listed.filter((x) => x.name !== 'extra.txt').map((x) => x.sha256)] }, 'document_lists_every_other_item'],
+    // Two code manifests, or none; no check-log prefix.
+    [{ listed: (l) => [...l, { sha256: sha('another manifest'), name: 'code-manifest.txt' }] }, 'document_names_one_code_manifest'],
+    [{ listed: (l) => l.filter((x) => x.name !== 'code-manifest.txt') }, 'document_names_one_code_manifest'],
+    [{ listed: (l) => l.filter((x) => x.name !== 'check-log.jsonl') }, 'document_names_one_check_log']
   ];
   for (const [over, name] of cases) {
     const s = await scenario(over);
@@ -112,6 +120,167 @@ test('refusals: another signer, a body changed after signing, missing code diges
     } finally {
       s.cleanup();
     }
+  }
+});
+
+test('copies neither block the final nor stand in for it: replays, retypes, co-signed copies, copies without the 674 line, strangers\' 674 lines', async () => {
+  const betweens = [
+    // The final record's body without its 674 line, and a stranger's line
+    // naming the document's digest.
+    async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(c.body, 50) }),
+    async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, msg: ['see', c.finalDigest] }),
+    // A replay of the hypotheses record, a retype of it, both records
+    // co-signed by a stranger (the final's without its 674 line).
+    async (c) => {
+      await c.add({ blockNo: 1200, slot: 60000, epoch: 10, epochSlot: 9000, body: metadataBytes(record([c.hypDigest], c.key)) });
+      await c.add({ blockNo: 1300, slot: 65000, epoch: 10, epochSlot: 9500, body: metadataBytes(record([c.hypDigest], c.key, { supersedes: c.hypTx })) });
+      await c.add({ blockNo: 1350, slot: 66000, epoch: 10, epochSlot: 9600, body: metadataBytes(record([c.hypDigest], c.key, { cosigners: [keypair()] })) });
+      await c.add({ blockNo: 1400, slot: 70000, epoch: 10, epochSlot: 9700, body: metadataBytes(record(c.items, c.key, { cosigners: [keypair()] })) });
+    }
+  ];
+  for (const between of betweens) {
+    const s = await scenario({ between });
+    try {
+      assert.deepEqual(failed(await verifyFinalFreeze(s.args)), []);
+    } finally {
+      s.cleanup();
+    }
+  }
+  const later = await scenario({ copyAfter: true });
+  try {
+    assert.deepEqual(failed(await verifyFinalFreeze(later.args)), []);
+  } finally {
+    later.cleanup();
+  }
+  // A complete copy (the signed content with exactly the document's 674
+  // line) that lands first is the final freeze, and the later one is refused,
+  // naming it.
+  const s = await scenario({ between: async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(c.body, 50), msg: c.finalDigest }) });
+  try {
+    const v = await verifyFinalFreeze(s.args);
+    assert.deepEqual(failed(v), ['freeze_tx_is_the_chains']);
+    assert.match(detail(v, 'freeze_tx_is_the_chains'), new RegExp(s.ctx.between));
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, freezeTx: s.ctx.between })), []);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('the chain decides the order: a second final, a second hypotheses record, a replayed one, a stray record of the key', async () => {
+  // The key holder's other final before this one: it is the chain's final.
+  const other = await scenario({
+    between: async (c) => {
+      const d = sha('another document');
+      return c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(record([d, ...c.items.slice(1)], c.key)), msg: d });
+    }
+  });
+  try {
+    const v = await verifyFinalFreeze(other.args);
+    assert.ok(failed(v).includes('final_tx_carries_the_document') && failed(v).includes('freeze_tx_is_the_chains'), failed(v).join());
+  } finally {
+    other.cleanup();
+  }
+  // A body the key signed (a draft, a record never landed) republished
+  // between H and F, with no 674 line: it is the chain's final record, and
+  // nothing passes.
+  const stray = await scenario({ between: async (c) => c.add({ blockNo: 1500, slot: 4790000, epoch: 11, epochSlot: 1000, body: metadataBytes(record([sha('a draft the key signed')], c.key)) }) });
+  try {
+    assert.ok(failed(await verifyFinalFreeze(stray.args)).includes('final_tx_carries_the_document'));
+    assert.equal((await verifyFinalFreeze({ ...stray.args, freezeTx: null })).ok, false);
+  } finally {
+    stray.cleanup();
+  }
+  // After a passing final F1 (citing Ha), a second hypotheses record Hb, or a
+  // replay of Ha, and a final F2 citing it: F2 is never the chain's final.
+  for (const replay of [false, true]) {
+    const s = await scenario();
+    try {
+      const hb = replay ? metadataBytes(record([s.ctx.hypDigest], s.key)) : metadataBytes(record([sha('hypotheses, again')], s.key));
+      const Hb = await s.ctx.add({ blockNo: 3000, slot: 4900000, epoch: 11, epochSlot: 105000, body: hb, msg: replay ? s.ctx.hypDigest : sha('hypotheses, again') });
+      const text2 = docText(s.key, Hb, listing());
+      const d2 = sha(Buffer.from(text2));
+      const F2 = await s.ctx.add({ blockNo: 4000, slot: 5300000, epoch: 12, epochSlot: 300000, body: metadataBytes(record([d2, ...listing().map((l) => l.sha256)], s.key)), msg: d2 });
+      writeFileSync(join(s.dir, 'final2.md'), text2);
+      assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, tipBlockNo: 9000 })), [], 'F1 stays the final');
+      const v2 = await verifyFinalFreeze({ ...s.args, tipBlockNo: 9000, freezeTx: F2, hypothesesTx: Hb, preregPath: join(s.dir, 'final2.md') });
+      for (const n of ['hypotheses_tx_is_the_chains', 'final_tx_carries_the_document', 'freeze_tx_is_the_chains', 'document_cites_hypotheses_record']) assert.ok(failed(v2).includes(n), `${replay ? 'replay' : 'second record'}: ${n}`);
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
+test('one record carrying two document digests yields no final: each document must list the other items', async () => {
+  // D1 and D2 list the code and the run-time items; the record carries both
+  // digests, published once with each 674 line.
+  const s = await scenario({ items: (d, listed) => [d, sha('the second document'), ...listed.map((l) => l.sha256)] });
+  try {
+    const v = await verifyFinalFreeze(s.args);
+    assert.ok(failed(v).includes('document_lists_every_other_item'), failed(v).join());
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('--from-block starts the scan after earlier records of the key (test networks)', async () => {
+  const s = await scenario({ before: async (c) => c.add({ blockNo: 500, slot: 20000, epoch: 9, epochSlot: 20000, body: metadataBytes(record([sha('an earlier rehearsal')], c.key)), msg: sha('an earlier rehearsal') }) });
+  try {
+    assert.ok(failed(await verifyFinalFreeze(s.args)).includes('hypotheses_tx_is_the_chains'));
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, fromBlock: 1000 })), []);
+    assert.equal((await verifyFinalFreeze({ ...s.args, fromBlock: 1001 })).ok, false);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('the code manifest and the check-log prefix are the ones the document names; nothing earlier follows the prefix; live-fire follows the hypotheses', async () => {
+  const lines = [JSON.stringify({ seq: 1, type: 'health', date: '2001-01-01T00:00:00Z' }), JSON.stringify({ seq: 2, type: 'live-fire-start', date: '2999-01-01T00:00:00Z' })];
+  const frozenText = lines.join('\n') + '\n';
+  const laterText = frozenText + JSON.stringify({ seq: 3, type: 'query-start', date: '2999-01-02T00:00:00Z' }) + '\n';
+  const earlyTail = frozenText + JSON.stringify({ seq: 3, type: 'live-fire-start', date: '2001-02-01T00:00:00Z' }) + '\n';
+  const frozenDigest = logPrefixDigests(frozenText).at(-1);
+  const s = await scenario({ listed: () => listing({ log: frozenDigest }) });
+  try {
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, codeManifestSha256: MANIFEST, checkLogText: laterText })), []);
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, codeManifestSha256: sha('another manifest') })), ['code_manifest_is_the_named_one']);
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, checkLogText: earlyTail })), ['check_log_tail_after_freeze']);
+    const other = JSON.stringify({ seq: 1, type: 'live-fire-start', date: '2001-01-01T00:00:00Z' }) + '\n';
+    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, checkLogText: other })), ['check_log_frozen', 'check_log_tail_after_freeze', 'live_fire_after_hypotheses']);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('the snapshot by rule: the last block of epoch N - 1 before its cutoff, with the first block of N deep enough in the database and in Koios', async () => {
+  const { db, block } = await chain();
+  const E = 432000;
+  // Epoch 9: cutoff 259,200 slots in (4k/f = 172,800 on preprod).
+  await block({ blockNo: 100, slot: 9 * E + 10, epoch: 9, epochSlot: 10 });
+  const snap = await block({ blockNo: 200, slot: 9 * E + 259199, epoch: 9, epochSlot: 259199 });
+  await block({ blockNo: 201, slot: 9 * E + 259200, epoch: 9, epochSlot: 259200 });
+  await block({ blockNo: 300, slot: 9 * E + 431999, epoch: 9, epochSlot: 431999 });
+  const first = await block({ blockNo: 301, slot: 10 * E + 5, epoch: 10, epochSlot: 5 });
+  const koios = (hash, tip, firstHeight = 301) => ({ snapshotBlock: async (e, cutoff) => (e === 9 && cutoff === 9 * E + 259200 ? { hash, block_height: 200 } : null), firstBlockOfEpoch: async () => ({ hash: first.hash, block_height: firstHeight }), tip: async () => ({ block_no: tip }) });
+  const rs = await ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios(snap.hash, 3000), tipBlockNo: 2461 });
+  assert.equal(rs.block.hash, snap.hash, 'the last block before the cutoff, not the last of the epoch');
+  assert.equal(rs.rule.cutoff_slot, 9 * E + 259200);
+  assert.equal(rs.confirmation.db_depth, 2160);
+  // Depth counts from the first block of epoch N.
+  await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios(snap.hash, 3000), tipBlockNo: 2460 }), /first block of epoch 10 is 2159 blocks below the database tip/);
+  await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios('00'.repeat(32), 3000), tipBlockNo: 2461 }), /Koios names another/);
+  await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: koios(snap.hash, 2460), tipBlockNo: 2461 }), /Koios's tip/);
+  await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 11, koios: koios(snap.hash, 3000), tipBlockNo: 2461 }), /does not yet hold epoch 11/);
+});
+
+test('the hypotheses URI is matched whole', async () => {
+  const s = await scenario();
+  try {
+    writeFileSync(s.args.preregPath, readFileSync(s.args.preregPath, 'utf8').replace('/metadata/309', '/metadata/3090'));
+    // The document changed, so it is no longer the record's: refused on the
+    // citation among the rest.
+    assert.ok(failed(await verifyFinalFreeze(s.args)).includes('document_cites_hypotheses_record'));
+  } finally {
+    s.cleanup();
   }
 });
 
@@ -170,102 +339,6 @@ test('the draw key: the database nonce of epoch N, cross-checked with Koios; ref
   }
 });
 
-test('only records signed by the study key count: bare copies, replays, retypes and strangers\' 674 lines neither block the final nor stand in for it', async () => {
-  for (const over of [{ copyAfter: true }, { copyBefore: 'body' }, { copyBefore: 'msg' }, { hypCopies: true }]) {
-    const s = await scenario(over);
-    try {
-      assert.deepEqual(failed(await verifyFinalFreeze(s.args)), [], JSON.stringify(over));
-    } finally {
-      s.cleanup();
-    }
-  }
-  // A complete copy (body and 674 line) before the final is the first carrier:
-  // it passes, and the later transaction is refused.
-  const s = await scenario({ copyBefore: 'full' });
-  try {
-    const v = await verifyFinalFreeze(s.args);
-    assert.match(v.checks.find((c) => c.name === 'first_carrier_of_the_record').detail, new RegExp(s.copyTx));
-    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, freezeTx: s.copyTx })), []);
-  } finally {
-    s.cleanup();
-  }
-  // A second final for a byte-different document refuses the later one, and
-  // the earlier one too: either could key the draw.
-  const t = await scenario({ secondFinal: true });
-  try {
-    assert.match(failed(await verifyFinalFreeze(t.args)).join(), /no_other_study_record/);
-  } finally {
-    t.cleanup();
-  }
-});
-
-test('the document cites exactly one record signed by the study key', async () => {
-  const s = await scenario({ hypCopies: true });
-  try {
-    // Cite the hypotheses record and its replay: two study-signed records.
-    const { readFileSync } = await import('node:fs');
-    const rows = (await s.db.query(`SELECT encode(t.hash, 'hex') AS h FROM public.tx t JOIN public.block b ON b.id = t.block_id WHERE b.block_no = 1200`)).rows;
-    writeFileSync(s.args.preregPath, readFileSync(s.args.preregPath, 'utf8') + `also web+cardano://transaction/${rows[0].h}/metadata/309\n`);
-    assert.ok(failed(await verifyFinalFreeze(s.args)).includes('document_cites_one_study_record'));
-  } finally {
-    s.cleanup();
-  }
-});
-
-test('run-time digests must be items named in the document; one frozen prefix of the check log, nothing earlier after it; live-fire follows the hypotheses', async () => {
-  const lines = [JSON.stringify({ seq: 1, type: 'health', date: '2001-01-01T00:00:00Z' }), JSON.stringify({ seq: 2, type: 'live-fire-start', date: '2999-01-01T00:00:00Z' })];
-  const frozenText = lines.join('\n') + '\n';
-  const laterText = frozenText + JSON.stringify({ seq: 3, type: 'query-start', date: '2999-01-02T00:00:00Z' }) + '\n';
-  const earlyTail = frozenText + JSON.stringify({ seq: 3, type: 'live-fire-start', date: '2001-02-01T00:00:00Z' }) + '\n';
-  const frozenDigest = logPrefixDigests(frozenText).at(-1);
-  const extra = 'e1'.repeat(32);
-  const docExtra = `${extra}  code-manifest.txt\n${frozenDigest}  check-log.jsonl\n`;
-  const s = await scenario({ docExtra, items: (d, code) => [d, ...code.map((c) => c.sha256), extra, frozenDigest] });
-  try {
-    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, requiredItems: [{ name: 'code_manifest', sha256: extra }], checkLogText: laterText })), []);
-    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, requiredItems: [{ name: 'code_manifest', sha256: 'e2'.repeat(32) }] })), ['code_manifest_is_an_item', 'code_manifest_named_in_document']);
-    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, checkLogText: earlyTail })), ['check_log_tail_after_freeze']);
-    const other = JSON.stringify({ seq: 1, type: 'live-fire-start', date: '2001-01-01T00:00:00Z' }) + '\n';
-    assert.deepEqual(failed(await verifyFinalFreeze({ ...s.args, checkLogText: other })), ['check_log_frozen', 'check_log_tail_after_freeze', 'live_fire_after_hypotheses']);
-  } finally {
-    s.cleanup();
-  }
-  // An item the document does not name.
-  const u = await scenario({ items: (d, code) => [d, ...code.map((c) => c.sha256), extra] });
-  try {
-    assert.deepEqual(failed(await verifyFinalFreeze({ ...u.args, requiredItems: [{ name: 'code_manifest', sha256: extra }] })), ['code_manifest_named_in_document']);
-  } finally {
-    u.cleanup();
-  }
-});
-
-test('the snapshot by rule: the last block of epoch N - 1, deep enough in the database and in Koios', async () => {
-  const { db, block } = await chain();
-  await block({ blockNo: 100, slot: 1000, epoch: 9, epochSlot: 10 });
-  const last = await block({ blockNo: 200, slot: 2000, epoch: 9, epochSlot: 900 });
-  await block({ blockNo: 201, slot: 2100, epoch: 10, epochSlot: 0 });
-  const koios = (hash, tip) => ({ lastBlockOfEpoch: async () => ({ hash, block_height: 200 }), tip: async () => ({ block_no: tip }) });
-  const rs = await ruleSnapshot({ client: db, blocks, n: 10, koios: koios(last.hash, 3000), tipBlockNo: 2500 });
-  assert.equal(rs.block.hash, last.hash);
-  assert.equal(rs.confirmation.db_depth, 2300);
-  await assert.rejects(ruleSnapshot({ client: db, blocks, n: 10, koios: koios(last.hash, 3000), tipBlockNo: 2000 }), /2160 deep/);
-  await assert.rejects(ruleSnapshot({ client: db, blocks, n: 10, koios: koios('00'.repeat(32), 3000), tipBlockNo: 2500 }), /Koios names another/);
-  await assert.rejects(ruleSnapshot({ client: db, blocks, n: 10, koios: koios(last.hash, 2300), tipBlockNo: 2500 }), /Koios's tip/);
-  await assert.rejects(ruleSnapshot({ client: db, blocks, n: 11, koios: koios(last.hash, 3000), tipBlockNo: 2500 }), /does not yet hold epoch 11/);
-});
-
-test('the hypotheses URI is matched whole', async () => {
-  const s = await scenario({ citeTx: null });
-  try {
-    const fake = s.args.preregPath;
-    const { readFileSync, writeFileSync } = await import('node:fs');
-    writeFileSync(fake, readFileSync(fake, 'utf8').replace('/metadata/309', '/metadata/3090'));
-    const v = await verifyFinalFreeze(s.args);
-    assert.ok(failed(v).includes('document_cites_one_study_record'));
-  } finally {
-    s.cleanup();
-  }
-});
 
 test("the freeze tool's drawkey.json must agree on the network, the epoch and both readings", () => {
   const nonce = 'ab'.repeat(32);

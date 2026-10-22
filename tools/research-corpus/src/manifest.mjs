@@ -73,7 +73,9 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     strata_fungible_floor: report.ft_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.ft_floor ? r.n_holders : null, below_floor: !r.named && r.n_holders < run.settings.ft_floor })),
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
-    check_6_1: report.check_61,
+    // The case-wallet counts stay in report.json: case wallets can be drawn,
+    // so with the number named they would say how many were.
+    check_6_1: (({ n_case_wallets, n_case_disagree, ...rest }) => rest)(report.check_61 || {}),
     code_version: report.code_version,
     samples: list
   };

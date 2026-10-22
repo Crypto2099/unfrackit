@@ -18,7 +18,7 @@ import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { FIXED } from './params.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, ruleSnapshot } from './freeze.mjs';
 import { codeManifestErrors, NODE_MAJOR } from './guards.mjs';
-import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath, redactCommand } from './checklog.mjs';
+import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath, redactCommand, closeStart } from './checklog.mjs';
 import { sha256hex } from './freeze.mjs';
 import { Koios } from './koios.mjs';
 import { captureStrata } from './strata-capture.mjs';
@@ -32,7 +32,8 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
                                   epoch N - 1, confirmed 2,160 blocks deep); otherwise the tip by default (stop
                                   db-sync there first), the rule with --stand-in-tx, or a given block
       --freeze-tx <tx hash>       the final freeze transaction; h is the epoch nonce its block's epoch rule names
-      --hypotheses-tx <tx hash>   the hypotheses freeze transaction the final pre-registration cites
+      --hypotheses-tx <tx hash>   optional: the hypotheses freeze transaction, which must be the chain's
+      --from-block <height>       test networks: start the scan for the study key's records at this block
       --prereg <file>             the final pre-registration, as frozen
       --study-key <hex>           the freeze identity's signing public key (32 bytes)
       --code-manifest <file>      the \`npm run hash\` output frozen with the final freeze (mainnet)
@@ -55,10 +56,13 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --work-mem <size>           session work memory (default 1GB); also --maintenance-work-mem
       --parallel-workers <n>      parallel workers per query and per index build (default 4)
       --temp-tablespaces <names>  temporary tablespaces with room for twice the study tables
-  verify-freeze --freeze-tx --hypotheses-tx --prereg --study-key
-                                  check the final freeze record and print the draw key once its epoch has started
+  verify-freeze --prereg --study-key [--freeze-tx] [--hypotheses-tx] [--from-block]
+                                  find the hypotheses record and the final freeze on chain, check the final
+                                  record, and print the draw key and the rule's snapshot once each is known
   cleanup --run-id <id>           drop a live-fire run's study tables and work directory, or an a1 live-fire
                                   run's work directory; logged in the check log
+  cleanup --start-seq <n> --network <n>
+                                  close the start entry a killed command left, by its sequence number
   own-drawn --list <file> --run <id>
                                   print, privately, how many listed stake addresses fell in each drawn sample of
                                   a run; writes nothing to the run directory, the manifest or the check log
@@ -120,7 +124,7 @@ const lower = (x) => (x ? x.toLowerCase() : x);
 // before the final freeze, or after it with the final freeze checked.
 async function a1Gate(c, blocks, meta, a) {
   if (meta.network !== 'mainnet' || a.liveFire) return;
-  if (!a.freezeTx || !a.hypothesesTx || !a.prereg || !a.studyKey || !a.codeManifest) throw new Error('refusing: on mainnet a1 needs --live-fire --purpose, or --freeze-tx, --hypotheses-tx, --prereg, --study-key and --code-manifest');
+  if (!a.freezeTx || !a.prereg || !a.studyKey || !a.codeManifest) throw new Error('refusing: on mainnet a1 needs --live-fire --purpose, or --freeze-tx, --prereg, --study-key and --code-manifest');
   const errs = codeManifestErrors(readFileSync(a.codeManifest, 'utf8'), hashList());
   if (errs.length) throw new Error(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
   const tip = (await q(c, blocks, 'tip_block'))[0];
@@ -128,12 +132,13 @@ async function a1Gate(c, blocks, meta, a) {
   if (!v.ok) throw new Error(`refusing the freeze transaction: ${v.checks.filter((x) => !x.ok).map((x) => x.name).join(', ')}`);
 }
 
-// The run-time digests the final record must carry, and the check log.
+// The run's code manifest, the check log, and on a test network the block the
+// scan for the study key's records starts at.
 function finalChecks(a, network) {
-  const requiredItems = [];
-  if (a.codeManifest) requiredItems.push({ name: 'code_manifest', sha256: sha256hex(readFileSync(a.codeManifest)) });
+  const codeManifestSha256 = a.codeManifest ? sha256hex(readFileSync(a.codeManifest)) : null;
   const checkLogText = network === 'mainnet' ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
-  return { requiredItems, checkLogText };
+  if (network === 'mainnet' && a.fromBlock !== undefined) throw refuse('refusing: --from-block is for test networks only');
+  return { codeManifestSha256, checkLogText, fromBlock: a.fromBlock !== undefined ? Number(a.fromBlock) : null };
 }
 
 const codeFacts = () => (({ git_commit, git_dirty, node }) => ({ git_commit, git_dirty, node }))(codeVersion());
@@ -157,6 +162,7 @@ async function main() {
         snapshot: a.snapshot,
         freezeTx: lower(a.freezeTx),
         hypothesesTx: lower(a.hypothesesTx),
+        fromBlock: a.fromBlock !== undefined ? Number(a.fromBlock) : undefined,
         prereg: a.prereg,
         studyKey: lower(a.studyKey),
         codeManifest: a.codeManifest,
@@ -199,7 +205,7 @@ async function main() {
               draw = await drawKey({ client: c, blocks, network: meta.network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: a.drawkey || null });
               // The snapshot the rule fixes, once it is deep enough to run.
               try {
-                const rs = await ruleSnapshot({ client: c, blocks, n: draw.n, koios, tipBlockNo: Number(tip.block_no) });
+                const rs = await ruleSnapshot({ client: c, blocks, network: meta.network, n: draw.n, koios, tipBlockNo: Number(tip.block_no) });
                 snapshot = { block_no: Number(rs.block.block_no), hash: rs.block.hash, time: rs.block.time, rule: rs.rule, confirmation: rs.confirmation };
               } catch (e) {
                 snapshot = { error: e.message };
@@ -217,6 +223,12 @@ async function main() {
       return;
     }
     case 'cleanup': {
+      if (a.startSeq !== undefined) {
+        // A killed command's start entry, closed by its sequence number.
+        if (!a.network) throw new Error('cleanup --start-seq needs --network');
+        console.log(JSON.stringify(closeStart(a.network, Number(a.startSeq), command), null, 2));
+        return;
+      }
       if (!a.runId) throw new Error('--run-id is required');
       console.log(JSON.stringify(await cleanupRun({ db: dbOpts(a), runId: a.runId, command }), null, 2));
       return;
@@ -276,31 +288,39 @@ async function main() {
           const snap = p.value;
           const r = (await q(c, blocks, 'confirm_snapshot', { snap_hash: { type: 'bytea', value: snap.hash } }))[0];
           const depth = r.snap_block_no === null ? null : Number(r.tip_block_no) - Number(r.snap_block_no);
-          // A snapshot by rule must still be the last block of its epoch, and
-          // Koios must name the same block at least security_k deep.
-          let ruleHolds = null;
-          let koiosReading = null;
+          const k = new Koios(meta.network);
+          let result;
           if (snap.rule) {
-            const last = (await q(c, blocks, 'last_block_of_epoch', { epoch_no: { type: 'int', value: snap.rule.epoch } }))[0];
-            ruleHolds = !!last && last.hash === snap.hash;
+            // A snapshot by rule: the rule applied again, in the database and
+            // in Koios, must give the same block, with the first block of
+            // epoch N deep enough in both.
+            let rs = null;
+            let err = null;
+            try {
+              rs = await ruleSnapshot({ client: c, blocks, network: meta.network, n: snap.rule.n, koios: k, tipBlockNo: Number(r.tip_block_no) });
+            } catch (e) {
+              err = e.message;
+            }
+            const ruleHolds = rs ? rs.block.hash === snap.hash : /Koios names another|no block before its cutoff/.test(err || '') ? false : null;
+            result = { run_id: a.runId, snapshot: snap, on_chain: r.snap_block_no !== null, rule_holds: ruleHolds, confirmation: rs ? rs.confirmation : null, error: err, required: FIXED.security_k, confirmed: r.snap_block_no !== null && ruleHolds === true, checked_at: new Date().toISOString() };
+          } else {
+            let koiosReading;
+            try {
+              const kt = await k.tip();
+              koiosReading = { tip_block_no: kt.block_no, depth: kt.block_no - snap.block_no, read_at: new Date().toISOString() };
+            } catch (e) {
+              koiosReading = { error: e.message };
+            }
+            const koiosOk = !koiosReading.error && koiosReading.depth >= FIXED.security_k;
+            result = { run_id: a.runId, snapshot: snap, on_chain: r.snap_block_no !== null, depth, koios: koiosReading, required: FIXED.security_k, confirmed: r.snap_block_no !== null && depth >= FIXED.security_k && koiosOk, checked_at: new Date().toISOString() };
           }
-          try {
-            const k = new Koios(meta.network);
-            const kb = snap.rule ? await k.lastBlockOfEpoch(snap.rule.epoch) : null;
-            const kt = await k.tip();
-            koiosReading = { tip_block_no: kt.block_no, last_block_of_epoch: kb ? { hash: kb.hash, block_height: kb.block_height } : null, depth: kt.block_no - snap.block_no, read_at: new Date().toISOString() };
-          } catch (e) {
-            koiosReading = { error: e.message };
-          }
-          const koiosOk = !!koiosReading && !koiosReading.error && koiosReading.depth >= FIXED.security_k && (!snap.rule || (koiosReading.last_block_of_epoch && koiosReading.last_block_of_epoch.hash === snap.hash));
-          const result = { run_id: a.runId, snapshot: snap, on_chain: r.snap_block_no !== null, depth, required: FIXED.security_k, rule_holds: ruleHolds, koios: koiosReading, confirmed: r.snap_block_no !== null && depth >= FIXED.security_k && ruleHolds !== false && koiosOk, checked_at: new Date().toISOString() };
           await c.query(
             "INSERT INTO study.param (run_id, key, value) VALUES ($1, 'confirm_snapshot', $2::jsonb) ON CONFLICT (run_id, key) DO UPDATE SET value = EXCLUDED.value",
             [a.runId, JSON.stringify(result)]
           );
           writeJson(join(runDir(meta.network, a.runId), 'confirm-snapshot.json'), result);
           console.log(JSON.stringify(result, null, 2));
-          if (!result.on_chain || ruleHolds === false) process.exitCode = 2;
+          if (!result.on_chain || result.rule_holds === false) process.exitCode = 2;
           else if (!result.confirmed) process.exitCode = 3;
         });
       } finally {

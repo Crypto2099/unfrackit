@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery, redactCommand } from '../../src/checklog.mjs';
+import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery, redactCommand, closeStart } from '../../src/checklog.mjs';
 import { stripPlan } from '../../src/db.mjs';
 
 test('append, chain, tamper detection, kept outputs', () => {
@@ -58,6 +58,7 @@ test('sanitize replaces counts, addresses and hashes; a refusal keeps its own nu
   assert.equal(sanitize(`bytes \\x${'ab'.repeat(14)} and 0x${'cd'.repeat(14)} and t_${'ef'.repeat(14)}`), 'bytes <hex> and <hex> and t<hex>');
   assert.equal(sanitize('STAKE1UYEHKCK0LAJQ8GR28T9UXNUVGCQRC6070X3K9R8048Z8Y5GH6FFGW'), '<bech32>');
   assert.equal(sanitize('37k rows in 1500ms'), '# rows in #');
+  assert.equal(sanitize('37rows in 1500msec, value 0x1f4'), '# in #, value <hex>');
 });
 
 test('the logged command names no wallet', () => {
@@ -70,6 +71,10 @@ test('a run resumed to a clean finish settles its earlier starts, kept output an
   const prev = process.env.RESEARCH_CORPUS_HOME;
   process.env.RESEARCH_CORPUS_HOME = home;
   try {
+    // A gate killed before its end entry, then the same run to a clean finish.
+    appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'g' });
+    const g2 = appendEntry('mainnet', 'query-start', { name: 'live-fire gate', run_id: 'g' });
+    appendEntry('mainnet', 'query', { name: 'live-fire gate', start_seq: g2.seq, outcome: 'succeeded' });
     // Kept, then resumed and deleted.
     const k = appendEntry('mainnet', 'live-fire-start', { run_id: 'k' });
     appendEntry('mainnet', 'live-fire', { run_id: 'k', start_seq: k.seq, outcome: 'failed', wallet_level_output: 'kept for debugging' });
@@ -79,7 +84,14 @@ test('a run resumed to a clean finish settles its earlier starts, kept output an
     const d = appendEntry('mainnet', 'live-fire-start', { run_id: 'd' });
     appendEntry('mainnet', 'live-fire', { run_id: 'd', start_seq: d.seq, outcome: 'failed', wallet_level_output: 'deletion failed: lost' });
     let v = verifyLog('mainnet');
-    assert.deepEqual([v.kept_not_cleaned.map((x) => x.run_id), v.unclosed.map((x) => x.run_id), v.failed_deletions.map((x) => x.run_id)], [['k'], ['i'], ['d']]);
+    assert.deepEqual([v.kept_not_cleaned.map((x) => x.run_id), v.unclosed.map((x) => x.run_id), v.failed_deletions.map((x) => x.run_id)], [['k'], ['i'], ['d']], 'the killed gate is settled by the same run\'s later clean gate');
+    // A killed command with no run (health, verify-freeze) is closed by its
+    // start sequence; a live-fire start is not.
+    const h = appendEntry('mainnet', 'query-start', { name: 'health' });
+    assert.deepEqual(verifyLog('mainnet').unclosed.map((x) => x.seq).includes(h.seq), true);
+    assert.throws(() => closeStart('mainnet', 1), /not an unclosed start/);
+    assert.throws(() => closeStart('mainnet', verifyLog('mainnet').unclosed.find((x) => x.run_id === 'i').seq), /cleanup --run-id/);
+    assert.equal(closeStart('mainnet', h.seq, 'cleanup --start-seq').start_seq, h.seq);
     for (const id of ['k', 'i', 'd']) {
       const st = appendEntry('mainnet', 'live-fire-start', { run_id: id });
       appendEntry('mainnet', 'live-fire', { run_id: id, start_seq: st.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-10-21T00:00:00Z' });

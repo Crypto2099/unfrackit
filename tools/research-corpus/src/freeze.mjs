@@ -3,47 +3,55 @@
 
 // The final freeze and the draw key.
 //
-// A run on mainnet takes the final freeze transaction (A0) and checks, from
-// the database, that it carries the study's final record:
-//   - its label-674 message is the SHA-256 of the final pre-registration given
-//     at run time (CIP-20, "Specification": {"msg": [strings]});
+// The order of the study's records is decided by the chain alone (decided
+// 2026-10-22). Reading every label-309 record that verifies under the study
+// key, in transaction order:
+//   - the hypotheses record is the study key's first record on chain;
+//   - the final record is the first later record signed by the study key,
+//     without `supersedes`, whose signed content (the body without `sigs`)
+//     differs from the hypotheses record's. A replay of either, with or
+//     without added co-signatures, is the same record (CIP-190, "Security and
+//     Privacy Considerations", "Signature replay"); a record with
+//     `supersedes` retypes an earlier one (CIP-190, "Supersedence") and is
+//     never the final;
+//   - the final freeze transaction is the first transaction carrying the
+//     final record's signed content with a label-674 message that is exactly
+//     the SHA-256 of the final pre-registration given at run time (CIP-20,
+//     "Specification": {"msg": [strings]}). A copy without that line does not
+//     count, and a complete copy that lands first is the final freeze.
+// Which transactions the operator names (--hypotheses-tx, --freeze-tx) or the
+// document cites decides nothing: each must agree with the chain's. On a test
+// network, where one key signs many rehearsals, --from-block starts the scan
+// later; mainnet refuses it. So the study key signs nothing between the
+// hypotheses record and the final freeze, and a broadcast final record is
+// never abandoned for another: any such record would be the final.
+//
+// The final freeze transaction must then carry the study's final record:
 //   - its label-309 value is a CIP-190 record (CIPs@58b4dd1417, CIP-0190,
 //     "Metadata label 309 and the chunk-array transport", "Canonical CBOR
-//     (deterministic encoding)", "Record model") whose items include that
-//     digest and the digest of every file of this code, and which carries a
-//     signature by the study key that verifies (CIP-190, "Record-level
-//     signatures (COSE_Sign1)": the signed bytes are "cardano-poe-record-sig-v1"
-//     followed by the canonical record without `sigs`, inside the RFC 9052
-//     Sig_structure with the protected header as published; the key is the
-//     32-byte protected-header kid, path 1);
-//   - the pre-registration names the study key, and cites exactly one record
-//     signed by the study key by its CIP-0107 URI
-//     (web+cardano://transaction/<hash>/metadata/309): the hypotheses record,
-//     a transaction in an earlier block whose document is a different file.
-//     The hypotheses record is therefore refused as the final one: its
-//     document cannot cite itself;
-//   - its block is at least security_k (2,160) blocks below the database tip;
-//   - its record carries no `supersedes`, and it is the first final record
-//     signed by the study key after the hypotheses record: between the two,
-//     no transaction carries a record signed by the study key without
-//     `supersedes` whose signed content (the body without `sigs`) differs from
-//     the hypotheses record's and from this one's (a second final, which only
-//     the key holder can make), and no transaction carries this record's
-//     signed content together with exactly the document's label-674 line (a
-//     complete copy, which passes every check itself and is then the first
-//     carrier). A signed body can be republished by anyone, with or without
-//     added co-signatures (CIP-190, "Security and Privacy Considerations",
-//     "Signature replay"), so copies of the hypotheses record, retyping
-//     successors (CIP-190, "Supersedence"), bare copies of the final record
-//     without the 674 line, and a stranger's 674 line naming the digest
-//     neither block the final nor stand in for it;
-//   - for the study run, digests given at run time are items of the record
-//     and are named in the pre-registration's text (the freeze tool requires
-//     the document to list every other item's digest, so the text says which
-//     item is which): the code manifest, and exactly one prefix of the check
-//     log (the log as it stood at the final freeze; it only grows), after
-//     which every entry is dated after the final freeze block, and whose first
-//     live-fire run postdates the hypotheses block.
+//     (deterministic encoding)", "Record model") whose items include the
+//     document's digest and the digest of every file of this code, and which
+//     carries a signature by the study key that verifies (CIP-190,
+//     "Record-level signatures (COSE_Sign1)": the signed bytes are
+//     "cardano-poe-record-sig-v1" followed by the canonical record without
+//     `sigs`, inside the RFC 9052 Sig_structure with the protected header as
+//     published; the key is the 32-byte protected-header kid, path 1);
+//   - the document names the study key and cites the chain's hypotheses
+//     record by its CIP-0107 URI (web+cardano://transaction/<hash>/metadata/309);
+//   - the document lists every other item of the record exactly once, as the
+//     freeze tool requires, in lines of <64 lowercase hex><two spaces><name>;
+//     every such line names an item, and the document does not list itself.
+//     CIP-190 items carry no names ("Item entries"), so the list says which
+//     item is which, and only one item of a record can be its document: two
+//     documents would each have to contain the other's digest;
+//   - the list names exactly one code manifest and exactly one check-log
+//     prefix, by the names FREEZE_ITEM_NAMES gives; the code manifest given
+//     at run time must be that item, and on mainnet that item must be a
+//     prefix of the check log ending at a line (the log as it stood at the
+//     final freeze; it only grows), after which every entry is dated after
+//     the final freeze block, and whose first live-fire run postdates the
+//     hypotheses block;
+//   - its block is at least security_k (2,160) blocks below the database tip.
 //
 // The draw key h is the epoch nonce of epoch N, where E is the epoch of the
 // final freeze block: N = E + 1 if the block's slot is earlier than E's first
@@ -70,7 +78,7 @@ import { createHash, createPublicKey, verify as edVerify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { decode, CborMap, withoutKeys, encodeBytes, encodeText } from './cbor.mjs';
 import { q } from './db.mjs';
-import { FIXED, GENESIS } from './params.mjs';
+import { FIXED, GENESIS, FREEZE_ITEM_NAMES } from './params.mjs';
 
 const HEX32 = /^[0-9a-f]{64}$/;
 const SIG_DOMAIN = Buffer.from('cardano-poe-record-sig-v1', 'utf8');
@@ -176,8 +184,6 @@ export async function readTx(client, blocks, txHash) {
 
 export const signedBy = (t, key) => !!(t.record && t.record.signatures.some((s) => s.valid && s.kid === key) && t.record.signatures.every((s) => s.valid));
 
-// Checks the final freeze. Returns { ok, checks, freeze, hypotheses, document }.
-// Every check is listed with its outcome, so a refusal names each reason.
 // The SHA-256 of every prefix of the check log that ends at a line boundary,
 // the empty prefix included.
 export function logPrefixDigests(text) {
@@ -199,25 +205,99 @@ const LIVE_FIRE_STARTS = new Set(['live-fire-start', 'a1-live-fire-start']);
 const CITATION = /web\+cardano:\/\/transaction\/([0-9a-fA-F]{64})\/metadata\/309(?![0-9])/g;
 const blockTime = (t) => Date.parse(`${String(t).replace(' ', 'T')}Z`);
 
-// requiredItems: [{ name, sha256 }], each of which must be an item of the
-// final record and named in the document. checkLogText: the check log of the
-// network, or undefined to skip that check.
-export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx, preregPath, studyKey, codeDigests, tipBlockNo, requiredItems = [], checkLogText }) {
+// The document's hash table: lines of <64 lowercase hex><two spaces><name>.
+export function hashTable(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    const m = /^([0-9a-f]{64}) {2}(\S.*)$/.exec(line);
+    if (m) out.push({ sha256: m[1], name: m[2] });
+  }
+  return out;
+}
+const baseName = (n) => n.split('/').pop();
+
+// Every label-309 record signed by the study key from a transaction id on, in
+// transaction order: [{ tx, tx_id, record, signed (hex) }]. A value that does
+// not parse, or a record that does not verify under the key, is no record of
+// the study.
+export async function studyRecords(client, blocks, studyKey, loTxId = 0) {
+  const rows = await q(client, blocks, 'label_309_from', { lo: { type: 'int', value: loTxId } });
+  const out = [];
+  for (const r of rows) {
+    let rec;
+    try {
+      rec = parseRecord(reassemble(r.bytes));
+      rec.signatures = verifySignatures(rec);
+    } catch {
+      continue;
+    }
+    if (!signedBy({ record: rec }, studyKey)) continue;
+    out.push({ tx: r.tx, tx_id: Number(r.tx_id), record: rec, signed: rec.signed.toString('hex') });
+  }
+  return out;
+}
+
+// The chain's order of the study's records (see the header). msgOfTx(tx)
+// reads a transaction's label-674 message. Returns { hypotheses, final,
+// finalTx } (any may be null).
+export async function chainOrder({ client, blocks, studyKey, docDigest, loTxId = 0 }) {
+  const recs = await studyRecords(client, blocks, studyKey, loTxId);
+  const hypotheses = recs[0] || null;
+  const final = hypotheses ? recs.find((r) => r.tx_id > hypotheses.tx_id && !r.record.supersedes && r.signed !== hypotheses.signed) || null : null;
+  let finalTx = null;
+  if (final) {
+    for (const r of recs.filter((x) => x.signed === final.signed)) {
+      const meta = await q(client, blocks, 'tx_metadata_of_tx', { tx_hash: { type: 'bytea', value: r.tx } });
+      const m = msgOf(meta);
+      if (m && m.length === 1 && m[0] === docDigest) {
+        finalTx = r.tx;
+        break;
+      }
+    }
+  }
+  return { hypotheses, final, finalTx, records: recs.length };
+}
+
+// Checks the final freeze. Returns { ok, checks, freeze, hypotheses, document,
+// freezeBlock }. Every check is listed with its outcome, so a refusal names
+// each reason. freezeTx and hypothesesTx are optional: given, each must be the
+// chain's. codeManifestSha256: the run's code manifest, which must be the one
+// the document names. checkLogText: the check log of the network, or
+// undefined to skip that check. fromBlock: test networks only, the block
+// height the scan starts at.
+export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx, preregPath, studyKey, codeDigests, tipBlockNo, codeManifestSha256 = null, checkLogText, fromBlock = null }) {
   const checks = [];
   const check = (name, ok, detail = null) => checks.push({ name, ok: !!ok, detail });
   const lower = (x) => (typeof x === 'string' ? x.toLowerCase() : x);
   freezeTx = lower(freezeTx);
   hypothesesTx = lower(hypothesesTx);
   studyKey = lower(studyKey);
-  check('arguments', HEX32.test(freezeTx || '') && HEX32.test(hypothesesTx || '') && HEX32.test(studyKey || '') && !!preregPath, 'needs --freeze-tx, --hypotheses-tx, --study-key (64 hex each) and --prereg');
+  check('arguments', HEX32.test(studyKey || '') && !!preregPath && (!freezeTx || HEX32.test(freezeTx)) && (!hypothesesTx || HEX32.test(hypothesesTx)), 'needs --study-key (64 hex) and --prereg; --freeze-tx and --hypotheses-tx are 64 hex when given');
   if (!checks[0].ok) return { ok: false, checks };
   const docBytes = readFileSync(preregPath);
   const docDigest = sha256hex(docBytes);
   const docText = docBytes.toString('utf8');
   const document = { sha256: docDigest };
 
-  const f = await readTx(client, blocks, freezeTx);
-  check('freeze_tx_in_database', !!f, freezeTx);
+  // The order, from the chain alone.
+  let loTxId = 0;
+  if (fromBlock !== null && fromBlock !== undefined) {
+    const r = (await q(client, blocks, 'first_tx_from_block_no', { block_no: { type: 'int', value: Number(fromBlock) } }))[0];
+    loTxId = r && r.tx_id !== null ? Number(r.tx_id) : Number.MAX_SAFE_INTEGER;
+  }
+  const order = await chainOrder({ client, blocks, studyKey, docDigest, loTxId });
+  check('hypotheses_record_on_chain', !!order.hypotheses, order.hypotheses ? order.hypotheses.tx : 'no record signed by the study key');
+  if (hypothesesTx) check('hypotheses_tx_is_the_chains', !!order.hypotheses && order.hypotheses.tx === hypothesesTx, order.hypotheses ? `the chain's hypotheses record is ${order.hypotheses.tx}` : null);
+  check('final_record_on_chain', !!order.final, order.final ? order.final.tx : 'no later record signed by the study key with other content');
+  check('final_tx_carries_the_document', !!order.finalTx, order.finalTx || 'no carrier of the final record has a label-674 message of exactly the document digest');
+  if (freezeTx) check('freeze_tx_is_the_chains', !!order.finalTx && order.finalTx === freezeTx, order.finalTx ? `the chain's final freeze is ${order.finalTx}` : null);
+
+  // The transaction the remaining checks read: the chain's final freeze, or
+  // for a report on a refused one, the transaction named or the final
+  // record's first carrier.
+  const fTx = order.finalTx || freezeTx || (order.final && order.final.tx);
+  const f = fTx ? await readTx(client, blocks, fTx) : null;
+  check('freeze_tx_in_database', !!f, fTx);
   if (!f) return { ok: false, checks, document };
   const depth = tipBlockNo - f.block.block_no;
   check('freeze_block_depth', depth >= FIXED.security_k, `${depth} blocks below the tip, ${FIXED.security_k} required`);
@@ -225,86 +305,48 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
   check('label_309_record', !!f.record, f.recordError);
   check('document_is_an_item', !!f.record && f.record.digests.includes(docDigest));
   check('signed_by_study_key', signedBy(f, studyKey), f.record ? f.record.signatures.map((s) => ({ kid: s.kid, valid: s.valid, reason: s.reason })) : null);
+  check('record_has_no_supersedes', !!f.record && !f.record.supersedes, 'a record that supersedes another is not the final freeze');
   check('document_names_study_key', docText.includes(studyKey));
   const missing = f.record ? codeDigests.filter((d) => !f.record.digests.includes(d.sha256)).map((d) => d.path) : codeDigests.map((d) => d.path);
   check('code_files_are_items', missing.length === 0, missing.length ? `not in the record: ${missing.join(', ')}` : null);
 
-  check('record_has_no_supersedes', !!f.record && !f.record.supersedes, 'a record that supersedes another is not the final freeze');
-  for (const it of requiredItems) {
-    check(`${it.name}_is_an_item`, !!f.record && HEX32.test(it.sha256 || '') && f.record.digests.includes(it.sha256), it.sha256);
-    check(`${it.name}_named_in_document`, HEX32.test(it.sha256 || '') && docText.includes(it.sha256), it.sha256);
-  }
+  // The document's list of the other items (the freeze tool's rule).
+  const table = hashTable(docText);
+  const others = f.record ? f.record.digests.filter((d) => d !== docDigest) : [];
+  const count = (d) => table.filter((t) => t.sha256 === d).length;
+  const unlisted = others.filter((d) => count(d) !== 1);
+  const strays = table.filter((t) => !others.includes(t.sha256));
+  check('document_lists_every_other_item', !!f.record && unlisted.length === 0 && strays.length === 0, unlisted.length || strays.length ? `${unlisted.length} item(s) not listed exactly once; ${strays.length} listed line(s) not another item of the record` : null);
+  const manifests = table.filter((t) => baseName(t.name) === FREEZE_ITEM_NAMES.code_manifest);
+  const logs = table.filter((t) => baseName(t.name) === FREEZE_ITEM_NAMES.check_log);
+  check('document_names_one_code_manifest', manifests.length === 1, `${manifests.length} line(s) named ${FREEZE_ITEM_NAMES.code_manifest}`);
+  check('document_names_one_check_log', logs.length === 1, `${logs.length} line(s) named ${FREEZE_ITEM_NAMES.check_log}`);
+  if (codeManifestSha256) check('code_manifest_is_the_named_one', manifests.length === 1 && manifests[0].sha256 === codeManifestSha256, codeManifestSha256);
 
-  // The study-signed records the document cites: exactly one, the hypotheses
-  // record, so the lower bound of the search below is not a run-time choice.
+  // The hypotheses record, as the chain orders it.
+  const h = order.hypotheses ? await readTx(client, blocks, order.hypotheses.tx) : null;
   const cited = [...new Set([...docText.matchAll(CITATION)].map((m) => m[1].toLowerCase()))];
-  const citedSigned = [];
-  for (const c of cited) {
-    const t = await readTx(client, blocks, c);
-    if (t && signedBy(t, studyKey)) citedSigned.push(c);
-  }
-  check('document_cites_one_study_record', citedSigned.length === 1 && citedSigned[0] === hypothesesTx, `cites ${citedSigned.length} record(s) signed by the study key${citedSigned.length ? `: ${citedSigned.join(', ')}` : ''}`);
-  check('hypotheses_tx_differs', hypothesesTx !== freezeTx);
-  const h = await readTx(client, blocks, hypothesesTx);
-  check('hypotheses_tx_in_database', !!h, hypothesesTx);
+  check('document_cites_hypotheses_record', !!h && cited.includes(h.tx), h ? `web+cardano://transaction/${h.tx}/metadata/309` : null);
   if (h) {
     check('hypotheses_block_earlier', h.block.block_no < f.block.block_no, `${h.block.block_no} < ${f.block.block_no}`);
-    check('hypotheses_signed_by_study_key', signedBy(h, studyKey), h.recordError);
     check('hypotheses_document_differs', !!h.msg && h.msg[0] !== docDigest);
-    // The first final record signed by the study key after the hypotheses
-    // record. Only transactions carrying a record that verifies under the
-    // study key count.
-    const rows = h.block.tx_id < f.block.tx_id ? await q(client, blocks, 'tx_metadata_between', { lo: { type: 'int', value: h.block.tx_id }, hi: { type: 'int', value: f.block.tx_id } }) : [];
-    const byTx = new Map();
-    for (const r of rows) {
-      if (!byTx.has(r.tx)) byTx.set(r.tx, []);
-      byTx.get(r.tx).push(r);
-    }
-    const otherFinals = [];
-    const earlierCopies = [];
-    for (const [tx, rs] of byTx) {
-      const r309 = rs.find((r) => Number(r.key) === 309);
-      if (!r309) continue;
-      let rec;
-      try {
-        rec = parseRecord(reassemble(r309.bytes));
-        rec.signatures = verifySignatures(rec);
-      } catch {
-        continue;
-      }
-      if (!signedBy({ record: rec }, studyKey) || rec.supersedes) continue;
-      if (h.record && rec.signed.equals(h.record.signed)) continue;
-      if (f.record && rec.signed.equals(f.record.signed)) {
-        const m = msgOf(rs);
-        if (m && m.length === 1 && m[0] === docDigest) earlierCopies.push(tx);
-        continue;
-      }
-      otherFinals.push(tx);
-    }
-    check('no_other_study_record', otherFinals.length === 0, otherFinals.length ? `other records signed by the study key between the hypotheses record and this one: ${otherFinals.join(', ')}` : null);
-    check('first_carrier_of_the_record', !!f.record && earlierCopies.length === 0, earlierCopies.length ? `earlier transactions carry this record and its 674 line: ${earlierCopies.join(', ')}` : null);
     if (checkLogText !== undefined) {
       const text = checkLogText || '';
       const entries = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
-      // Prefixes ending at a line boundary, by number of entries.
-      const named = logPrefixDigests(text)
-        .map((d, n) => ({ d, n }))
-        .filter((x) => !!f.record && f.record.digests.includes(x.d) && docText.includes(x.d));
-      check('check_log_frozen', named.length === 1, named.length === 1 ? null : `${named.length} prefixes of the check log are both items of the record and named in the document; exactly one is required`);
+      const at = logs.length === 1 ? logPrefixDigests(text).indexOf(logs[0].sha256) : -1;
+      check('check_log_frozen', at >= 0, at >= 0 ? null : `the check-log item the document names is not a prefix of the ${checkLogText ? 'current' : 'empty'} log`);
       const freezeTime = blockTime(f.block.time);
-      const tail = named.length === 1 ? entries.slice(named[0].n) : [];
-      const early = tail.filter((e) => !(Date.parse(e.date) > freezeTime));
-      check('check_log_tail_after_freeze', named.length === 1 && early.length === 0, early.length ? `entries after the frozen log dated before the final freeze: ${early.map((e) => e.seq).join(', ')}` : null);
+      const early = at >= 0 ? entries.slice(at).filter((e) => !(Date.parse(e.date) > freezeTime)) : [];
+      check('check_log_tail_after_freeze', at >= 0 && early.length === 0, early.length ? `entries after the frozen log dated before the final freeze: ${early.map((e) => e.seq).join(', ')}` : null);
       const first = entries.find((e) => LIVE_FIRE_STARTS.has(e.type));
       check('live_fire_after_hypotheses', !first || Date.parse(first.date) > blockTime(h.block.time), first ? `first live-fire run ${first.date}, hypotheses block ${h.block.time}` : 'no live-fire run');
     }
   }
   const ok = checks.every((c) => c.ok);
   const brief = (t) => (t ? { tx: t.tx, block_no: t.block.block_no, slot_no: t.block.slot_no, epoch_no: t.block.epoch_no, epoch_slot_no: t.block.epoch_slot_no, block_hash: t.block.hash, time: t.block.time, document_sha256: t.msg ? t.msg[0] : null, items: t.record ? t.record.digests.length : null } : null);
-  return { ok, checks, document, freeze: brief(f), freezeBlock: f.block, hypotheses: brief(h) };
+  return { ok, checks, document, freeze: brief(f), freezeBlock: f.block, hypotheses: brief(h), scan: { from_block: fromBlock ?? null, records: order.records } };
 }
 
-// k, f (a decimal string) and the window coefficient to slots: coef * k / f.
 export function stabilityWindow(k, f, coef) {
   const m = /^(\d+)(?:\.(\d+))?$/.exec(String(f));
   if (!m) throw new Error(`active slot coefficient ${f}`);
@@ -376,26 +418,49 @@ export async function drawKey({ client, blocks, network, block, koios, txHash = 
   return { ...rule, nonce: row.nonce, readings };
 }
 
-// The snapshot fixed by rule (decided 2026-10-21): the last block of epoch
-// N - 1, N being the draw epoch. The database must hold a block of epoch N, so
-// that N - 1 is complete in it, and the snapshot must be at least security_k
-// blocks below the database tip and below Koios's tip, Koios naming the same
-// block as the last of epoch N - 1. A rollback cannot reach it then, so the
-// snapshot is one block for everyone. koios needs lastBlockOfEpoch(e), tip().
-export async function ruleSnapshot({ client, blocks, n, koios, tipBlockNo }) {
-  const last = (await q(client, blocks, 'last_block_of_epoch', { epoch_no: { type: 'int', value: n - 1 } }))[0];
+// The snapshot fixed by rule (decided 2026-10-21, refined 2026-10-22): the
+// last block of epoch N - 1 whose slot is earlier than N - 1's randomness
+// stabilisation cutoff (its first slot plus the epoch length less 4k/f), N
+// being the draw epoch. A block updates the candidate nonce, which becomes
+// epoch N's nonce, only while its slot plus the window is before the first
+// slot of the next epoch, so N's nonce is fixed at that cutoff and readable
+// from any node from then on (IntersectMBO/ouroboros-consensus@d94473e212,
+// ouroboros-consensus-protocol, Ouroboros/Consensus/Protocol/PolyPraos.hs,
+// praosStateCandidateNonce in the block update and the epoch-boundary tick).
+// The frames are therefore fixed no later than the draw key becomes known. The database must hold the first block of
+// epoch N at least security_k blocks below its tip, and Koios must name the
+// same snapshot block, with the first block of N at least security_k below
+// Koios's tip: a rollback can then reach neither the snapshot nor any block
+// that could come before the cutoff after it. koios needs
+// snapshotBlock(epoch, cutoff), firstBlockOfEpoch(epoch) and tip().
+export async function ruleSnapshot({ client, blocks, network, n, koios, tipBlockNo }) {
+  const genesis = GENESIS[network];
+  if (!genesis) throw new Error(`no genesis constants for ${network}`);
+  const epoch = n - 1;
+  const anyBlock = (await q(client, blocks, 'first_block_of_epoch', { epoch_no: { type: 'int', value: epoch } }))[0];
   const next = (await q(client, blocks, 'first_block_of_epoch', { epoch_no: { type: 'int', value: n } }))[0];
-  if (!last || !next) throw new Error(`refusing: the snapshot is the last block of epoch ${n - 1}, and the database does not yet hold epoch ${n}`);
-  const depth = tipBlockNo - Number(last.block_no);
-  if (depth < FIXED.security_k) throw new Error(`refusing: the snapshot (the last block of epoch ${n - 1}) is ${depth} blocks below the database tip; it must be ${FIXED.security_k} deep`);
-  const kb = await koios.lastBlockOfEpoch(n - 1);
+  if (!anyBlock || !next) throw new Error(`refusing: the snapshot is in epoch ${epoch}, and the database does not yet hold epoch ${n}`);
+  const window = stabilityWindow(genesis.k, genesis.f, 4);
+  const firstSlot = Number(anyBlock.slot_no) - Number(anyBlock.epoch_slot_no);
+  const cutoff = firstSlot + genesis.epoch_length - window;
+  const snap = (await q(client, blocks, 'last_block_before_slot', { epoch_no: { type: 'int', value: epoch }, slot_no: { type: 'int', value: cutoff } }))[0];
+  if (!snap) throw new Error(`refusing: epoch ${epoch} has no block before its cutoff slot ${cutoff}`);
+  const depth = tipBlockNo - Number(next.block_no);
+  if (depth < FIXED.security_k) throw new Error(`refusing: the first block of epoch ${n} is ${depth} blocks below the database tip; it must be ${FIXED.security_k} deep`);
+  const kb = await koios.snapshotBlock(epoch, cutoff);
+  const kn = await koios.firstBlockOfEpoch(n);
   const kt = await koios.tip();
-  if (!kb || String(kb.hash).toLowerCase() !== last.hash) throw new Error(`refusing: Koios names another last block of epoch ${n - 1}`);
-  const kDepth = Number(kt.block_no) - Number(kb.block_height);
-  if (kDepth < FIXED.security_k) throw new Error(`refusing: the snapshot is ${kDepth} blocks below Koios's tip; it must be ${FIXED.security_k} deep`);
+  if (!kb || String(kb.hash).toLowerCase() !== snap.hash) throw new Error(`refusing: Koios names another last block of epoch ${epoch} before slot ${cutoff}`);
+  if (!kn) throw new Error(`refusing: Koios has no block of epoch ${n}`);
+  const kDepth = Number(kt.block_no) - Number(kn.block_height);
+  if (kDepth < FIXED.security_k) throw new Error(`refusing: the first block of epoch ${n} is ${kDepth} blocks below Koios's tip; it must be ${FIXED.security_k} deep`);
   return {
-    block: last,
-    rule: { epoch: n - 1, n },
-    confirmation: { db_depth: depth, koios: { hash: String(kb.hash).toLowerCase(), block_height: Number(kb.block_height), tip_block_no: Number(kt.block_no), depth: kDepth, read_at: new Date().toISOString() } }
+    block: snap,
+    rule: { epoch, n, first_slot: firstSlot, window, cutoff_slot: cutoff },
+    confirmation: {
+      first_block_of_n: { block_no: Number(next.block_no), hash: next.hash },
+      db_depth: depth,
+      koios: { hash: String(kb.hash).toLowerCase(), first_block_of_n: { block_height: Number(kn.block_height), hash: String(kn.hash).toLowerCase() }, tip_block_no: Number(kt.block_no), depth: kDepth, read_at: new Date().toISOString() }
+    }
   };
 }
