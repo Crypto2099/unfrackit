@@ -77,8 +77,8 @@ export async function submitRun({ store, dir, log = console.error, streams, koio
     // record this identity paid for, so a final freeze sent from a lost home
     // shows up there.
     await bf.guard();
-    const { found, replays } = await unknownRecordsOnChain({ store, koios, bf, network, address: run.report.payment_address, publicKeyHex: run.report.signing_public_key, paymentKeyHash: run.txExpect.paymentKeyHash, exclude: [run.txHash, run.report.hypotheses_record].filter(Boolean) });
-    for (const h of replays) log(`${h} carries a record signed by this key in a transaction this identity did not pay for (a replay); it does not count`);
+    const { found, skipped } = await unknownRecordsOnChain({ store, koios, bf, network, address: run.report.payment_address, publicKeyHex: run.report.signing_public_key, paymentKeyHash: run.txExpect.paymentKeyHash, exclude: [run.txHash, run.report.hypotheses_record].filter(Boolean) });
+    if (skipped) log(`${skipped} transaction(s) in the payment address's history were not paid by this identity and were not read further`);
     if (found.length) {
       throw new UserError(`refusing a final freeze: the payment address's history holds transactions this home's journal does not know:\n${found.map((f) => `  ${f.tx_hash}: ${f.reason}`).join('\n')}\nOne of them may be a final freeze sent from a lost home.`);
     }

@@ -189,6 +189,34 @@ export class Store {
     fsyncDir(dir);
   }
 
+  // Every place this home records a signing key in use: identities'
+  // public.json, journal entries and run reports, each with the identity
+  // name and the network it was used for.
+  signingKeyRecords(key) {
+    const out = [];
+    for (const n of this.identityNames()) {
+      const f = path.join(this.identityDir(n), 'public.json');
+      if (!fs.existsSync(f)) continue;
+      const p = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (p.signing_public_key === key) for (const net of p.networks || []) out.push({ where: `identities/${n}/public.json`, name: n, network: net });
+    }
+    for (const network of ['mainnet', 'preprod']) {
+      const j = this.readJournal(network);
+      for (const e of [...(j.history || []), ...(j.current ? [j.current] : [])]) {
+        if (e.signing_public_key === key) out.push({ where: `journal/${network}.json (${e.txHash})`, name: e.identity || null, network });
+      }
+      const runs = this.path('runs', network);
+      if (!fs.existsSync(runs)) continue;
+      for (const h of fs.readdirSync(runs)) {
+        const f = path.join(runs, h, 'report.json');
+        if (!fs.existsSync(f)) continue;
+        const r = JSON.parse(fs.readFileSync(f, 'utf8'));
+        if (r.signing_public_key === key) out.push({ where: `runs/${network}/${h}`, name: r.identity || null, network: r.network || network });
+      }
+    }
+    return out;
+  }
+
   identityNames() {
     const dir = this.path('identities');
     return fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => IDENTITY_NAME_RE.test(n)) : [];
@@ -355,18 +383,24 @@ export class Store {
   // (SIGKILL, power loss) leaves the file behind. Each name carries the
   // writing process's pid; a file whose process is gone is removed. Run at
   // startup.
+  //
+  // The same holds for the temporary copies `restore` writes into an
+  // identity directory (`.<file>.restore-<pid>`) before renaming them.
   cleanTmp() {
-    const dir = this.path('tmp');
-    if (!fs.existsSync(dir)) return [];
     const removed = [];
-    for (const name of fs.readdirSync(dir)) {
-      const m = /^secret-(\d+)-/.exec(name);
-      if (!m) continue;
-      const pid = Number(m[1]);
-      if (pid === process.pid || processAlive(pid)) continue;
-      fs.rmSync(path.join(dir, name), { force: true });
-      removed.push(name);
-    }
+    const sweep = (dir, re, label) => {
+      if (!fs.existsSync(dir)) return;
+      for (const name of fs.readdirSync(dir)) {
+        const m = re.exec(name);
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (pid === process.pid || processAlive(pid)) continue;
+        fs.rmSync(path.join(dir, name), { force: true });
+        removed.push(`${label}${name}`);
+      }
+    };
+    sweep(this.path('tmp'), /^secret-(\d+)-/, 'tmp/');
+    for (const n of this.identityNames()) sweep(this.identityDir(n), /^\.(?:signing-mnemonic|payment-mnemonic|public\.json)\.restore-(\d+)$/, `identities/${n}/`);
     return removed;
   }
 

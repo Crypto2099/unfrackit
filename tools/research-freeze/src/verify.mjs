@@ -10,7 +10,7 @@
 import { sliceTxComponents, unwrapAuxiliaryData, bindTransactionBytes, verifyTx } from '@cardanowall/sdk-ts/verifier';
 import { reassembleLabel309Value, validatePoeRecord } from '@cardanowall/poe-standard';
 import { coseSign1Label309Verify } from '@cardanowall/crypto-core/cose';
-import { decode, encode, mapGet } from './cbor.mjs';
+import { decode, encode, mapGet, Tagged } from './cbor.mjs';
 import { networkOf } from './koios.mjs';
 import { CONFIRMATION_THRESHOLD } from './journal.mjs';
 import { VERIFY_FLAGS } from './cardanowall.mjs';
@@ -77,8 +77,23 @@ export function recordFromBytes(txHash, cborHex) {
     labels: unwrapped.metadataLabels,
     signers,
     items: mapGet(rec, 'items').map((it) => toHex(mapGet(mapGet(it, 'hashes'), 'sha2-256'))),
-    extensionKeys: [...rec.keys()].filter((k) => typeof k === 'string' && k.includes('-'))
+    extensionKeys: [...rec.keys()].filter((k) => typeof k === 'string' && k.includes('-')),
+    message: messageOf(parts.auxiliaryData)
   };
+}
+
+// The CIP-20 lines under label 674, or null when there are none or the
+// auxiliary data is not in a form this tool writes.
+function messageOf(auxBytes) {
+  try {
+    let md = decode(auxBytes);
+    if (md instanceof Tagged) md = mapGet(md.value, 0);
+    else if (Array.isArray(md)) md = md[0];
+    const msg = md instanceof Map ? mapGet(mapGet(md, 674) || new Map(), 'msg') : null;
+    return Array.isArray(msg) && msg.every((l) => typeof l === 'string') ? msg : null;
+  } catch {
+    return null;
+  }
 }
 
 // `expectedSigner`: the signing key of the identity that built the

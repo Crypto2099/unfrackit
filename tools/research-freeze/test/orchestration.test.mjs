@@ -15,6 +15,8 @@ import { submitRun, sweep, buildSweep } from '../src/ops.mjs';
 import { journalEntries } from '../src/journal.mjs';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { toHex } from '../src/util.mjs';
+import { encode as encodeCbor } from '../src/cbor.mjs';
+import { blake2b256 } from '@cardanowall/crypto-core/hash';
 import { build, prepareRun } from '../src/build.mjs';
 import { MANIFEST_FORMAT } from '../src/manifest.mjs';
 import { tempHome, tempDir } from './helpers.mjs';
@@ -165,7 +167,7 @@ test('the chain scan ignores the cited hypotheses record, funding transactions a
   const logs = [];
   const r = await submitRun({ store, dir: run.dir, log: (m) => logs.push(m), streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf });
   assert.equal(r.outcome, 'submitted');
-  assert.ok(logs.some((m) => m.includes(replay.tx.hash) && /replay/.test(m)));
+  assert.ok(logs.some((m) => /2 transaction\(s\) in the payment address's history were not paid by this identity/.test(m)), 'the funding transaction and the replay were skipped unread');
 });
 
 test('a mainnet final is not submitted without a Blockfrost project id', async () => {
@@ -216,8 +218,111 @@ test('temporary secrets of a process that is gone are removed at startup; a live
   const live = store.path('tmp', `secret-${process.pid}-2-bb`);
   const other = store.path('tmp', 'notes');
   for (const f of [dead, live, other]) fs.writeFileSync(f, 'x', { mode: 0o600 });
-  assert.deepEqual(store.cleanTmp(), ['secret-999999999-1-aa']);
+  const idDir = store.path('identities', 'rehearsal');
+  fs.mkdirSync(idDir, { recursive: true, mode: 0o700 });
+  const strayDead = path.join(idDir, '.signing-mnemonic.restore-999999999');
+  const strayLive = path.join(idDir, `.payment-mnemonic.restore-${process.pid}`);
+  for (const f of [strayDead, strayLive]) fs.writeFileSync(f, 'x', { mode: 0o600 });
+  assert.deepEqual(store.cleanTmp(), ['tmp/secret-999999999-1-aa', 'identities/rehearsal/.signing-mnemonic.restore-999999999']);
+  assert.equal(fs.existsSync(strayDead), false);
+  assert.equal(fs.existsSync(strayLive), true);
   assert.equal(fs.existsSync(dead), false);
   assert.equal(fs.existsSync(live), true);
   assert.equal(fs.existsSync(other), true);
+});
+
+// A stranger's payment to the identity's address, built with CSL: the
+// stranger's input, one output to the address, optional label-309 metadata,
+// the stranger's witness.
+function strangerPayment(stranger, to, { label309 } = {}) {
+  const ins = CSL.TransactionInputs.new();
+  ins.add(CSL.TransactionInput.new(CSL.TransactionHash.from_hex('77'.repeat(32)), 0));
+  const outs = CSL.TransactionOutputs.new();
+  outs.add(CSL.TransactionOutput.new(CSL.Address.from_bech32(to), CSL.Value.new(CSL.BigNum.from_str('1500000'))));
+  const body = CSL.TransactionBody.new_tx_body(ins, outs, CSL.BigNum.from_str('200000'));
+  let aux;
+  if (label309) {
+    const md = CSL.GeneralTransactionMetadata.new();
+    const list = CSL.MetadataList.new();
+    list.add(CSL.TransactionMetadatum.new_bytes(label309));
+    md.insert(CSL.BigNum.from_str('309'), CSL.TransactionMetadatum.new_list(list));
+    aux = CSL.AuxiliaryData.new();
+    aux.set_metadata(md);
+    body.set_auxiliary_data_hash(CSL.hash_auxiliary_data(aux));
+  }
+  const hash = CSL.FixedTransaction.new_from_body_bytes(body.to_bytes()).transaction_hash();
+  const vkeys = CSL.Vkeywitnesses.new();
+  vkeys.add(CSL.make_vkey_witness(hash, stranger.id.payment.privateKey));
+  const ws = CSL.TransactionWitnessSet.new();
+  ws.set_vkeys(vkeys);
+  const tx = aux ? CSL.Transaction.new(body, ws, aux) : CSL.Transaction.new(body, ws);
+  return { hash: toHex(hash.to_bytes()), cbor: toHex(tx.to_bytes()) };
+}
+
+// A payment with an indefinite-length inputs array (valid on chain; the
+// strict slicer refuses it), written byte by byte.
+function indefinitePayment(stranger, to) {
+  const addr = CSL.Address.from_bech32(to).to_bytes();
+  const input = encodeCbor([new Uint8Array(32).fill(0x78), 0]);
+  const body = new Uint8Array([0xa3, 0x00, 0x9f, ...input, 0xff, 0x01, ...encodeCbor([[new Uint8Array(addr), 1500000]]), 0x02, ...encodeCbor(200000)]);
+  const bodyHash = blake2b256(body);
+  const sig = stranger.id.payment.privateKey.sign(bodyHash).to_bytes();
+  const vk = stranger.id.payment.publicKey;
+  const ws = encodeCbor(new Map([[0, [[vk, new Uint8Array(sig)]]]]));
+  const tx = new Uint8Array([0x84, ...body, ...ws, 0xf5, 0xf6]);
+  return { hash: toHex(bodyHash), cbor: toHex(tx) };
+}
+
+test('third-party transactions in the history cannot stop a mainnet final: malformed label-309 metadata and indefinite-length encodings are skipped unread', async () => {
+  const { store, run } = await mainnetRun();
+  const stranger = testIdentity(new Store(tempHome()), 'testfreeze', 'a stranger');
+  const vOne = strangerPayment(stranger, run.report.payment_address, { label309: new Uint8Array([0xa1, 0x61, 0x76, 0x01]) }); // {"v": 1}
+  const indefinite = indefinitePayment(stranger, run.report.payment_address);
+  const txs = { [vOne.hash]: { cbor: vOne.cbor }, [indefinite.hash]: { cbor: indefinite.cbor } };
+  const p = providers(run, { history: [vOne.hash, indefinite.hash], txs, tip: { abs_slot: 1000 } });
+  const logs = [];
+  const r = await submitRun({ store, dir: run.dir, log: (m) => logs.push(m), streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf });
+  assert.equal(r.outcome, 'submitted');
+  assert.ok(logs.some((m) => /2 transaction\(s\) .* were not paid by this identity/.test(m)));
+});
+
+test('the chain scan stops on provider faults and on this identity\'s own unparseable or unknown records, and skips a forged witness', async () => {
+  const lost = new Store(tempHome());
+  const earlier = await mainnetRun({ store: lost, label: 'testfreeze', utxoTag: 'f' });
+  const { store, run } = await mainnetRun({ label: 'testfreeze' });
+  const submit = (p) => submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf });
+  const h = earlier.run.hash;
+  // The providers return different bytes.
+  await assert.rejects(submit(providers(run, { history: [h], txs: { [h]: { cbor: earlier.run.cbor } }, bfTxs: { [h]: { cbor: earlier.run.cbor.replace(/..$/, '00') } } })), /CBOR differs between Koios and Blockfrost/);
+  // Only Blockfrost returns the bytes: they are read and judged.
+  await assert.rejects(submit(providers(run, { history: [h], txs: {}, bfTxs: { [h]: { cbor: earlier.run.cbor } } })), /this identity paid for it, and it carries a label-309 record/);
+  // Bytes that are not the transaction with that hash.
+  await assert.rejects(submit(providers(run, { history: ['9e'.repeat(32)], txs: { ['9e'.repeat(32)]: { cbor: earlier.run.cbor } } })), /not this transaction: its body hashes to/);
+  // A forged witness: the identity's real record with its signature bytes flipped is not paid by it.
+  const wsHex = toHex(CSL.FixedTransaction.from_bytes(Buffer.from(earlier.run.cbor, 'hex')).raw_witness_set());
+  const sigAt = earlier.run.cbor.indexOf(wsHex) + wsHex.length - 128; // the witness set ends with the 64-byte signature
+  const forged = earlier.run.cbor.slice(0, sigAt) + (earlier.run.cbor.slice(sigAt, sigAt + 2) === '00' ? '01' : '00') + earlier.run.cbor.slice(sigAt + 2);
+  const r = await submit(providers(run, { history: [h], txs: { [h]: { cbor: forged } }, tip: { abs_slot: 1000 } }));
+  assert.equal(r.outcome, 'submitted', 'a witness that does not verify does not make the identity the payer');
+});
+
+test('the run\'s own transaction in the history does not count, and an abandoned final that landed does', async () => {
+  const { store, identity, run } = await mainnetRun();
+  const own = providers(run, { history: [run.hash], txs: { [run.hash]: { cbor: run.cbor } }, tip: { abs_slot: 1000 } });
+  // First an abandoned final A that is in fact on chain.
+  const a = await fabricateRun(store, { network: 'mainnet', identity, extra: { stage: 'final' }, utxoTag: 'b' });
+  journalConfirmed(store, 'mainnet', a, identity);
+  store.updateJournal('mainnet', (j) => {
+    j.history[0].state = 'abandoned';
+  });
+  const landed = providers(run, { history: [a.hash], txs: { [a.hash]: { cbor: a.cbor } } });
+  await assert.rejects(submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: landed.koios, blockfrost: landed.bf }), new RegExp(`${a.hash}: this identity paid for it`));
+  const r = await submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: own.koios, blockfrost: own.bf });
+  assert.equal(r.outcome, 'submitted');
+});
+
+test('abandon on mainnet refuses to run without a Blockfrost project id', async () => {
+  const { abandonJournal } = await import('../src/ops.mjs');
+  const { store, identity } = await mainnetRun();
+  await assert.rejects(abandonJournal({ store, network: 'mainnet', identityName: 'testfreeze', koios: fakeChain('mainnet').koios({ addresses: [identity.pub.addresses.mainnet] }) }), /abandon on mainnet asks Blockfrost too/);
 });
