@@ -26,9 +26,11 @@ async function fixture(db, n) {
     CREATE TABLE study.activity (win text, sa_id bigint, n_tx_key bigint, n_tx_any bigint, n_spends_key bigint, n_spends_any bigint, n_receipts bigint, n_tx bigint, n_spends bigint);
     CREATE TABLE study.state (point text, sa_id bigint, n_utxo bigint, lovelace numeric, lovelace_all numeric, lovelace_script_pay numeric, n_assets bigint, n_nft bigint, n_units numeric);
     CREATE TABLE study.paycount (point text, sa_id bigint, n_pay bigint, n_pay_key bigint);
+    CREATE TABLE public.tx_out (id bigint PRIMARY KEY, tx_id bigint, stake_address_id bigint);
   `);
   for (let i = 1; i <= n; i++) {
     const c = credHex(i);
+    await db.query(`INSERT INTO public.tx_out VALUES ($1, 1, $1)`, [i]);
     const script = i === 3;
     const header = script ? 'f0' : 'e0';
     await db.query(`INSERT INTO study.cred VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), $4, 0, $5, $6, $7)`, [i, header + c, c, script ? 15 : 14, script, script ? Buffer.from(c, 'hex') : null, `v${i}`]);
@@ -184,4 +186,22 @@ test('all three targets reached: the sample is the prefix up to k_all, prevalenc
   for (const r of random) assert.equal(r.prevalence_member, Number(r.draw_rank) <= kA);
   assert.equal(random.filter((r) => r.prevalence_member).length, 4, 'prevalence members are the first four token-holding wallets');
   assert.equal(random.length > 4, kAll > kA);
+});
+
+test('flow stage 1 counts only credentials with an output at or before the snapshot', async () => {
+  const { db, runBlock, rows } = await freshDb();
+  await fixture(db, 12);
+  // Credentials 13 and 14 exist in stake_address but are first seen after the
+  // snapshot (transaction 2, the snapshot being transaction 1); 15 has an
+  // output at the snapshot transaction itself.
+  for (const i of [13, 14, 15]) {
+    const c = credHex(i);
+    await db.query(`INSERT INTO study.cred VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), 14, 0, false, NULL, $4)`, [i, 'e0' + c, c, `v${i}`]);
+    await db.query(`INSERT INTO public.tx_out VALUES ($1, $2, $1)`, [i, i === 15 ? 1 : 2]);
+  }
+  const p = params();
+  await runBlock('frame', p);
+  await runBlock('flow', p);
+  const [s1] = await rows(`SELECT n_in, n_out FROM study.flow WHERE frame = 'recent' AND stage_no = 1`);
+  assert.equal(Number(s1.n_in), 13, 'twelve fixture credentials and the one at the snapshot, not the two after it');
 });

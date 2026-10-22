@@ -103,7 +103,14 @@ ANALYZE study.frame;
 -- @outputs study.flow
 DROP TABLE IF EXISTS study.flow;
 CREATE TABLE study.flow AS
-WITH n0 AS (SELECT count(*) AS n FROM study.cred),
+WITH n0 AS (
+  -- Stake credentials with at least one output at or before the snapshot.
+  -- stake_address has no tx_id, so a credential's first appearance is read
+  -- from tx_out, bounded by transaction ID like every other step.
+  SELECT count(*) AS n
+    FROM study.cred c
+   WHERE EXISTS (SELECT 1 FROM public.tx_out o WHERE o.stake_address_id = c.sa_id AND o.tx_id <= {{snap_tx}}::bigint)
+),
 st AS (
   SELECT fr.frame,
          (SELECT n FROM n0) AS n0,
