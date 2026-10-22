@@ -92,7 +92,13 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.deepEqual(strip(b.manifest), strip(a.manifest));
 
     // The flow table adds up stage by stage.
-    const nCred = Number((await c.query('SELECT count(*) AS n FROM study.cred')).rows[0].n);
+    // Stage 1 starts from the credentials with an output at or before the
+    // snapshot block, counted here from db-sync's own tables by block.
+    const nCred = Number((await c.query(
+      `SELECT count(*) AS n FROM study.cred c
+        WHERE EXISTS (SELECT 1 FROM public.tx_out o JOIN public.tx t ON t.id = o.tx_id
+                       WHERE o.stake_address_id = c.sa_id AND t.block_id <= $1)`,
+      [b.report.snapshot.id])).rows[0].n);
     for (const frame of ['recent', 'peak']) {
       const f = b.report.flow.filter((r) => r.frame === frame).sort((x, y) => x.stage_no - y.stage_no);
       assert.equal(f.length, 7);
