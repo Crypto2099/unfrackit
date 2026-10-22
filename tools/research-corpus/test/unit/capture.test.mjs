@@ -2,13 +2,14 @@
 // Copyright 2026 Adam K. Dean
 
 // capture-strata against a fake CoinGecko and a fake token registry: the
-// exclusions (ADA, stablecoins, bridged or wrapped, rulings, no Cardano asset,
-// the named tokens), the three forms of CoinGecko's Cardano contract (policy
-// and name, policy alone, CIP-14 fingerprint), the registry cross-check, and
-// the provenance (endpoint, Date header, SHA-256 of the raw ranking). Registry
-// file names in upper-case hex and tickers with stray spaces still match. BLAKE2b
-// against Node's 64-byte BLAKE2b and the CIP-14 test vectors
-// (cardano-foundation/CIPs@befcdb75, CIP-0014, "Test Vectors").
+// exclusions (ADA, stablecoins, bridged or wrapped by category or by an
+// asset_platform_id other than cardano, rulings, Cardano-first rulings, no
+// Cardano asset, the named tokens), the three forms of CoinGecko's Cardano
+// contract (policy and name, policy alone, CIP-14 fingerprint), the registry
+// cross-check, and the provenance (endpoint, Date header, SHA-256 of the raw
+// ranking). Registry file names in upper-case hex and tickers with stray
+// spaces still match. BLAKE2b against Node's 64-byte BLAKE2b and the CIP-14
+// test vectors (cardano-foundation/CIPs@befcdb75, CIP-0014, "Test Vectors").
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -58,7 +59,7 @@ test('resolving a contract to a registry subject', () => {
 });
 
 test('capture-strata against fakes: candidates in order, every exclusion with its reason, the provenance', async () => {
-  const coin = (id, symbol, name, contract, categories = ['Cardano Ecosystem']) => ({ id, symbol, name, contract, categories });
+  const coin = (id, symbol, name, contract, categories = ['Cardano Ecosystem'], platform = 'cardano') => ({ id, symbol, name, contract, categories, platform });
   const coins = [
     coin('cardano', 'ada', 'Cardano', null),
     coin('alpha', 'alp', 'Alpha', P('a1') + '414c50'),
@@ -72,7 +73,9 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     coin('zeta', 'zet', 'Zeta', P('f1') + '01'),
     coin('ruled', 'rul', 'Ruled', P('99') + '01'),
     coin('eta', 'eta', 'Eta', P('e2') + '01'),
-    coin('theta', 'the', 'Theta', P('e3') + '4142')
+    coin('theta', 'the', 'Theta', P('e3') + '4142'),
+    coin('bridgy', 'brg', 'Bridgy', P('b9') + '01', ['Cardano Ecosystem'], 'ethereum'),
+    coin('cardfirst', 'cf', 'Cardano First', P('c9') + '01', ['Cardano Ecosystem'], 'base')
   ];
   const registry = new Map([
     [P('a1') + '414c50', { ticker: 'ALP', name: 'Alpha' }],
@@ -81,6 +84,8 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     [P('e1') + '01', { ticker: 'OTHER', name: 'Other' }],
     [P('e2') + '01', { ticker: 'ETX', name: 'eta' }],
     [P('e3') + '4142', { ticker: 'THE ', name: 'Theta', file: P('E3') + '4142' }],
+    [P('b9') + '01', { ticker: 'BRG', name: 'Bridgy' }],
+    [P('c9') + '01', { ticker: 'CF', name: 'Cardano First' }],
     [HOSKY.policy + HOSKY.asset_name, { ticker: 'HOSKY', name: 'HOSKY Token' }]
   ]);
   const marketsText = JSON.stringify(coins.map((c, i) => ({ id: c.id, symbol: c.symbol, name: c.name, market_cap: 1000 - i, market_cap_rank: i + 1 })));
@@ -98,18 +103,22 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     const id = decodeURIComponent(/\/coins\/([^?]+)\?/.exec(url)[1]);
     if (id === 'alpha' && calls429++ === 0) return { ...reply('', 429), headers: { get: (h) => (h === 'retry-after' ? '0.01' : null) } };
     const c = coins.find((x) => x.id === id);
-    return reply(JSON.stringify({ id, categories: c.categories, detail_platforms: c.contract ? { cardano: { contract_address: c.contract } } : {} }));
+    return reply(JSON.stringify({ id, asset_platform_id: c.platform, categories: c.categories, detail_platforms: c.contract ? { cardano: { contract_address: c.contract } } : {} }));
   };
   const named = [{ project: 'HOSKY', stratum: 'HOSKY', class: 'FT', policy: HOSKY.policy, asset_name: HOSKY.asset_name, nft_top_exclude: false }];
-  const doc = await captureStrata({ named, exclusions: [{ coingecko_id: 'ruled', reason: 'bridged: its Cardano token is a bridge copy', source: 'a ruling' }], maxCandidates: 40, spacingMs: 0, fetchImpl, now: () => new Date('2026-10-21T20:00:00Z') });
+  const rulings = { exclusions: [{ coingecko_id: 'ruled', reason: 'bridged: its Cardano token is a bridge copy', source: 'a ruling' }], cardano_first: [{ coingecko_id: 'cardfirst', reason: 'first issued on Cardano', source: 'a ruling' }] };
+  const doc = await captureStrata({ named, rulings, maxCandidates: 40, spacingMs: 0, fetchImpl, now: () => new Date('2026-10-21T20:00:00Z') });
   assert.equal(doc.format, 'research-corpus-strata-v2');
   assert.deepEqual(doc.candidates.map((c) => [c.rank, c.coingecko_id, c.resolved_by, c.registry.match]), [
     [1, 'alpha', 'coingecko contract', 'ticker'],
     [2, 'beta', 'registry: the only subject under the policy', 'ticker'],
     [3, 'delta', 'registry: CIP-14 fingerprint', 'ticker'],
     [4, 'eta', 'coingecko contract', 'name'],
-    [5, 'theta', 'coingecko contract', 'ticker']
+    [5, 'theta', 'coingecko contract', 'ticker'],
+    [6, 'cardfirst', 'coingecko contract', 'ticker']
   ]);
+  assert.equal(doc.candidates[5].cardano_first.reason, 'first issued on Cardano');
+  assert.deepEqual(doc.provenance.rulings, rulings);
   assert.equal(doc.candidates[1].asset_name, '424554');
   const reasons = Object.fromEntries(doc.excluded.map((e) => [e.coingecko_id, e.reason]));
   assert.equal(reasons.cardano, 'ADA itself');
@@ -120,6 +129,7 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
   assert.match(reasons.eps, /token registry: ticker OTHER/);
   assert.match(reasons.zeta, /no mapping/);
   assert.match(reasons.ruled, /bridge copy/);
+  assert.match(reasons.bridgy, /bridged: CoinGecko asset_platform_id is ethereum/);
   assert.equal(doc.provenance.coingecko.ranking[0].sha256, createHash('sha256').update(marketsText).digest('hex'));
   assert.equal(doc.provenance.coingecko.ranking[0].response_date, 'Wed, 21 Oct 2026 20:00:00 GMT');
   assert.match(doc.provenance.coingecko.ranking[0].endpoint, /category=cardano-ecosystem&order=market_cap_desc/);

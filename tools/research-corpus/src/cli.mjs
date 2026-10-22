@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-import { readFileSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, realpathSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { initSecret } from './hmac.mjs';
-import { runPipeline, cleanupRun, DEFAULT_STRATA } from './pipeline.mjs';
+import { runPipeline, cleanupRun, DEFAULT_STRATA, DEFAULT_RULINGS } from './pipeline.mjs';
 import { formatHashList, hashList, codeVersion } from './hash.mjs';
 import { loadAll } from './sqlfile.mjs';
 import { connect, dbMeta, q } from './db.mjs';
@@ -15,9 +15,11 @@ import { a1Compare } from './a1.mjs';
 import { project, rowsFromHealth } from './project.mjs';
 import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { FIXED } from './params.mjs';
-import { verifyFinalFreeze, drawKey } from './freeze.mjs';
+import { verifyFinalFreeze, drawKey, readTx, signedBy } from './freeze.mjs';
 import { codeManifestErrors, NODE_MAJOR } from './guards.mjs';
-import { appendEntry, verifyLog, sanitize } from './checklog.mjs';
+import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath } from './checklog.mjs';
+import { commitConsented } from './consented.mjs';
+import { sha256hex } from './freeze.mjs';
 import { Koios } from './koios.mjs';
 import { captureStrata } from './strata-capture.mjs';
 
@@ -32,8 +34,12 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --prereg <file>             the final pre-registration, as frozen
       --study-key <hex>           the freeze identity's signing public key (32 bytes)
       --code-manifest <file>      the \`npm run hash\` output frozen with the final freeze (mainnet)
+      --drawkey <file>            the freeze tool's drawkey.json for the final freeze (mainnet)
+      --consented-sha256 <hex>    the consented file's salted commitment frozen with the final freeze (mainnet)
+      --consented-salt <file>     the salt (default <consented file>.salt)
       --stand-in-tx <tx hash>     test networks: a transaction whose block's epoch rule stands in for the freeze's
-      --live-fire                 a pre-freeze check run (any network): needs --test-h and --purpose
+      --live-fire                 a pre-freeze check run (any network): needs --test-h, --purpose and
+                                  --expect-network; on mainnet also --hypotheses-tx and --study-key
       --test-h <hex>              the stated test value of h for a live-fire run (32 bytes)
       --purpose <text>            what the live-fire run checks; written to the check log
       --keep-for-debug            keep a live-fire run's study tables (wallet-level output) after it ends
@@ -52,18 +58,23 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --temp-tablespaces <names>  temporary tablespaces with room for twice the study tables
   verify-freeze --freeze-tx --hypotheses-tx --prereg --study-key
                                   check the final freeze record and print the draw key once its epoch has started
-  cleanup --run-id <id>           drop a live-fire run's study tables and work directory; logged in the check log
+  cleanup --run-id <id>           drop a live-fire run's study tables and work directory, or an a1 live-fire
+                                  run's work directory; logged in the check log
+  consented-commit --consented <file> [--consented-salt <file>]
+                                  make the salt next to the consented file once (0600, never printed) and print
+                                  SHA-256(salt || file) for the final freeze
   check-log verify --network <n>  check the log's sequence and digest chain; list kept outputs not cleaned up
   check-log fix --network <n> --finding <text> --commit <sha> [--entry <seq>]
                                   log a fix made after a live-fire finding
-  capture-strata [--out <file>] [--named-from <file>] [--exclusions <file>] [--own-sources <file>]
+  capture-strata [--out <file>] [--named-from <file>] [--rulings <file>] [--own-sources <file>]
                  [--max-candidates 40] [--spacing-ms 15000]
                                   read CoinGecko's Cardano Ecosystem ranking and the token registry; write the
                                   strata file's candidate list (default: data/strata-mainnet.json)
   confirm-snapshot --run-id <id>  the snapshot hash is still on chain, ${FIXED.security_k} or more blocks later
   a1 [--from-run <id> --count 20 --node-count 5] [--stake <addr> ...] [--node-stake <addr> ...]
      [--node-container <name> --node-socket <path> --magic <n>]
-     mainnet: --live-fire --purpose <text> [--keep-for-debug], or the final freeze options of run
+     mainnet: --live-fire --purpose <text> --expect-network mainnet --hypotheses-tx --study-key
+     [--keep-for-debug], or the final freeze options of run
                                   compare UTxO sets with Koios and the node at the database tip; --from-run
                                   takes the first credentials of a run's recent-frame draw order
   health                          the table sizes of health.sql, as JSON (allowed on any network)
@@ -113,9 +124,20 @@ async function a1Gate(c, blocks, meta, a) {
   const errs = codeManifestErrors(readFileSync(a.codeManifest, 'utf8'), hashList());
   if (errs.length) throw new Error(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
   const tip = (await q(c, blocks, 'tip_block'))[0];
-  const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: a.freezeTx, hypothesesTx: a.hypothesesTx, preregPath: a.prereg, studyKey: a.studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no) });
+  const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: lower(a.freezeTx), hypothesesTx: lower(a.hypothesesTx), preregPath: a.prereg, studyKey: lower(a.studyKey), codeDigests: hashList(), tipBlockNo: Number(tip.block_no), ...finalChecks(a, meta.network) });
   if (!v.ok) throw new Error(`refusing the freeze transaction: ${v.checks.filter((x) => !x.ok).map((x) => x.name).join(', ')}`);
 }
+
+// The run-time digests the final record must carry, and the check log.
+function finalChecks(a, network) {
+  const requiredItems = [];
+  if (a.codeManifest) requiredItems.push({ name: 'code_manifest', sha256: sha256hex(readFileSync(a.codeManifest)) });
+  if (a.consentedSha256) requiredItems.push({ name: 'consented_commitment', sha256: lower(a.consentedSha256) });
+  const checkLogText = network === 'mainnet' ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
+  return { requiredItems, checkLogText };
+}
+
+const codeFacts = () => (({ git_commit, git_dirty, node }) => ({ git_commit, git_dirty, node }))(codeVersion());
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -139,6 +161,9 @@ async function main() {
         prereg: a.prereg,
         studyKey: lower(a.studyKey),
         codeManifest: a.codeManifest,
+        drawkey: a.drawkey,
+        consentedSha256: lower(a.consentedSha256),
+        consentedSalt: a.consentedSalt,
         standInTx: lower(a.standInTx),
         liveFire: a.liveFire ? { testH: lower(a.testH), purpose: a.purpose, keep: !!a.keepForDebug } : null,
         explain: !!a.explain,
@@ -167,18 +192,20 @@ async function main() {
       const c = await connect(dbOpts(a));
       try {
         const meta = await dbMeta(c, blocks);
-        const tip = (await q(c, blocks, 'tip_block'))[0];
-        const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: a.freezeTx, hypothesesTx: a.hypothesesTx, preregPath: a.prereg, studyKey: a.studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no) });
-        let draw = null;
-        if (v.freezeBlock) {
-          try {
-            draw = await drawKey({ client: c, blocks, network: meta.network, block: v.freezeBlock, koios: new Koios(meta.network) });
-          } catch (e) {
-            draw = { error: e.message };
+        await loggedQuery(meta.network, 'verify-freeze', { command, code: codeFacts() }, async () => {
+          const tip = (await q(c, blocks, 'tip_block'))[0];
+          const v = await verifyFinalFreeze({ client: c, blocks, freezeTx: lower(a.freezeTx), hypothesesTx: lower(a.hypothesesTx), preregPath: a.prereg, studyKey: lower(a.studyKey), codeDigests: hashList(), tipBlockNo: Number(tip.block_no), ...finalChecks(a, meta.network) });
+          let draw = null;
+          if (v.freezeBlock) {
+            try {
+              draw = await drawKey({ client: c, blocks, network: meta.network, block: v.freezeBlock, koios: new Koios(meta.network), txHash: v.freeze.tx, drawkeyFile: a.drawkey || null });
+            } catch (e) {
+              draw = { error: e.message };
+            }
           }
-        }
-        console.log(JSON.stringify({ network: meta.network, ok: v.ok, checks: v.checks, document: v.document, freeze: v.freeze, hypotheses: v.hypotheses, draw }, null, 2));
-        if (!v.ok) process.exitCode = 2;
+          console.log(JSON.stringify({ network: meta.network, ok: v.ok, checks: v.checks, document: v.document, freeze: v.freeze, hypotheses: v.hypotheses, draw }, null, 2));
+          if (!v.ok) process.exitCode = 2;
+        });
       } finally {
         await c.end();
       }
@@ -187,6 +214,12 @@ async function main() {
     case 'cleanup': {
       if (!a.runId) throw new Error('--run-id is required');
       console.log(JSON.stringify(await cleanupRun({ db: dbOpts(a), runId: a.runId, command }), null, 2));
+      return;
+    }
+    case 'consented-commit': {
+      if (!a.consented) throw new Error('--consented <file> is required');
+      const r = commitConsented(a.consented, a.consentedSalt);
+      console.log(`${r.sha256}  consented commitment${r.made ? ` (salt made now at ${r.salt_path}, mode 0600)` : ` (salt at ${r.salt_path})`}`);
       return;
     }
     case 'check-log': {
@@ -207,7 +240,7 @@ async function main() {
       const named = JSON.parse(readFileSync(a.namedFrom || DEFAULT_STRATA, 'utf8')).named;
       const doc = await captureStrata({
         named,
-        exclusions: a.exclusions ? JSON.parse(readFileSync(a.exclusions, 'utf8')) : [],
+        rulings: JSON.parse(readFileSync(a.rulings || DEFAULT_RULINGS, 'utf8')),
         ownSources: a.ownSources ? JSON.parse(readFileSync(a.ownSources, 'utf8')) : {},
         maxCandidates: Number(a.maxCandidates || 40),
         spacingMs: Number(a.spacingMs || 15000),
@@ -224,15 +257,23 @@ async function main() {
       const c = await connect(dbOpts(a));
       try {
         const meta = await dbMeta(c, blocks);
-        const p = (await c.query("SELECT value FROM study.param WHERE run_id = $1 AND key = 'snapshot'", [a.runId])).rows[0];
-        if (!p) throw new Error(`no snapshot recorded for run ${a.runId}`);
-        const r = (await q(c, blocks, 'confirm_snapshot', { snap_hash: { type: 'bytea', value: p.value.hash } }))[0];
-        const depth = r.snap_block_no === null ? null : Number(r.tip_block_no) - Number(r.snap_block_no);
-        const result = { run_id: a.runId, snapshot: p.value, on_chain: r.snap_block_no !== null, depth, required: FIXED.security_k, confirmed: r.snap_block_no !== null && depth >= FIXED.security_k, checked_at: new Date().toISOString() };
-        writeJson(join(runDir(meta.network, a.runId), 'confirm-snapshot.json'), result);
-        console.log(JSON.stringify(result, null, 2));
-        if (!result.on_chain) process.exitCode = 2;
-        else if (!result.confirmed) process.exitCode = 3;
+        await loggedQuery(meta.network, 'confirm-snapshot', { run_id: a.runId, command, code: codeFacts() }, async () => {
+          const p = (await c.query("SELECT value FROM study.param WHERE run_id = $1 AND key = 'snapshot'", [a.runId])).rows[0];
+          if (!p) throw new Error(`no snapshot recorded for run ${a.runId}`);
+          const r = (await q(c, blocks, 'confirm_snapshot', { snap_hash: { type: 'bytea', value: p.value.hash } }))[0];
+          const depth = r.snap_block_no === null ? null : Number(r.tip_block_no) - Number(r.snap_block_no);
+          const result = { run_id: a.runId, snapshot: p.value, on_chain: r.snap_block_no !== null, depth, required: FIXED.security_k, confirmed: r.snap_block_no !== null && depth >= FIXED.security_k, checked_at: new Date().toISOString() };
+          // Recorded with the run: a later study run may start only when this
+          // run's snapshot was found rolled back.
+          await c.query(
+            "INSERT INTO study.param (run_id, key, value) VALUES ($1, 'confirm_snapshot', $2::jsonb) ON CONFLICT (run_id, key) DO UPDATE SET value = EXCLUDED.value",
+            [a.runId, JSON.stringify(result)]
+          );
+          writeJson(join(runDir(meta.network, a.runId), 'confirm-snapshot.json'), result);
+          console.log(JSON.stringify(result, null, 2));
+          if (!result.on_chain) process.exitCode = 2;
+          else if (!result.confirmed) process.exitCode = 3;
+        });
       } finally {
         await c.end();
       }
@@ -240,15 +281,25 @@ async function main() {
     }
     case 'a1': {
       const blocks = loadAll();
-      const c = await connect(dbOpts(a));
       const t0 = performance.now();
+      const runId = a.runId || `a1-${new Date().toISOString().replace(/[:.]/g, '')}`;
+      // A live-fire a1 is logged before its first query, like a live-fire run.
+      let start = null;
+      if (a.liveFire) {
+        if (!(a.purpose || '').trim()) throw refuse('refusing: a live-fire a1 needs --purpose');
+        if (!a.expectNetwork) throw refuse('refusing: a live-fire a1 needs --expect-network, so that its check-log entry is written before the first query');
+        start = appendEntry(a.expectNetwork, 'a1-live-fire-start', { run_id: runId, command, purpose: a.purpose, code: codeFacts() });
+      }
+      let c = null;
       let meta = null;
       let error = null;
       let r = null;
-      const runId = a.runId || `a1-${new Date().toISOString().replace(/[:.]/g, '')}`;
-      try {
-        meta = await dbMeta(c, blocks);
-        if (a.liveFire && !(a.purpose || '').trim()) throw new Error('refusing: a live-fire a1 needs --purpose');
+      const body = async () => {
+        if (a.liveFire && meta.network === 'mainnet') {
+          if (!/^[0-9a-f]{64}$/.test(lower(a.hypothesesTx) || '') || !/^[0-9a-f]{64}$/.test(lower(a.studyKey) || '')) throw refuse('refusing: a mainnet live-fire a1 needs --hypotheses-tx and --study-key (the hypotheses freeze comes first)');
+          const hyp = await readTx(c, blocks, lower(a.hypothesesTx));
+          if (!hyp || !signedBy(hyp, lower(a.studyKey))) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
+        }
         await a1Gate(c, blocks, meta, a);
         const node = a.nodeContainer ? { container: a.nodeContainer, socket: a.nodeSocket || '/ipc/node.socket', magic: a.magic || (meta.network === 'mainnet' ? 'mainnet' : '1') } : null;
         let views = a.stake;
@@ -267,34 +318,46 @@ async function main() {
           views = [...views, ...rows.rows.map((x) => x.view)];
           nodeViews = [...nodeViews, ...rows.rows.slice(0, m).map((x) => x.view)];
         }
-        r = await a1Compare({ client: c, blocks, network: meta.network, views, nodeViews, node, log: a.liveFire ? () => {} : (s) => process.stderr.write(s + '\n') });
+        r = await a1Compare({ client: c, blocks, network: meta.network, views, nodeViews, node, log: a.liveFire ? () => {} : (x) => process.stderr.write(x + '\n') });
         if (!a.liveFire) console.log(JSON.stringify(r, null, 2));
+      };
+      try {
+        c = await connect(dbOpts(a));
+        meta = await dbMeta(c, blocks);
+        if (a.expectNetwork && a.expectNetwork !== meta.network) throw refuse(`refusing: database is ${meta.network}, expected ${a.expectNetwork}`);
+        if (a.liveFire) await body();
+        else await loggedQuery(meta.network, 'a1', { run_id: runId, command, code: codeFacts() }, body);
       } catch (e) {
         error = e;
       } finally {
-        await c.end();
+        if (c) await c.end();
       }
-      if (a.liveFire && meta) {
+      if (start) {
         // Wallet-level output (the UTxO lines that differ) goes to the run's
         // work directory, removed unless kept; the log gets outcomes only.
-        const work = join(runDir(meta.network, runId), 'work');
+        const work = join(runDir(a.expectNetwork, runId), 'work');
         let outputs = 'none written';
         if (r) {
           writePrivate(join(work, 'a1.json'), JSON.stringify(r, null, 2) + '\n');
           outputs = 'kept for debugging';
           if (!a.keepForDebug) {
-            rmSync(work, { recursive: true, force: true });
-            outputs = `deleted ${new Date().toISOString()}`;
+            try {
+              rmSync(work, { recursive: true, force: true });
+              outputs = `deleted ${new Date().toISOString()}`;
+            } catch (e) {
+              outputs = `deletion failed: ${sanitizeError(e)}`;
+            }
           }
         }
         const results = r ? r.results.map((x) => ({ koios: x.error ? 'error' : x.koios.equal ? 'equal' : x.koios.explained_by_later_txs ? 'explained' : 'differs', node: x.node ? (x.node.equal ? 'equal' : x.node.explained_by_later_txs ? 'explained' : 'differs') : null })) : [];
-        const entry = appendEntry(meta.network, 'a1-live-fire', {
+        const entry = appendEntry(a.expectNetwork, 'a1-live-fire', {
           run_id: runId,
+          start_seq: start.seq,
           command,
           purpose: a.purpose,
-          code: (({ git_commit, git_dirty, node }) => ({ git_commit, git_dirty, node }))(codeVersion()),
+          code: codeFacts(),
           outcome: error ? 'failed' : 'succeeded',
-          error: error ? sanitize(error.message) : null,
+          error: error ? sanitizeError(error) : null,
           run_ms: Math.round(performance.now() - t0),
           credentials_compared: results.length,
           results,
@@ -302,16 +365,19 @@ async function main() {
         });
         console.log(JSON.stringify(entry, null, 2));
       }
-      if (error) throw a.liveFire ? new Error(sanitize(error.message)) : error;
+      if (error) throw a.liveFire ? new Error(sanitizeError(error)) : error;
       return;
     }
     case 'health': {
       const c = await connect(dbOpts(a));
       try {
-        const r = await c.query(`SELECT c.relname, c.reltuples::bigint AS approx_rows, pg_total_relation_size(c.oid) AS bytes
-                                   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                                  WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY c.relname`);
-        console.log(JSON.stringify(r.rows.map((x) => ({ relname: x.relname, approx_rows: Number(x.approx_rows), bytes: Number(x.bytes) })), null, 2));
+        const meta = await dbMeta(c, loadAll());
+        await loggedQuery(meta.network, 'health', { command, code: codeFacts() }, async () => {
+          const r = await c.query(`SELECT c.relname, c.reltuples::bigint AS approx_rows, pg_total_relation_size(c.oid) AS bytes
+                                     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                                    WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY c.relname`);
+          console.log(JSON.stringify(r.rows.map((x) => ({ relname: x.relname, approx_rows: Number(x.approx_rows), bytes: Number(x.bytes) })), null, 2));
+        });
       } finally {
         await c.end();
       }

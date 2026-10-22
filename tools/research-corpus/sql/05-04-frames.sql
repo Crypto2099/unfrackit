@@ -17,12 +17,14 @@
 --   4 at least one UTxO at the snapshot (recent only; the removed count is the
 --     number emptied during the window)
 --   5 more than 20,000 UTxOs at the reference block
---   6 more than 200 distinct payment credentials (counted as x12_history says)
+--   6 more than 200 distinct key payment credentials (counted as x12_history
+--     says; script payment credentials are contracts the wallet used, decided
+--     2026-10-21)
 --   7 more than half of the lovelace at script payment credentials
 -- Eligible wallets with more than 5,000 transactions in the window are counted,
--- not removed. Beside stage 6, the report counts the removals that would stay
--- under the cap if only key payment credentials were counted (n_pay_key):
--- heavy users of per-user script addresses are removed by the cap as read.
+-- not removed. Beside stage 6, the report counts the wallets the cap would
+-- have removed had it counted script payment credentials too (n_pay), which
+-- it keeps: heavy users of per-user script addresses.
 --
 -- Token-holding: at least one native asset at the snapshot (recent) or at the
 -- peak window's start or end (peak); held UTxOs count (x9_count_held). The
@@ -75,7 +77,7 @@ g AS (
          EXISTS (SELECT 1 FROM study.consented k WHERE k.sa_id = f.sa_id) AS consented,
          (f.frame <> 'recent' OR f.n_utxo >= 1) AS s4,
          (f.n_utxo <= {{utxo_cap}}) AS s5,
-         (f.n_pay <= {{pay_cred_cap}}) AS s6,
+         (f.n_pay_key <= {{pay_cred_cap}}) AS s6,
          NOT (f.lovelace_script_pay > {{script_share}} * f.lovelace_all) AS s7,
          (f.n_assets_a >= 1 OR f.n_assets_b >= 1) AS tok,
          (f.n_spends >= {{spends_b_min}}) AS ge5,
@@ -126,7 +128,7 @@ SELECT st.frame, v.stage_no, v.stage, v.n_in, v.n_in - v.n_out AS n_removed, v.n
    (3, 'consented keys removed', st.n2, st.n3),
    (4, 'no UTxO at the snapshot (recent frame only)', st.n3, st.n4),
    (5, 'more than 20,000 UTxOs at the reference block', st.n4, st.n5),
-   (6, 'more than 200 distinct payment credentials', st.n5, st.n6),
+   (6, 'more than 200 distinct key payment credentials', st.n5, st.n6),
    (7, 'more than half of the lovelace at script payment credentials', st.n6, st.n7),
    (8, 'eligible', st.n7, st.n7)
  ) v(stage_no, stage, n_in, n_out)
@@ -148,6 +150,6 @@ SELECT frame,
        count(*) FILTER (WHERE consented AND eligible_unless_consented) AS consented_otherwise_eligible,
        count(*) FILTER (WHERE eligible AND n_spends_key <> n_spends_any) AS eligible_x2_differs,
        count(*) FILTER (WHERE NOT is_script AND NOT consented AND frame = 'recent' AND NOT s4) AS emptied_during_window,
-       count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5 AND NOT s6
-                          AND n_pay_key <= {{pay_cred_cap}}) AS s6_removed_by_script_creds_only
+       count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5 AND s6
+                          AND n_pay > {{pay_cred_cap}}) AS s6_kept_by_key_count
   FROM study.frame GROUP BY frame ORDER BY frame DESC;

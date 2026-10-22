@@ -1,0 +1,12 @@
+{
+  "note": "Rulings on the CoinGecko candidates of part 2 of the strata rule, read by capture-strata. An exclusion removes a coin whatever CoinGecko's data say; a Cardano-first ruling keeps a coin whose CoinGecko asset_platform_id is another chain, because its Cardano token is the original issuance.",
+  "exclusions": [
+    { "coingecko_id": "fetch-ai", "reason": "bridged: the Cardano FET token is a bridge copy of a token first issued on Ethereum", "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/fetch-ai gives asset_platform_id ethereum" },
+    { "coingecko_id": "singularitynet", "reason": "bridged: the Cardano AGIX token is a bridge copy of a token first issued on Ethereum", "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/singularitynet gives asset_platform_id ethereum" },
+    { "coingecko_id": "nunet", "reason": "bridged: the Cardano NTX token is a bridge copy of a token first issued on Ethereum", "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/nunet gives asset_platform_id ethereum" },
+    { "coingecko_id": "rejuve-ai", "reason": "bridged: the Cardano RJV token is a bridge copy of a token first issued on another chain", "source": "ruling by Adam K. Dean, 2026-10-21" }
+  ],
+  "cardano_first": [
+    { "coingecko_id": "world-mobile-token", "reason": "WMTX was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding", "source": "ruling by Adam K. Dean, 2026-10-21" }
+  ]
+}

@@ -94,39 +94,33 @@ SELECT frame, k_all, k_a, k_ada, k_max, k_stop, k_prevalence, n_eligible, guard_
        (SELECT count(*) FROM study.sample x WHERE x.frame = s.frame AND x.kind = 'ada_only') AS n_ada_only
   FROM study.draw_summary s ORDER BY frame DESC;
 
--- The consented keys stay private, so an outsider's reproduction of the draw
--- includes them where they would have been eligible. Published beside the
--- count removed: how many of them, had they not been removed, would sit inside
--- each sample's drawn prefix (draw_key at or below the key of the last
--- position taken), so a reproduction can differ only by those keys.
--- @query consented_in_prefix
-WITH b AS (
-  SELECT s.frame,
-         (SELECT d.draw_key FROM study.draw_order d WHERE d.frame = s.frame AND d.k = s.k_stop) AS random_bound,
-         (SELECT d.draw_key FROM study.draw_order d JOIN study.sample x ON x.frame = d.frame AND x.sa_id = d.sa_id AND x.kind = 'ada_only'
-           WHERE d.frame = s.frame ORDER BY d.k DESC LIMIT 1) AS ada_bound
-    FROM study.draw_summary s
-)
-SELECT b.frame,
-       count(f.sa_id) FILTER (WHERE f.tok AND f.draw_key <= b.random_bound) AS random_prefix,
-       count(f.sa_id) FILTER (WHERE NOT f.tok AND f.draw_key <= b.ada_bound) AS ada_only_prefix
-  FROM b LEFT JOIN study.frame f ON f.frame = b.frame AND f.consented AND f.eligible_unless_consented
- GROUP BY b.frame ORDER BY b.frame DESC;
-
 -- The bound of every sample, for an outsider's reproduction: the draw key of
--- the last wallet taken, and how many consented keys (eligible but for their
--- removal, and of the sample's kind) have a draw key at or below it. A
--- reproduction that takes every eligible key of the kind up to the bound, in
--- draw order and with the same skipping, differs from the published sample by
--- at most that many wallets. For a stratum, a consented key counts if it
--- holds the stratum's assets at the frame's points, as fill_strata reads them.
+-- the last wallet taken. A reproduction takes every eligible key of the
+-- sample's kind up to the bound, in draw order and with the same skipping.
 -- @query sample_bounds
 WITH g AS (
   SELECT frame, kind, stratum, count(*) AS n, max(draw_rank) AS last_k
     FROM study.sample GROUP BY frame, kind, stratum
+)
+SELECT g.frame, g.kind, g.stratum, g.n, encode(d.draw_key, 'hex') AS bound
+  FROM g JOIN study.draw_order d ON d.frame = g.frame AND d.k = g.last_k
+ ORDER BY g.frame DESC, g.kind, g.stratum;
+
+-- The consented keys stay private, so an outsider's reproduction includes
+-- them where they would have been eligible. Published beside the count
+-- removed: how many of them, had they not been removed, would sit at or below
+-- a sample's bound and be of its kind (token-holding for the random sample,
+-- ADA-only for the ADA-only sample, holding a stratum's assets at the frame's
+-- points for a stratum), per frame for the random sample, the ADA-only sample
+-- and all strata combined (each key counted once), never per stratum, so the
+-- counts do not say which projects the keys hold. A reproduction then differs
+-- from the published samples by at most these numbers.
+-- @query consented_in_bounds
+WITH g AS (
+  SELECT frame, kind, stratum, max(draw_rank) AS last_k FROM study.sample GROUP BY frame, kind, stratum
 ),
 b AS (
-  SELECT g.frame, g.kind, g.stratum, g.n, d.draw_key AS bound
+  SELECT g.frame, g.kind, g.stratum, d.draw_key AS bound
     FROM g JOIN study.draw_order d ON d.frame = g.frame AND d.k = g.last_k
 ),
 pts AS (
@@ -147,12 +141,17 @@ cons_holds AS (
                            AND (NOT l.nft_only OR coalesce(s.label NOT IN (333, 444), true))
    WHERE (t.created_tx <= p.t1 AND (t.consumed_tx IS NULL OR t.consumed_tx > p.t1))
       OR (t.created_tx <= p.t2 AND (t.consumed_tx IS NULL OR t.consumed_tx > p.t2))
+),
+hit AS (
+  SELECT DISTINCT b.frame, CASE b.kind WHEN 'stratum' THEN 'strata' ELSE b.kind END AS part, c.sa_id
+    FROM b JOIN cons c ON c.frame = b.frame AND c.draw_key <= b.bound
+   WHERE CASE b.kind WHEN 'random' THEN c.tok
+                     WHEN 'ada_only' THEN NOT c.tok
+                     ELSE EXISTS (SELECT 1 FROM cons_holds h WHERE h.frame = c.frame AND h.sa_id = c.sa_id AND h.stratum = b.stratum) END
 )
-SELECT b.frame, b.kind, b.stratum, b.n, encode(b.bound, 'hex') AS bound,
-       (SELECT count(*) FROM cons c
-         WHERE c.frame = b.frame AND c.draw_key <= b.bound
-           AND CASE b.kind WHEN 'random' THEN c.tok
-                           WHEN 'ada_only' THEN NOT c.tok
-                           ELSE EXISTS (SELECT 1 FROM cons_holds h
-                                         WHERE h.frame = c.frame AND h.sa_id = c.sa_id AND h.stratum = b.stratum) END) AS consented_at_or_below
-  FROM b ORDER BY b.frame DESC, b.kind, b.stratum;
+SELECT fr.frame,
+       (SELECT count(*) FROM hit WHERE hit.frame = fr.frame AND part = 'random') AS random,
+       (SELECT count(*) FROM hit WHERE hit.frame = fr.frame AND part = 'ada_only') AS ada_only,
+       (SELECT count(*) FROM hit WHERE hit.frame = fr.frame AND part = 'strata') AS strata
+  FROM (VALUES ('recent'::text), ('peak'::text)) fr(frame)
+ ORDER BY fr.frame DESC;

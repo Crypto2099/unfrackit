@@ -157,15 +157,22 @@ function headOf(sql) {
     .slice(0, 160);
 }
 
-// A plan with every row estimate, row count, width and cost removed: what is
-// left is the shape of the plan (node types, join methods, indexes, filters),
-// which is what a live-fire check needs, and no number derived from the data.
-const PLAN_NUMBERS = /Rows|Width|Cost|Loops|Blocks|Heap Fetches|Workers Launched|Time/;
+// A plan reduced to its shape: only the keys below are kept (node types,
+// relations and indexes, join and scan kinds, conditions, keys and outputs).
+// Everything else, row estimates, widths, costs, planned workers and
+// partitions, and the JIT and memory flags that follow cost thresholds, is
+// derived from planner estimates of the data, and is dropped.
+const PLAN_KEYS = new Set([
+  'Plan', 'Plans', 'Node Type', 'Parent Relationship', 'Subplan Name', 'Relation Name', 'Schema', 'Alias', 'Index Name',
+  'Join Type', 'Strategy', 'Partial Mode', 'Scan Direction', 'Operation', 'Command', 'CTE Name', 'Function Name',
+  'Hash Cond', 'Merge Cond', 'Join Filter', 'Filter', 'Index Cond', 'Recheck Cond', 'TID Cond', 'One-Time Filter',
+  'Group Key', 'Sort Key', 'Presorted Key', 'Output', 'Parallel Aware', 'Async Capable', 'Inner Unique', 'Single Copy'
+]);
 export function stripPlan(node) {
   if (Array.isArray(node)) return node.map(stripPlan);
   if (node && typeof node === 'object') {
     const out = {};
-    for (const [k, v] of Object.entries(node)) if (!PLAN_NUMBERS.test(k)) out[k] = stripPlan(v);
+    for (const [k, v] of Object.entries(node)) if (PLAN_KEYS.has(k)) out[k] = stripPlan(v);
     return out;
   }
   return node;

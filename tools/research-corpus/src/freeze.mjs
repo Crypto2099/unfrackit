@@ -21,7 +21,20 @@
 //     a transaction in an earlier block whose own record is signed by the same
 //     key and whose document is a different file. The hypotheses record is
 //     therefore refused as the final one: its document cannot cite itself;
-//   - its block is at least security_k (2,160) blocks below the snapshot.
+//   - its block is at least security_k (2,160) blocks below the snapshot;
+//   - its record carries no `supersedes`, and it is the first transaction on
+//     chain carrying the final record: no earlier transaction carries the
+//     document's digest in a label-674 message or the same label-309 record
+//     body. A signed record body can be republished by anyone in another
+//     transaction (CIP-190, "Security and Privacy Considerations", "Signature
+//     replay"), and a retyping successor carries the same items (CIP-190,
+//     "Supersedence"), so only "the first" names one transaction and one
+//     block. A copy cannot predate the hypotheses record, which the document
+//     cites, so the search runs from there;
+//   - for the study run, digests given at run time are items of the record:
+//     the code manifest, the consented file's salted commitment, and a prefix
+//     of the check log (the log as it stood at the final freeze; it only
+//     grows), whose first live-fire entry postdates the hypotheses block.
 //
 // The draw key h is the epoch nonce of epoch N, where E is the epoch of the
 // final freeze block: N = E + 1 if the block's slot is earlier than E's first
@@ -33,7 +46,9 @@
 // (protocol_major 9 or more), so any earlier era is refused. k, f and the
 // epoch length are the hashed constants of src/params.mjs, compared with
 // Koios /genesis. The nonce is read from epoch_param.nonce and from Koios
-// /epoch_params; the run refuses if N has not started or the readings differ.
+// /epoch_params, and on mainnet from the freeze tool's drawkey.json, which
+// records the readings of Koios and Blockfrost; the run refuses if N has not
+// started or any reading differs.
 // Its 32 bytes take the place of the block hash in the draw's byte encoding
 // (X5): SHA-256("draw" || nonce || 28-byte credential).
 //
@@ -87,7 +102,7 @@ export function parseRecord(body) {
   });
   const sigs = rec.get('sigs');
   if (!Array.isArray(sigs) || sigs.length === 0) throw new Error('record: no sigs');
-  return { body, map: rec, digests, sigs };
+  return { body, map: rec, digests, sigs, supersedes: rec.has('supersedes') };
 }
 
 function edKey(raw) {
@@ -148,11 +163,30 @@ export async function readTx(client, blocks, txHash) {
   return { tx: txHash, block, msg: msgOf(meta), record, recordError };
 }
 
-const signedBy = (t, key) => !!(t.record && t.record.signatures.some((s) => s.valid && s.kid === key) && t.record.signatures.every((s) => s.valid));
+export const signedBy = (t, key) => !!(t.record && t.record.signatures.some((s) => s.valid && s.kid === key) && t.record.signatures.every((s) => s.valid));
 
 // Checks the final freeze. Returns { ok, checks, freeze, hypotheses, document }.
 // Every check is listed with its outcome, so a refusal names each reason.
-export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx, preregPath, studyKey, codeDigests, tipBlockNo }) {
+// The SHA-256 of every prefix of the check log that ends at a line boundary,
+// the empty prefix included.
+export function logPrefixDigests(text) {
+  const out = [sha256hex('')];
+  let at = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', at);
+    if (nl < 0) break;
+    at = nl + 1;
+    out.push(sha256hex(text.slice(0, at)));
+  }
+  return out;
+}
+
+const LIVE_FIRE_TYPES = new Set(['live-fire-start', 'live-fire', 'a1-live-fire-start', 'a1-live-fire']);
+
+// requiredItems: [{ name, sha256 }], each of which must be an item of the
+// final record. checkLogText: the check log of the network, or undefined to
+// skip that check.
+export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx, preregPath, studyKey, codeDigests, tipBlockNo, requiredItems = [], checkLogText }) {
   const checks = [];
   const check = (name, ok, detail = null) => checks.push({ name, ok: !!ok, detail });
   const lower = (x) => (typeof x === 'string' ? x.toLowerCase() : x);
@@ -179,7 +213,10 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
   const missing = f.record ? codeDigests.filter((d) => !f.record.digests.includes(d.sha256)).map((d) => d.path) : codeDigests.map((d) => d.path);
   check('code_files_are_items', missing.length === 0, missing.length ? `not in the record: ${missing.join(', ')}` : null);
 
-  const uri = new RegExp(`web\\+cardano://transaction/${hypothesesTx}/metadata/309`, 'i');
+  check('record_has_no_supersedes', !!f.record && !f.record.supersedes, 'a record that supersedes another is not the final freeze');
+  for (const it of requiredItems) check(`${it.name}_is_an_item`, !!f.record && HEX32.test(it.sha256 || '') && f.record.digests.includes(it.sha256), it.sha256);
+
+  const uri = new RegExp(`web\\+cardano://transaction/${hypothesesTx}/metadata/309(?![0-9])`, 'i');
   check('document_cites_hypotheses_record', uri.test(docText), `web+cardano://transaction/${hypothesesTx}/metadata/309`);
   check('hypotheses_tx_differs', hypothesesTx !== freezeTx);
   const h = await readTx(client, blocks, hypothesesTx);
@@ -188,6 +225,30 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
     check('hypotheses_block_earlier', h.block.block_no < f.block.block_no, `${h.block.block_no} < ${f.block.block_no}`);
     check('hypotheses_signed_by_study_key', signedBy(h, studyKey), h.recordError);
     check('hypotheses_document_differs', !!h.msg && h.msg[0] !== docDigest);
+    // The first transaction carrying the final record.
+    const rows = h.block.tx_id < f.block.tx_id ? await q(client, blocks, 'tx_metadata_between', { lo: { type: 'int', value: h.block.tx_id }, hi: { type: 'int', value: f.block.tx_id } }) : [];
+    const earlier = [];
+    for (const r of rows) {
+      if (Number(r.key) === 674) {
+        const m = msgOf([r]);
+        if (m && m.includes(docDigest)) earlier.push(r.tx);
+      } else if (f.record) {
+        try {
+          if (reassemble(r.bytes).equals(f.record.body)) earlier.push(r.tx);
+        } catch {
+          // not a chunk array: not a copy of the record
+        }
+      }
+    }
+    check('first_carrier_of_the_record', !!f.record && earlier.length === 0, earlier.length ? `earlier transactions carry it: ${[...new Set(earlier)].join(', ')}` : null);
+    if (checkLogText !== undefined) {
+      const prefixes = logPrefixDigests(checkLogText || '');
+      const frozen = !!f.record && prefixes.some((d) => f.record.digests.includes(d));
+      check('check_log_frozen', frozen, 'a prefix of the check log must be an item of the record');
+      const hypTime = Date.parse(`${h.block.time.replace(' ', 'T')}Z`);
+      const first = (checkLogText || '').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => LIVE_FIRE_TYPES.has(e.type));
+      check('live_fire_after_hypotheses', !first || Date.parse(first.date) > hypTime, first ? `first live-fire entry ${first.date}, hypotheses block ${h.block.time}` : 'no live-fire entry');
+    }
   }
   const ok = checks.every((c) => c.ok);
   const brief = (t) => (t ? { tx: t.tx, block_no: t.block.block_no, slot_no: t.block.slot_no, epoch_no: t.block.epoch_no, epoch_slot_no: t.block.epoch_slot_no, block_hash: t.block.hash, time: t.block.time, document_sha256: t.msg ? t.msg[0] : null, items: t.record ? t.record.digests.length : null } : null);
@@ -219,7 +280,24 @@ export function drawEpoch({ epochNo, slotNo, epochSlotNo, protocolMajor, genesis
 // The draw key for a block (the final freeze block, or on a test network a
 // stand-in's block): the rule, the database's nonce and Koios's, which must
 // agree. koios needs genesis() and epochNonce(n).
-export async function drawKey({ client, blocks, network, block, koios }) {
+// The freeze tool's drawkey.json (format research-freeze-drawkey-v1): the
+// nonce of epoch N read from Koios and from Blockfrost for the final freeze.
+export function drawkeyFileErrors(doc, { network, txHash, n, nonce }) {
+  const errors = [];
+  if (!doc || doc.format !== 'research-freeze-drawkey-v1') return ['not a research-freeze drawkey.json'];
+  if (doc.network !== network) errors.push(`network ${doc.network}`);
+  if (txHash && doc.tx_hash !== txHash) errors.push(`transaction ${doc.tx_hash}`);
+  if (Number(doc.nonce_epoch) !== n) errors.push(`epoch ${doc.nonce_epoch}`);
+  if (String(doc.nonce).toLowerCase() !== nonce) errors.push('nonce');
+  const sources = new Map((doc.readings || []).map((r) => [r.source, String(r.nonce).toLowerCase()]));
+  for (const src of ['koios', 'blockfrost']) {
+    if (!sources.has(src)) errors.push(`no ${src} reading`);
+    else if (sources.get(src) !== nonce) errors.push(`${src} reading differs`);
+  }
+  return errors;
+}
+
+export async function drawKey({ client, blocks, network, block, koios, txHash = null, drawkeyFile = null }) {
   const genesis = GENESIS[network];
   if (!genesis) throw new Error(`no genesis constants for ${network}`);
   const kg = await koios.genesis();
@@ -234,5 +312,13 @@ export async function drawKey({ client, blocks, network, block, koios }) {
   const k = await koios.epochNonce(rule.n);
   if (!k.nonce) throw new Error(`refusing: Koios has no nonce for epoch ${rule.n}`);
   if (k.nonce.toLowerCase() !== row.nonce) throw new Error(`refusing: epoch ${rule.n} nonce differs between the database and Koios`);
-  return { ...rule, nonce: row.nonce, readings: { db: row.nonce, koios: k.nonce.toLowerCase(), koios_read_at: k.read_at } };
+  const readings = { db: row.nonce, koios: k.nonce.toLowerCase(), koios_read_at: k.read_at };
+  if (drawkeyFile) {
+    const doc = JSON.parse(readFileSync(drawkeyFile, 'utf8'));
+    const errs = drawkeyFileErrors(doc, { network, txHash, n: rule.n, nonce: row.nonce });
+    if (errs.length) throw new Error(`refusing: the freeze tool's drawkey.json differs: ${errs.join(', ')}`);
+    readings.freeze_tool = doc.readings.map((r) => ({ source: r.source, at: r.at, nonce: String(r.nonce).toLowerCase() }));
+    readings.drawkey_sha256 = sha256hex(readFileSync(drawkeyFile));
+  }
+  return { ...rule, nonce: row.nonce, readings };
 }

@@ -3,7 +3,8 @@
 
 // The purposive strata, each run as its real step on synthetic study tables:
 // the NFT top ten (running supply, per-wallet class, exclusions, the snapshot
-// bound, the tie-break by policy bytes), the holder floor of the fungible
+// bound, an unheld asset once in two units, the tie-break by policy bytes),
+// the holder floor of the fungible
 // part (named tokens skipped, the floor, the count of ten, eligible holders at
 // the snapshot only, held UTxOs counted), and the fill of every stratum
 // (matching rules, skip order, start or end of the peak window, no holders
@@ -113,6 +114,14 @@ test('NFT top ten: running supply, per-wallet class, exclusions, snapshot bound,
   // asset of the same policy is not. One holder counted.
   await nft(801, P('88'), '0014df10aa', 16);
   await nft(802, P('88'), '000de140bb', 17);
+  // Pf0: three holders of NFTs, and an asset nobody holds that was minted in
+  // two units and burned: the policy is not an NFT policy.
+  await nft(1001, P('f0'), '01', 1);
+  await nft(1002, P('f0'), '02', 2);
+  await nft(1003, P('f0'), '03', 3);
+  await f.asset(1004, P('f0'), '04');
+  await f.mint(1004, 2, 3);
+  await f.mint(1004, -2, 4);
   await runBlock('strata_list_table');
   await loadList(db, [{ ord: 1, stratum: 'Named', project: 'Named', class: 'NFT', policy: P('55'), asset_name: null, nft_top_exclude: true }]);
   await runBlock('nft_top', params({ nft_top_n: 4 }));
