@@ -236,7 +236,7 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   // listed: [{ sha256, name }] the document lists besides the code files;
   // items: run-time digests in the record; deep: epoch 501 is in the database
   // with its first block 2,160 below the tip.
-  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false }) => {
+  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false, freezeIsSnap = false }) => {
     const m = await mainnetDb({ withChain: true, studyRun: false });
     const hypDigest = sha('hypotheses');
     const hypTx = await m.ch.add({ blockNo: 100, slot: 500 * E + 500, epoch: 500, epochSlot: 500, body: metadataBytes(record([hypDigest], key)), msg: hypDigest, time: old });
@@ -245,11 +245,12 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
     writeFileSync(finalDoc, text);
     const d = sha(Buffer.from(text));
     // Early in epoch 500, so N = 501, whose nonce is recorded.
-    const f = await m.ch.add({ blockNo: 200, slot: 500 * E + 1000, epoch: 500, epochSlot: 1000, body: metadataBytes(record([d, ...files.map((x) => x.sha256), ...items], key)), msg: d, time: old });
+    // With freezeIsSnap the final freeze is itself the rule's snapshot block.
+    const f = await m.ch.add(freezeIsSnap ? { blockNo: 2500, slot: 500 * E + 200000, epoch: 500, epochSlot: 200000, body: metadataBytes(record([d, ...files.map((x) => x.sha256), ...items], key)), msg: d, time: old } : { blockNo: 200, slot: 500 * E + 1000, epoch: 500, epochSlot: 1000, body: metadataBytes(record([d, ...files.map((x) => x.sha256), ...items], key)), msg: d, time: old });
     await m.db.query(`INSERT INTO public.epoch_param VALUES (500, decode($1, 'hex'), 10), (501, decode($2, 'hex'), 10)`, ['11'.repeat(32), nonce]);
     // The snapshot the rule names: the last block of epoch 500 before its
     // cutoff; one block after the cutoff.
-    const snap = await m.ch.block({ blockNo: 2500, slot: 500 * E + 200000, epoch: 500, epochSlot: 200000, time: old });
+    const snap = freezeIsSnap ? { hash: (await m.db.query(`SELECT encode(hash, 'hex') AS h FROM public.block WHERE block_no = 2500`)).rows[0].h } : await m.ch.block({ blockNo: 2500, slot: 500 * E + 200000, epoch: 500, epochSlot: 200000, time: old });
     await m.ch.block({ blockNo: 2600, slot: 500 * E + 400000, epoch: 500, epochSlot: 400000, time: old });
     let firstN = null;
     if (deep) {
@@ -297,6 +298,13 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   assert.equal(r.snapshot.block_no, 2500);
   assert.deepEqual([r.snapshot.rule.epoch, r.snapshot.rule.n, r.snapshot.rule.cutoff_slot], [500, 501, 500 * E + 259200]);
   assert.equal(r.snapshot.rule.confirmation.db_depth, 4761 - 2601);
+  // The final freeze is the last block before the cutoff, so the rule's
+  // snapshot is the freeze block itself: not refused for its order.
+  r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], deep: true, freezeIsSnap: true });
+  assert.ok(r.error, 'the stand-in chain has no tables for the steps');
+  assert.doesNotMatch(r.error.message, /before the freeze block|not after the freeze block/);
+  assert.equal(r.snapshot.hash, r.snap.hash);
+  assert.equal(r.snapshot.block_no, 2500);
 }));
 
 // own-drawn: counts per drawn sample, only for a finished study run of a final

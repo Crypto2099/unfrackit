@@ -310,7 +310,7 @@ export async function runPipeline(opts) {
       throw refuse(`refusing: run ${runId} has snapshot ${snapshot.hash}`);
     }
     report.snapshot = snapshot;
-    if (!live && !(snapshot.block_no > freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is not after the freeze block ${freeze.block_no}`);
+    if (!live && !(snapshot.block_no >= freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is before the freeze block ${freeze.block_no}`);
 
     const run = { network, runId, settings, snapshot, h, windows: stored.windows || null };
     runner = new Runner({ client, blocks, runId, params: sqlParams(run), capture: !!opts.capture && !mainnet && !live, explain: !!opts.explain, quiet: !!live, log: live ? (s) => say(s.replace(/, \d+ rows$/, '')) : log, redo: new Set(opts.redo || []) });
