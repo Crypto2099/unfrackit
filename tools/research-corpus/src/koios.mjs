@@ -68,6 +68,11 @@ export class Koios {
     return { nonce: r ? r.nonce : null, read_at: new Date().toISOString() };
   }
 
+  async lastBlockOfEpoch(epochNo) {
+    const rows = await this.request('GET', `/blocks?epoch_no=eq.${Number(epochNo)}&order=block_height.desc&limit=1&select=hash,block_height,epoch_no,abs_slot`);
+    return rows[0] || null;
+  }
+
   async tip() {
     const [t] = await this.request('GET', '/tip');
     return { block_no: Number(t.block_no ?? t.block_height), hash: t.hash, slot: Number(t.abs_slot), epoch: Number(t.epoch_no) };

@@ -1,8 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Sections 5.2, 5.4 and 5.5 of the pre-registration: the credential universe
--- and the consented cases.
+-- Sections 5.4 and 5.5 of the pre-registration: the credential universe.
 --
 -- Every stake credential db-sync has seen is a row of stake_address. hash_raw
 -- is the 29-byte reward address: a header byte, then the 28-byte credential.
@@ -13,13 +12,6 @@
 -- are removed from every frame; the checks below confirm that the header type
 -- and script_hash agree on every row before anything relies on either.
 --
--- Adam K. Dean's own stake keys are removed from every frame (section 5.2). The
--- driver loads them from a private file given at run time, matched to
--- stake_address.view, into study.consented; the file is never committed and
--- the keys are never written to the run's parameters, only their count. The
--- count removed and how many fell inside each sample's drawn prefix are
--- published, so an outsider's reproduction can differ only by those keys.
-
 -- @step cred
 -- @outputs study.cred
 DROP TABLE IF EXISTS study.cred;
@@ -45,18 +37,3 @@ SELECT count(*) AS n,
        count(*) FILTER (WHERE network_tag <> {{network_tag}}) AS bad_network,
        count(*) FILTER (WHERE is_script) AS n_script
   FROM study.cred;
-
--- The driver runs this with a bound array of bech32 stake addresses, so the
--- keys never appear in statement text, logs or plans.
--- @step consented_table
--- @outputs study.consented
-DROP TABLE IF EXISTS study.consented;
-CREATE TABLE study.consented (sa_id bigint PRIMARY KEY);
-
--- @query consented_load
-INSERT INTO study.consented (sa_id)
-SELECT c.sa_id FROM study.cred c WHERE c.view = ANY ($1::text[])
-ON CONFLICT DO NOTHING;
-
--- @query consented_count
-SELECT count(*) AS n FROM study.consented;

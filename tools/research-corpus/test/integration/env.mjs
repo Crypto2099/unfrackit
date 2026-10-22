@@ -79,3 +79,6 @@ export async function saIdOf(c, view) {
   const r = await c.query('SELECT id FROM public.stake_address WHERE view = $1', [view]);
   return r.rows.length ? Number(r.rows[0].id) : null;
 }
+
+// The stand-in for the freeze on preprod: the transaction that seeded shape S1.
+export const S1_SEEDING_TX = '0183bce3b177353fec0963164cf4d4693a2f5060decc87bb3ae762a6aadd0152';
