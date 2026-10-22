@@ -214,9 +214,10 @@ export function assertSweep(bytes, expect) {
 }
 
 // Who paid for a transaction read from chain, decided from its bytes alone
-// with a walker that accepts any well-formed CBOR (indefinite lengths, tags,
-// non-canonical integers), so no transaction anyone can put on chain makes
-// the decision throw. The body must hash to the requested transaction hash.
+// with an iterative walker that accepts any well-formed CBOR (indefinite
+// lengths, tags, non-canonical integers, any nesting depth), so no
+// well-formed transaction makes the decision throw; only bytes that are not
+// well-formed CBOR, which the chain cannot carry, do. The body must hash to the requested transaction hash.
 // The transaction was paid by this identity when its witness set holds a
 // vkey witness whose key hashes to this identity's payment key hash and whose
 // signature verifies over the body hash: only this identity's key can make

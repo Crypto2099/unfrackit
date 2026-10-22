@@ -100,7 +100,7 @@ export async function build({ store, koios, bf = null, cli, manifestPath, networ
   const targets = await checkTargets({ store, koios, bf, network, manifest, hashed, ...keys });
   let hypotheses = null;
   if (stage === 'final') {
-    hypotheses = await checkCitedHypotheses({ store, koios, bf, network, cited: doc.cited, hypothesesHash, hypothesesDocument, address: pub.addresses[network], ...keys });
+    hypotheses = await checkCitedHypotheses({ store, koios, bf, network, cited: doc.cited, hypothesesHash, hypothesesDocument, address: pub.addresses[network], log, ...keys });
     targets.push(hypotheses);
   }
 
