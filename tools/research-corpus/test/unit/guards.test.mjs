@@ -98,6 +98,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
     [{ ...freeze, codeManifest: goodManifest, snapshot: 'tip' }, /snapshot is fixed by rule/],
     [{ capture: true }, /no plan capture/],
     [{ standInTx: 'ab'.repeat(32) }, /stand-in for h is for test networks only/],
+    [{ ...freeze, codeManifest: goodManifest, fromBlock: 1 }, /--from-block is for test networks only/],
     [{ hmacKey: manifest }, /study key in secret\/hmac\.key/],
     [{ ...freeze, codeManifest: undefined }, /without --code-manifest/],
     [{ ...freeze, codeManifest: goodManifest, drawkey: undefined }, /without --drawkey/],
@@ -211,11 +212,11 @@ test('a mainnet live-fire run needs the hypotheses record signed by the study ke
   assert.deepEqual(verifyLog('mainnet').unclosed, []);
 }));
 
-// The study run on a final freeze, as far as the snapshot rule: the run
-// passes the code manifest, the record checks with the digests given at run
-// time and the check log, and the draw key with the freeze tool's file, and
-// stops at the rule because the database does not yet hold a block of epoch
-// N. Each case is a fresh database holding one final record.
+// The study run on a final freeze: the run passes the code manifest, the
+// record checks with the document's list and the check log, and the draw key
+// with the freeze tool's file; it refuses until the rule's block is deep
+// enough, and then stores that block, not the tip, as its snapshot before its
+// first step. Each case is a fresh database holding one final record.
 test('the study run wires the freeze checks, the check log, drawkey.json and the snapshot rule', withHome(async (home) => {
   const key = keypair();
   const studyKey = key.pub.toString('hex');
@@ -225,51 +226,103 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   // The check log as it stood at the final freeze.
   appendEntry('mainnet', 'health', { outcome: 'succeeded' });
   const frozenDigest = logPrefixDigests(readFileSync(checkLogPath('mainnet'), 'utf8')).at(-1);
-  const code = hashList().map((x) => x.sha256);
+  const files = hashList();
   const nonce = 'cd'.repeat(32);
   const old = '2020-01-01 00:00:00';
+  const E = 432000;
   const finalDoc = join(home, 'final.md');
   const drawkey = join(home, 'drawkey.json');
-  const koios = { genesis: async () => ({ securityparam: '2160', activeslotcoeff: '0.05', epochlength: '432000' }), epochNonce: async () => ({ nonce, read_at: 'now' }), lastBlockOfEpoch: async () => null, tip: async () => ({ block_no: 9999 }) };
   let k = 0;
-  // named: digests the document names; items: run-time digests in the record.
-  const attempt = async ({ named, items, drawkeyNonce = nonce, drawkeyTx = null }) => {
+  // listed: [{ sha256, name }] the document lists besides the code files;
+  // items: run-time digests in the record; deep: epoch 501 is in the database
+  // with its first block 2,160 below the tip.
+  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false }) => {
     const m = await mainnetDb({ withChain: true, studyRun: false });
     const hypDigest = sha('hypotheses');
-    const hypTx = await m.ch.add({ blockNo: 100, slot: 500 * 432000 + 500, epoch: 500, epochSlot: 500, body: metadataBytes(record([hypDigest], key)), msg: hypDigest, time: old });
-    const text = `final\nkey ${studyKey}\nweb+cardano://transaction/${hypTx}/metadata/309\n${named.join('\n')}\n`;
+    const hypTx = await m.ch.add({ blockNo: 100, slot: 500 * E + 500, epoch: 500, epochSlot: 500, body: metadataBytes(record([hypDigest], key)), msg: hypDigest, time: old });
+    const lines = [...files.map((f) => `${f.sha256}  ${f.path}`), ...listed.map((l) => `${l.sha256}  ${l.name}`)];
+    const text = `final\nkey ${studyKey}\nweb+cardano://transaction/${hypTx}/metadata/309\n\n${lines.join('\n')}\n`;
     writeFileSync(finalDoc, text);
     const d = sha(Buffer.from(text));
-    // Early in epoch 500, so N = 501, whose nonce is recorded; epoch 500 runs
-    // on past the freeze, and no block of 501 is in the database yet.
-    const f = await m.ch.add({ blockNo: 200, slot: 500 * 432000 + 1000, epoch: 500, epochSlot: 1000, body: metadataBytes(record([d, ...code, ...items], key)), msg: d, time: old });
+    // Early in epoch 500, so N = 501, whose nonce is recorded.
+    const f = await m.ch.add({ blockNo: 200, slot: 500 * E + 1000, epoch: 500, epochSlot: 1000, body: metadataBytes(record([d, ...files.map((x) => x.sha256), ...items], key)), msg: d, time: old });
     await m.db.query(`INSERT INTO public.epoch_param VALUES (500, decode($1, 'hex'), 10), (501, decode($2, 'hex'), 10)`, ['11'.repeat(32), nonce]);
-    await m.ch.block({ blockNo: 3000, slot: 500 * 432000 + 400000, epoch: 500, epochSlot: 400000, time: old });
+    // The snapshot the rule names: the last block of epoch 500 before its
+    // cutoff; one block after the cutoff.
+    const snap = await m.ch.block({ blockNo: 2500, slot: 500 * E + 200000, epoch: 500, epochSlot: 200000, time: old });
+    await m.ch.block({ blockNo: 2600, slot: 500 * E + 400000, epoch: 500, epochSlot: 400000, time: old });
+    let firstN = null;
+    if (deep) {
+      firstN = await m.ch.block({ blockNo: 2601, slot: 501 * E + 10, epoch: 501, epochSlot: 10, time: old });
+      await m.ch.block({ blockNo: 4761, slot: 501 * E + 50000, epoch: 501, epochSlot: 50000, time: old });
+    } else {
+      await m.ch.block({ blockNo: 3000, slot: 500 * E + 431000, epoch: 500, epochSlot: 431000, time: old });
+    }
+    const koios = {
+      genesis: async () => ({ securityparam: '2160', activeslotcoeff: '0.05', epochlength: '432000' }),
+      epochNonce: async () => ({ nonce, read_at: 'now' }),
+      snapshotBlock: async () => ({ hash: snap.hash, block_height: 2500 }),
+      firstBlockOfEpoch: async () => (firstN ? { hash: firstN.hash, block_height: 2601 } : null),
+      tip: async () => ({ block_no: 9999 })
+    };
     writeFileSync(drawkey, JSON.stringify({ format: 'research-freeze-drawkey-v1', network: 'mainnet', tx_hash: drawkeyTx || f, nonce_epoch: 501, nonce: drawkeyNonce, readings: [{ source: 'koios', nonce: drawkeyNonce }, { source: 'blockfrost', nonce: drawkeyNonce }] }));
-    return runPipeline({ client: m.client, runId: `study-${++k}`, log: () => {}, koios, freezeTx: f, hypothesesTx: hypTx, prereg: finalDoc, studyKey, codeManifest: manifest, drawkey });
+    const runId = `study-${++k}`;
+    const error = await runPipeline({ client: m.client, runId, log: () => {}, koios, freezeTx: f, prereg: finalDoc, studyKey, codeManifest: manifest, drawkey }).then(() => null, (e) => e);
+    const stored = (await m.db.query(`SELECT value FROM study.param WHERE run_id = $1 AND key = 'snapshot'`, [runId])).rows[0];
+    return { error, snapshot: stored ? stored.value : null, snap };
   };
-  // Items but not named: refused on both.
-  await assert.rejects(attempt({ named: [], items: [manifestDigest, frozenDigest] }), (e) => /code_manifest_named_in_document/.test(e.message) && /check_log_frozen/.test(e.message));
-  // Named, but the record lacks the frozen log: refused on the log alone.
-  await assert.rejects(attempt({ named: [manifestDigest, frozenDigest], items: [manifestDigest] }), (e) => /check_log_frozen/.test(e.message) && !/code_manifest/.test(e.message));
+  const named = [{ sha256: manifestDigest, name: 'code-manifest.txt' }, { sha256: frozenDigest, name: 'check-log.jsonl' }];
+  // Items the document does not list: refused.
+  let r = await attempt({ listed: [], items: [manifestDigest, frozenDigest] });
+  assert.match(r.error.message, /document_lists_every_other_item.*document_names_one_code_manifest/);
+  // The document names another code manifest than the run's.
+  const otherManifest = sha('another code manifest');
+  r = await attempt({ listed: [{ sha256: otherManifest, name: 'code-manifest.txt' }, named[1]], items: [otherManifest, frozenDigest] });
+  assert.match(r.error.message, /code_manifest_is_the_named_one/);
+  assert.doesNotMatch(r.error.message, /check_log/);
   // Everything frozen: the drawkey.json nonce must agree.
-  await assert.rejects(attempt({ named: [manifestDigest, frozenDigest], items: [manifestDigest, frozenDigest], drawkeyNonce: 'ef'.repeat(32) }), /drawkey\.json differs: nonce/);
-  // And it does, written for another carrier: on to the snapshot rule, which
-  // waits for epoch 501.
-  await assert.rejects(attempt({ named: [manifestDigest, frozenDigest], items: [manifestDigest, frozenDigest], drawkeyTx: 'ee'.repeat(32) }), /last block of epoch 500, and the database does not yet hold epoch 501/);
+  r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], drawkeyNonce: 'ef'.repeat(32) });
+  assert.match(r.error.message, /drawkey\.json differs: nonce/);
+  // Written for another carrier: on to the snapshot rule, which waits for
+  // epoch 501.
+  r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], drawkeyTx: 'ee'.repeat(32) });
+  assert.match(r.error.message, /the snapshot is in epoch 500, and the database does not yet hold epoch 501/);
+  assert.equal(r.snapshot, null);
+  // Epoch 501 deep enough: the run stores the rule's block, not the tip, and
+  // goes on to its steps (which fail here on the stand-in chain).
+  r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], deep: true });
+  assert.ok(r.error, 'the stand-in chain has no tables for the steps');
+  assert.equal(r.snapshot.hash, r.snap.hash);
+  assert.equal(r.snapshot.chosen, 'rule');
+  assert.equal(r.snapshot.block_no, 2500);
+  assert.deepEqual([r.snapshot.rule.epoch, r.snapshot.rule.n, r.snapshot.rule.cutoff_slot], [500, 501, 500 * E + 259200]);
+  assert.equal(r.snapshot.rule.confirmation.db_depth, 4761 - 2601);
 }));
 
-// own-drawn: counts per drawn sample, for the run that owns the sample table
-// only, and nothing written anywhere.
-test('own-drawn counts listed wallets per drawn sample and writes nothing', withHome(async (home) => {
+// own-drawn: counts per drawn sample, only for a finished study run of a final
+// freeze (or a test run), never a live-fire run, and nothing written anywhere.
+test('own-drawn counts listed wallets per drawn sample of a finished study run and writes nothing', withHome(async (home) => {
   const { ownDrawn } = await import('../../src/pipeline.mjs');
   const db = await PGlite.create();
   await db.exec(`CREATE SCHEMA study;
+    CREATE TABLE study.param (run_id text, key text, value jsonb, PRIMARY KEY (run_id, key));
     CREATE TABLE study.cred (sa_id bigint PRIMARY KEY, view text);
     CREATE TABLE study.sample (frame text, kind text, stratum text, sa_id bigint);
-    COMMENT ON TABLE study.sample IS 'research-corpus run r1';
     INSERT INTO study.cred VALUES (1, '${STAKE_A}'), (2, 'stake1other');
     INSERT INTO study.sample VALUES ('recent', 'random', '', 1), ('recent', 'strata', 'MIN', 1), ('peak', 'random', '', 2), ('peak', 'ada_only', '', 1);`);
+  const owned = (run) => db.exec(`COMMENT ON TABLE study.sample IS 'research-corpus run ${run}'`);
+  const param = (run, key, value) => db.query(`INSERT INTO study.param VALUES ($1, $2, $3::jsonb) ON CONFLICT (run_id, key) DO UPDATE SET value = EXCLUDED.value`, [run, key, JSON.stringify(value)]);
+  // A live-fire run kept for debugging owns the sample table: refused.
+  await owned('lf1');
+  await param('lf1', 'mode', 'live-fire');
+  await param('lf1', 'finished', { at: 'now' });
+  await assert.rejects(ownDrawn(db, 'lf1', [STAKE_A]), /a live-fire run/);
+  // The study run, in progress, then finished.
+  await owned('r1');
+  await param('r1', 'mode', 'study');
+  await param('r1', 'freeze', { role: 'final-freeze' });
+  await assert.rejects(ownDrawn(db, 'r1', [STAKE_A]), /has not finished/);
+  await param('r1', 'finished', { at: 'now' });
   const r = await ownDrawn(db, 'r1', [STAKE_A]);
   assert.equal(r.drawn_wallets, 1);
   assert.deepEqual(r.by_sample, [
@@ -277,6 +330,9 @@ test('own-drawn counts listed wallets per drawn sample and writes nothing', with
     { frame: 'recent', kind: 'strata', stratum: 'MIN', drawn: 1 },
     { frame: 'peak', kind: 'ada_only', stratum: '', drawn: 1 }
   ]);
+  // A finished run whose sample table another run has since replaced.
+  await param('r2', 'mode', 'test');
+  await param('r2', 'finished', { at: 'now' });
   await assert.rejects(ownDrawn(db, 'r2', [STAKE_A]), /does not belong to run r2/);
   const { readdirSync } = await import('node:fs');
   assert.deepEqual(readdirSync(home), []);

@@ -62,6 +62,11 @@ export const READINGS = {
 
 export const NETWORK_TAG = { mainnet: 1, preprod: 0, preview: 0 };
 
+// The names under which the final pre-registration lists the code manifest
+// (the `npm run hash` output) and the frozen check-log prefix, in its lines of
+// <64 lowercase hex><two spaces><name>; each must appear exactly once.
+export const FREEZE_ITEM_NAMES = { code_manifest: 'code-manifest.txt', check_log: 'check-log.jsonl' };
+
 // Genesis parameters the draw key's epoch rule reads (the security parameter
 // k, the active slot coefficient f and the epoch length in slots). A run
 // compares them with Koios /genesis for the database's network and refuses on

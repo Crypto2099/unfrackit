@@ -14,12 +14,14 @@
 -- read from epoch_param.nonce and cross-checked with Koios by the driver
 -- (src/freeze.mjs), which also reads the freeze record below.
 --
--- The snapshot of the study's run is fixed by rule (decided 2026-10-21): the
--- last block of epoch N - 1, N being the draw epoch, confirmed at least
--- `security_k` (2,160) blocks deep in the database and in Koios before the
--- run reads it, so whoever starts the run has no choice of block. Wallet state
--- is read as of that block, whatever the database tip. On a test network a
--- run may instead take the tip or a given block.
+-- The snapshot of the study's run is fixed by rule (decided 2026-10-21,
+-- refined 2026-10-22): the last block of epoch N - 1 before N - 1's
+-- randomness stabilisation cutoff, N being the draw epoch, so the frames are
+-- fixed no later than epoch N's nonce. The first block of epoch N must be at
+-- least `security_k` (2,160) blocks deep in the database and in Koios before
+-- the run reads anything, so whoever starts the run has no choice of block.
+-- Wallet state is read as of the snapshot, whatever the database tip. On a
+-- test network a run may instead take the tip or a given block.
 --
 -- Before anything reads the database, the driver checks db-sync's own
 -- bookkeeping: the network name, the schema version and the extra migrations.
@@ -83,24 +85,29 @@ SELECT m.key, encode(m.bytes, 'hex') AS bytes, m.json::text AS json
  WHERE t.hash = {{tx_hash}} AND m.key IN (309, 674)
  ORDER BY m.key;
 
--- Label-309 and label-674 metadata of the transactions strictly between two
--- transaction ids (through tx_metadata(tx_id)), for the check that no other
--- record signed by the study key, and no complete copy of the final record,
--- lies between the hypotheses record and the final freeze.
--- @query tx_metadata_between
-SELECT encode(t.hash, 'hex') AS tx, m.tx_id, m.key, encode(m.bytes, 'hex') AS bytes, m.json::text AS json
-  FROM public.tx_metadata m JOIN public.tx t ON t.id = m.tx_id
- WHERE m.tx_id > {{lo}} AND m.tx_id < {{hi}} AND m.key IN (309, 674)
- ORDER BY m.tx_id, m.key;
-
--- The snapshot by rule is the last block of epoch N - 1; a block of epoch N
--- shows that N - 1 is complete in the database.
--- @query last_block_of_epoch
+-- The snapshot by rule is the last block of epoch N - 1 before N - 1's
+-- stabilisation cutoff; the first block of epoch N shows that N - 1 is
+-- complete in the database, and its depth is the rule's depth.
+-- @query last_block_before_slot
 SELECT id, block_no, slot_no, epoch_no, time::text AS time, encode(hash, 'hex') AS hash
-  FROM public.block WHERE epoch_no = {{epoch_no}} ORDER BY id DESC LIMIT 1;
+  FROM public.block WHERE epoch_no = {{epoch_no}} AND slot_no < {{slot_no}} ORDER BY id DESC LIMIT 1;
 
 -- @query first_block_of_epoch
-SELECT id, block_no FROM public.block WHERE epoch_no = {{epoch_no}} ORDER BY id LIMIT 1;
+SELECT id, block_no, slot_no, epoch_slot_no, encode(hash, 'hex') AS hash FROM public.block WHERE epoch_no = {{epoch_no}} ORDER BY id LIMIT 1;
+
+-- Every label-309 value from a transaction id on, in transaction order, for
+-- the chain's order of the study's records.
+-- @query label_309_from
+SELECT encode(t.hash, 'hex') AS tx, m.tx_id, encode(m.bytes, 'hex') AS bytes
+  FROM public.tx_metadata m JOIN public.tx t ON t.id = m.tx_id
+ WHERE m.key = 309 AND m.tx_id >= {{lo}}
+ ORDER BY m.tx_id;
+
+-- The first transaction id at or after a block height (test networks: the
+-- start of the scan).
+-- @query first_tx_from_block_no
+SELECT min(t.id) AS tx_id FROM public.tx t
+ WHERE t.block_id >= (SELECT min(id) FROM public.block WHERE block_no >= {{block_no}});
 
 -- @query epoch_nonce
 SELECT epoch_no, encode(nonce, 'hex') AS nonce, protocol_major FROM public.epoch_param WHERE epoch_no = {{epoch_no}};

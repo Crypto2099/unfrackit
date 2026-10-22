@@ -42,9 +42,11 @@ export const refuse = (message) => new Refusal(message);
 export function sanitize(message, { refusal = false } = {}) {
   let t = String(message)
     .replace(/\b[a-z][a-z0-9_]*1[02-9ac-hj-np-z]{20,}\b/gi, '<bech32>')
-    .replace(/(?:\\x|0x|_)?[0-9a-fA-F]{20,}/g, '<hex>');
-  // Numbers, with or without a unit suffix (37k rows, 1500ms).
-  if (!refusal) t = t.replace(/(?<![\w.])\d[\d,._]*(?:[a-zA-Z]{1,3})?(?![\w])/g, '#');
+    .replace(/(?:\\x|0x|_)?[0-9a-fA-F]{20,}/g, '<hex>')
+    .replace(/(?:\\x|\b0x)[0-9a-fA-F]+\b/g, '<hex>');
+  // Numbers, with or without a unit or word joined to them (37k, 1500ms,
+  // 37rows).
+  if (!refusal) t = t.replace(/(?<![\w.])\d[\d,._]*[a-zA-Z]*(?![\w])/g, '#');
   return t.slice(0, 500);
 }
 
@@ -104,14 +106,22 @@ export function verifyLog(network) {
   const open = new Map();
   const starts = new Map();
   const failedDeletions = [];
+  const bySeq = new Map(entries.map((e) => [e.seq, e]));
   for (const e of entries) {
     if (e.type === 'live-fire-start' || e.type === 'a1-live-fire-start' || e.type === 'query-start') starts.set(e.seq, e);
     if (e.start_seq !== undefined && e.start_seq !== null) starts.delete(e.start_seq);
+    // A query of a run (a run's gate, a study run) that finishes cleanly
+    // settles the same run's earlier starts of that query, left by a killed
+    // attempt.
+    if (e.type === 'query' && e.outcome === 'succeeded' && bySeq.has(e.start_seq)) {
+      const st0 = bySeq.get(e.start_seq);
+      if (st0.run_id) for (const [seq, st] of starts) if (st.type === 'query-start' && st.run_id === st0.run_id && st.name === st0.name) starts.delete(seq);
+    }
     // A later end entry that deleted the run's output (a run resumed to a
-    // clean finish) settles its earlier unclosed starts, kept output and
-    // failed deletions.
+    // clean finish) settles its earlier unclosed starts, its gates' included,
+    // kept output and failed deletions.
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && typeof e.wallet_level_output === 'string' && e.wallet_level_output.startsWith('deleted ')) {
-      for (const [seq, st] of starts) if (st.run_id === e.run_id && st.type !== 'query-start') starts.delete(seq);
+      for (const [seq, st] of starts) if (st.run_id === e.run_id) starts.delete(seq);
       open.delete(e.run_id);
       for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
     }
@@ -127,6 +137,18 @@ export function verifyLog(network) {
   }
   const unclosed = [...starts.values()].map((e) => ({ seq: e.seq, type: e.type, run_id: e.run_id || null, date: e.date }));
   return { path, entries: entries.length, errors, unclosed, kept_not_cleaned: [...open.entries()].map(([run_id, seq]) => ({ run_id, seq })), failed_deletions: failedDeletions, sha256: createHash('sha256').update(text).digest('hex') };
+}
+
+// Closes a start entry left by a killed command (a query with no run to clean
+// up, or whose run id a later clean finish will never settle) by its
+// sequence number: appends a cleanup entry naming it. Only an unclosed
+// query-start is closed this way; a live-fire run is cleaned up by its run id.
+export function closeStart(network, seq, command = null) {
+  const v = verifyLog(network);
+  const st = v.unclosed.find((x) => x.seq === Number(seq));
+  if (!st) throw refuse(`refusing: entry ${seq} is not an unclosed start in the ${network} check log`);
+  if (st.type !== 'query-start') throw refuse(`refusing: entry ${seq} is a ${st.type}; clean up a live-fire run with cleanup --run-id`);
+  return appendEntry(network, 'cleanup', { run_id: st.run_id, start_seq: st.seq, command, outcome: 'succeeded', error: null, wallet_level_output: 'none written', closed: 'killed before its end entry' });
 }
 
 // Runs fn as a logged query when the network is mainnet: a start entry

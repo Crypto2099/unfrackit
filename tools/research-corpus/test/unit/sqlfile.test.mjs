@@ -38,7 +38,7 @@ test('every SQL file parses, is UTF-8 with LF and no BOM, and every placeholder 
     }
   };
   const params = sqlParams(run);
-  const callTime = new Set(['block_hash', 'block_id', 'tx_hash', 'sa_ids', 't', 'sa_id', 'snap_hash', 'view', 'epoch_no', 'lo', 'hi']);
+  const callTime = new Set(['block_hash', 'block_id', 'tx_hash', 'sa_ids', 't', 'sa_id', 'snap_hash', 'view', 'epoch_no', 'slot_no', 'block_no', 'lo', 'hi']);
   for (const [name, b] of blocks) {
     for (const st of b.statements) {
       for (const p of placeholders(st)) assert.ok(p in params || callTime.has(p), `${name}: unknown parameter ${p}`);
