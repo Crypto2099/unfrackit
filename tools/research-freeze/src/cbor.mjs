@@ -208,9 +208,10 @@ export function* textStrings(v) {
 
 // A lenient walker for chain data, which is well-formed CBOR but not
 // necessarily canonical: it accepts indefinite lengths, tags, floats and
-// simple values anywhere, and returns byte spans rather than values, so a
-// transaction body can be hashed exactly as it was sent. It is used to decide
-// who paid for a transaction before anything else of it is read.
+// simple values anywhere, at any nesting depth, and returns byte spans rather
+// than values, so a transaction body can be hashed exactly as it was sent. It
+// is used to decide who paid for a transaction before anything else of it is
+// read. Nothing in it recurses.
 
 function walkHead(bytes, pos) {
   if (pos >= bytes.length) throw new Error('CBOR: truncated input');
@@ -230,44 +231,78 @@ function walkHead(bytes, pos) {
   throw new Error(`CBOR: reserved additional information ${ai}`);
 }
 
-// The end of the item that starts at `pos`.
+// The end of the item that starts at `pos`. Iterative, with an explicit
+// stack of open containers, so nesting depth is bounded only by the input's
+// length: every step consumes at least one byte, and no input can exhaust the
+// call stack. Each stack entry is the number of items still to read in an
+// open definite container (a map counts keys and values), or null for an
+// indefinite one, which a break (0xff) closes. A tag needs no entry: the item
+// it wraps follows it and completes it.
 export function skipItem(bytes, pos) {
-  const h = walkHead(bytes, pos);
-  const untilBreak = (p, step) => {
-    for (;;) {
-      if (p >= bytes.length) throw new Error('CBOR: truncated indefinite item');
-      if (bytes[p] === 0xff) return p + 1;
-      p = step(p);
+  const stack = [];
+  let p = pos;
+  // An item has just ended at `p`: count it against the open containers,
+  // closing every definite one it completes. True when the root item is done.
+  const itemEnded = () => {
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      if (top === null) return false;
+      if (top > 1n) {
+        stack[stack.length - 1] = top - 1n;
+        return false;
+      }
+      stack.pop();
     }
+    return true;
   };
-  switch (h.major) {
-    case 0:
-    case 1:
-    case 7:
-      return h.next;
-    case 2:
-    case 3: {
-      if (h.arg === null) return untilBreak(h.next, (p) => skipItem(bytes, p));
-      const end = h.next + Number(h.arg);
-      if (end > bytes.length) throw new Error('CBOR: truncated string');
-      return end;
+  for (;;) {
+    if (stack.length && stack[stack.length - 1] === null) {
+      if (p >= bytes.length) throw new Error('CBOR: truncated indefinite item');
+      if (bytes[p] === 0xff) {
+        p += 1;
+        stack.pop();
+        if (itemEnded()) return p;
+        continue;
+      }
     }
-    case 4: {
-      if (h.arg === null) return untilBreak(h.next, (p) => skipItem(bytes, p));
-      let p = h.next;
-      for (let i = 0n; i < h.arg; i++) p = skipItem(bytes, p);
-      return p;
+    const h = walkHead(bytes, p);
+    switch (h.major) {
+      case 0:
+      case 1:
+      case 7:
+        p = h.next;
+        break;
+      case 2:
+      case 3:
+        if (h.arg === null) {
+          stack.push(null);
+          p = h.next;
+          continue;
+        }
+        p = h.next + Number(h.arg);
+        if (p > bytes.length) throw new Error('CBOR: truncated string');
+        break;
+      case 4:
+      case 5: {
+        p = h.next;
+        if (h.arg === null) {
+          stack.push(null);
+          continue;
+        }
+        const n = h.major === 4 ? h.arg : 2n * h.arg;
+        if (n > 0n) {
+          stack.push(n);
+          continue;
+        }
+        break;
+      }
+      case 6:
+        p = h.next;
+        continue;
+      default:
+        throw new Error('CBOR: unreachable major type');
     }
-    case 5: {
-      if (h.arg === null) return untilBreak(h.next, (p) => skipItem(bytes, skipItem(bytes, p)));
-      let p = h.next;
-      for (let i = 0n; i < h.arg; i++) p = skipItem(bytes, skipItem(bytes, p));
-      return p;
-    }
-    case 6:
-      return skipItem(bytes, h.next);
-    default:
-      throw new Error('CBOR: unreachable major type');
+    if (itemEnded()) return p;
   }
 }
 

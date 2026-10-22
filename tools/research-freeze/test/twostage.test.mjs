@@ -319,10 +319,14 @@ test('--hypotheses: the named record must be cited, on chain, paid and signed by
   fs.writeFileSync(path.join(dir, 'f.md'), fText);
   const F = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, coreOnly: true, items: docItem(fText), utxoTag: 'd' });
   const typed = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, utxoTag: 'e' });
+  // A hypotheses document may cite records of others: only this identity's count.
+  const h2Text = `Hypotheses. Prior art on chain: ${recordUri('5a'.repeat(32))}\n`;
+  fs.writeFileSync(path.join(dir, 'h2.md'), h2Text);
+  const H2 = await fabricateRun(lost.store, { network: 'preprod', identity: lost.identity, coreOnly: true, items: docItem(h2Text), utxoTag: '9' });
   // A fresh home with the same keys and no run directory or journal entry.
   const h = await home();
-  const txs = { [H.hash]: { cbor: H.cbor, confirmations: 30 }, [F.hash]: { cbor: F.cbor, confirmations: 30 }, [typed.hash]: { cbor: typed.cbor, confirmations: 30 } };
-  const f = fakeChain('preprod', { txs, history: [H.hash, F.hash, typed.hash] });
+  const txs = { [H.hash]: { cbor: H.cbor, confirmations: 30 }, [F.hash]: { cbor: F.cbor, confirmations: 30 }, [typed.hash]: { cbor: typed.cbor, confirmations: 30 }, [H2.hash]: { cbor: H2.cbor, confirmations: 30 } };
+  const f = fakeChain('preprod', { txs, history: [H.hash, F.hash, typed.hash, H2.hash] });
   const address = h.identity.pub.addresses.preprod;
   const args = { store: h.store, koios: f.koios(), network: 'preprod', publicKeyHex: h.identity.pub.signing_public_key, paymentKeyHash: h.identity.pub.payment_key_hash, address };
   await assert.rejects(checkCitedHypotheses({ ...args, cited: [H.hash] }), /cites no hypotheses-stage record .* --hypotheses <hash>/);
@@ -330,6 +334,8 @@ test('--hypotheses: the named record must be cited, on chain, paid and signed by
   const t = await checkCitedHypotheses({ ...args, cited: [H.hash], hypothesesHash: H.hash, hypothesesDocument: path.join(dir, 'h.md') });
   assert.equal(t.source, 'chain');
   assert.equal(t.document_check.sha256, crypto.createHash('sha256').update(hText).digest('hex'));
+  const t2 = await checkCitedHypotheses({ ...args, cited: [H2.hash], hypothesesHash: H2.hash, hypothesesDocument: path.join(dir, 'h2.md') });
+  assert.equal(t2.tx_hash, H2.hash, 'a cited record of someone else does not count');
   // The core-only final has the right shape, but its document cites H.
   await assert.rejects(checkCitedHypotheses({ ...args, cited: [F.hash], hypothesesHash: F.hash, hypothesesDocument: path.join(dir, 'f.md') }), new RegExp(`cites ${H.hash}, a transaction of this identity, so it is a later stage's document`));
   await assert.rejects(checkCitedHypotheses({ ...args, cited: [F.hash], hypothesesHash: F.hash, hypothesesDocument: path.join(dir, 'h.md') }), /h\.md has SHA-256 .* but the record .* carries the document digest/);
@@ -340,6 +346,16 @@ test('--hypotheses: the named record must be cited, on chain, paid and signed by
   // A journal entry of another stage settles it without a document.
   journal(h.store, journalEntry({ network: 'preprod', txHash: F.hash, cbor: F.cbor, ttl: 1, inputs: F.p.tx.inputs, run: '/gone', kind: 'freeze', stage: 'final' }));
   await assert.rejects(checkCitedHypotheses({ ...args, cited: [F.hash], hypothesesHash: F.hash }), /is a final-stage journal entry of this home, not the hypotheses record/);
+  // A hypotheses-stage journal entry settles it, and a document passed anyway is reported as unused.
+  h.store.updateJournal('preprod', (j) => {
+    j.current.state = 'confirmed';
+    j.history = [...(j.history || []), j.current];
+    j.current = null;
+  });
+  journal(h.store, journalEntry({ network: 'preprod', txHash: H.hash, cbor: H.cbor, ttl: 1, inputs: H.p.tx.inputs, run: '/gone', kind: 'freeze', stage: 'hypotheses' }));
+  const notes = [];
+  await checkCitedHypotheses({ ...args, cited: [H.hash], hypothesesHash: H.hash, hypothesesDocument: path.join(dir, 'f.md'), log: (m) => notes.push(m) });
+  assert.match(notes.join('\n'), /--hypotheses-document .*f\.md is not used: this home's journal entry for [0-9a-f]{64} already shows its stage/);
   // In the home that has the runs, --hypotheses cannot name a run of another stage.
   const report = JSON.parse(fs.readFileSync(path.join(typed.dir, 'report.json'), 'utf8'));
   lost.store.updateRunFile(typed.dir, 'report.json', JSON.stringify({ ...report, stage: 'final' }));

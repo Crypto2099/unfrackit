@@ -147,7 +147,7 @@ export async function checkTargets({ store, koios, bf = null, network, manifest,
 // document comes first and cites none.
 //
 // Other cited URIs are reported, not checked.
-export async function checkCitedHypotheses({ store, koios, bf = null, network, cited, publicKeyHex, paymentKeyHash, hypothesesHash, hypothesesDocument, address }) {
+export async function checkCitedHypotheses({ store, koios, bf = null, network, cited, publicKeyHex, paymentKeyHash, hypothesesHash, hypothesesDocument, address, log = () => {} }) {
   let hash;
   let needDocument = false;
   if (hypothesesHash) {
@@ -159,6 +159,7 @@ export async function checkCitedHypotheses({ store, koios, bf = null, network, c
       if ((what === 'run' ? report : entry) && stage !== 'hypotheses') throw new UserError(`${hypothesesHash} is a ${stage ? `${stage}-stage` : kind || 'unstaged'} ${what} of this home, not the hypotheses record`);
     }
     needDocument = !report && !entry;
+    if (!needDocument && hypothesesDocument) log(`--hypotheses-document ${hypothesesDocument} is not used: this home's ${report ? 'run directory' : 'journal entry'} for ${hypothesesHash} already shows its stage`);
     if (needDocument && !hypothesesDocument) {
       throw new UserError(`this home has no run directory or journal entry for ${hypothesesHash}, so its stage is unknown; pass its document with --hypotheses-document <file> to show that it is the hypotheses record`);
     }
@@ -219,17 +220,19 @@ async function addressHistory({ koios, bf, address }) {
 //
 // Each unknown transaction is first read only far enough to decide who paid
 // for it (payerCheck: the body hashed as sent, and a verifying witness from
-// this identity's payment key), with a walker that accepts any well-formed
-// CBOR. A transaction this identity did not pay for is skipped without
-// reading anything else of it, whatever it carries: anyone can send to the
-// address, including malformed metadata or a replay of one of this
-// identity's signed bodies, and none of that can stop the scan. A
-// transaction this identity paid for is reported when it carries a label-309
-// record signed by its key, or a label-309 value that cannot be parsed or
-// does not validate. Provider faults are reported too, since nothing can be
-// said about such a transaction: the two providers returning different
-// bytes, neither returning any, or bytes that are not a transaction with the
-// requested hash.
+// this identity's payment key), with an iterative walker that accepts any
+// well-formed CBOR at any nesting depth. A transaction this identity did not
+// pay for is skipped without reading anything else of it, whatever it
+// carries: anyone can send to the address, including malformed metadata,
+// deeply nested data or a replay of one of this identity's signed bodies,
+// and none of that is interpreted. A transaction this identity paid for is
+// reported when it carries a label-309 record signed by its key, or a
+// label-309 value that cannot be parsed or does not validate. Provider faults
+// are reported too, since nothing can be said about such a transaction: the
+// two providers returning different bytes, neither returning any, only one
+// returning any while both are consulted (a provider that has not indexed a
+// fresh transaction yet; the next attempt clears it), or bytes that are not
+// a well-formed transaction with the requested hash.
 export async function unknownRecordsOnChain({ store, koios, bf = null, network, address, publicKeyHex, paymentKeyHash, exclude = [] }) {
   const known = new Set([...journalEntries(store, network).filter((e) => e.state !== 'abandoned').map((e) => e.txHash), ...exclude]);
   const hashes = await addressHistory({ koios, bf, address });
@@ -246,6 +249,14 @@ export async function unknownRecordsOnChain({ store, koios, bf = null, network, 
     const cbor = kCbor || bCbor;
     if (!cbor) {
       found.push({ tx_hash: h, reason: 'neither provider returns its CBOR' });
+      continue;
+    }
+    // With two providers, one's bytes never decide alone: the transaction
+    // hash does not cover the witness set, so a provider that dropped the
+    // identity's witness while the other withheld the bytes could hide a
+    // record this identity paid for.
+    if (bf && (!kCbor || !bCbor)) {
+      found.push({ tx_hash: h, reason: `only ${kCbor ? 'Koios' : 'Blockfrost'} returns its CBOR; try again once both providers have it` });
       continue;
     }
     let bytes;

@@ -294,8 +294,13 @@ test('the chain scan stops on provider faults and on this identity\'s own unpars
   const h = earlier.run.hash;
   // The providers return different bytes.
   await assert.rejects(submit(providers(run, { history: [h], txs: { [h]: { cbor: earlier.run.cbor } }, bfTxs: { [h]: { cbor: earlier.run.cbor.replace(/..$/, '00') } } })), /CBOR differs between Koios and Blockfrost/);
-  // Only Blockfrost returns the bytes: they are read and judged.
-  await assert.rejects(submit(providers(run, { history: [h], txs: {}, bfTxs: { [h]: { cbor: earlier.run.cbor } } })), /this identity paid for it, and it carries a label-309 record/);
+  // With two providers, one provider's bytes never decide alone.
+  await assert.rejects(submit(providers(run, { history: [h], txs: {}, bfTxs: { [h]: { cbor: earlier.run.cbor } } })), /only Blockfrost returns its CBOR; try again once both providers have it/);
+  await assert.rejects(submit(providers(run, { history: [h], txs: { [h]: { cbor: earlier.run.cbor } }, bfTxs: {} })), /only Koios returns its CBOR/);
+  // Both return the identity's own record: it is read and judged.
+  await assert.rejects(submit(providers(run, { history: [h], txs: { [h]: { cbor: earlier.run.cbor } } })), /this identity paid for it, and it carries a label-309 record/);
+  // Bytes that are not well-formed CBOR, from both providers.
+  await assert.rejects(submit(providers(run, { history: [h], txs: { [h]: { cbor: earlier.run.cbor.slice(0, 200) } } })), /not a well-formed transaction: CBOR: truncated/);
   // Bytes that are not the transaction with that hash.
   await assert.rejects(submit(providers(run, { history: ['9e'.repeat(32)], txs: { ['9e'.repeat(32)]: { cbor: earlier.run.cbor } } })), /not this transaction: its body hashes to/);
   // A forged witness: the identity's real record with its signature bytes flipped is not paid by it.
@@ -325,4 +330,97 @@ test('abandon on mainnet refuses to run without a Blockfrost project id', async 
   const { abandonJournal } = await import('../src/ops.mjs');
   const { store, identity } = await mainnetRun();
   await assert.rejects(abandonJournal({ store, network: 'mainnet', identityName: 'testfreeze', koios: fakeChain('mainnet').koios({ addresses: [identity.pub.addresses.mainnet] }) }), /abandon on mainnet asks Blockfrost too/);
+});
+
+// A transaction built byte by byte: a body, a witness set and auxiliary data
+// given as raw CBOR, the payer's witness over the body hash added to the
+// witness set's key 0 in the encoding `witnesses` chooses.
+function rawTx({ payer, to, auxBytes = null, wsTail = [], witnesses = 'definite', extraWitness = null }) {
+  const addr = CSL.Address.from_bech32(to).to_bytes();
+  const input = encodeCbor([new Uint8Array(32).fill(0x7a), 0]);
+  const auxPart = auxBytes ? [0x07, 0x58, 0x20, ...blake2b256(auxBytes)] : [];
+  const body = new Uint8Array([auxBytes ? 0xa4 : 0xa3, 0x00, 0x81, ...input, 0x01, ...encodeCbor([[new Uint8Array(addr), 1500000]]), 0x02, ...encodeCbor(900000), ...auxPart]);
+  const bodyHash = blake2b256(body);
+  const vk = payer.id.payment.publicKey;
+  const sig = new Uint8Array(payer.id.payment.privateKey.sign(bodyHash).to_bytes());
+  const extra = extraWitness ? [...encodeCbor([extraWitness.id.payment.publicKey, new Uint8Array(extraWitness.id.payment.privateKey.sign(bodyHash).to_bytes())])] : [];
+  let ws;
+  if (witnesses === 'definite') {
+    ws = [0xa1 + (wsTail.length ? 1 : 0), 0x00, 0x80 + 1 + (extra.length ? 1 : 0), ...extra, ...encodeCbor([vk, sig]), ...wsTail];
+  } else {
+    // An indefinite witness set, an indefinite witness list, and the key and
+    // signature as chunked (indefinite) byte strings.
+    const chunked = (b) => [0x5f, ...encodeCbor(b.slice(0, 10)), ...encodeCbor(b.slice(10)), 0xff];
+    ws = [0xbf, 0x00, 0x9f, ...extra, 0x82, ...chunked(vk), ...chunked(sig), 0xff, ...wsTail, 0xff];
+  }
+  const tx = new Uint8Array([0x84, ...body, ...ws, 0xf5, ...(auxBytes || [0xf6])]);
+  return { hash: toHex(bodyHash), cbor: toHex(tx), size: tx.length };
+}
+
+// Metadata {309: [h'...']} with one chunk.
+const label309 = (chunk) => new Uint8Array([0xa1, 0x19, 0x01, 0x35, 0x81, ...encodeCbor(chunk)]);
+
+for (const [label, make] of [
+  ['metadata nested in about 16 KB of definite arrays', () => new Uint8Array([0xa1, 0x01, ...Array(15700).fill(0x81), 0x00])],
+  ['metadata nested in about 16 KB of indefinite arrays', () => new Uint8Array([0xa1, 0x01, ...Array(7850).fill(0x9f), 0x00, ...Array(7850).fill(0xff)])]
+]) {
+  test(`a stranger's payment with ${label} is skipped, and the submission goes through`, async () => {
+    const { store, run } = await mainnetRun();
+    const stranger = testIdentity(new Store(tempHome()), 'testfreeze', 'a stranger');
+    const t = rawTx({ payer: stranger, to: run.report.payment_address, auxBytes: make() });
+    assert.ok(t.size > 15000 && t.size <= 16384, `${t.size} bytes`);
+    const p = providers(run, { history: [t.hash], txs: { [t.hash]: { cbor: t.cbor } }, tip: { abs_slot: 1000 } });
+    const r = await submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf });
+    assert.equal(r.outcome, 'submitted');
+  });
+}
+
+test('a stranger\'s payment with Plutus data nested about 16 KB deep under witness key 4 is skipped, and the submission goes through', async () => {
+  const { store, run } = await mainnetRun();
+  const stranger = testIdentity(new Store(tempHome()), 'testfreeze', 'a stranger');
+  const t = rawTx({ payer: stranger, to: run.report.payment_address, wsTail: [0x04, 0x81, ...Array(15800).fill(0x81), 0x00] });
+  assert.ok(t.size > 15000 && t.size <= 16384, `${t.size} bytes`);
+  const p = providers(run, { history: [t.hash], txs: { [t.hash]: { cbor: t.cbor } }, tip: { abs_slot: 1000 } });
+  const r = await submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf });
+  assert.equal(r.outcome, 'submitted');
+});
+
+test('the payer is found in any witness encoding: an indefinite witness set and list, chunked key and signature, and a witness after another one', async () => {
+  const { store, identity, run } = await mainnetRun();
+  const stranger = testIdentity(new Store(tempHome()), 'testfreeze', 'a stranger');
+  // The identity paid for these, each carrying a label-309 value that does not
+  // parse as a record ({"v": 1}), so each must stop the submission.
+  const aux = label309(new Uint8Array([0xa1, 0x61, 0x76, 0x01]));
+  for (const t of [
+    rawTx({ payer: identity, to: run.report.payment_address, auxBytes: aux, witnesses: 'indefinite' }),
+    rawTx({ payer: identity, to: run.report.payment_address, auxBytes: aux, extraWitness: stranger }),
+    rawTx({ payer: identity, to: run.report.payment_address, auxBytes: aux, witnesses: 'indefinite', extraWitness: stranger })
+  ]) {
+    const p = providers(run, { history: [t.hash], txs: { [t.hash]: { cbor: t.cbor } } });
+    await assert.rejects(submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf }), new RegExp(`${t.hash}: this identity paid for it, and its label-309 value`));
+    assert.ok(!p.f.calls.includes('/submittx'));
+  }
+});
+
+test('an identity-paid transaction without label 309 does not block; an identity-paid label-309 value that fails parsing or validation does', async () => {
+  const { store, identity, run } = await mainnetRun();
+  const submit = (t) => {
+    const p = providers(run, { history: [t.hash], txs: { [t.hash]: { cbor: t.cbor } }, tip: { abs_slot: 1000 } });
+    return submitRun({ store, dir: run.dir, log: () => {}, streams: streams(true, run.hash.slice(0, 8)), koios: p.koios, blockfrost: p.bf });
+  };
+  // Fails validation: a canonical body with v = 2.
+  const v2 = encodeCbor({ v: 2, items: [{ hashes: { 'sha2-256': new Uint8Array(32).fill(1) } }] });
+  assert.ok(v2.length <= 64);
+  await assert.rejects(submit(rawTx({ payer: identity, to: run.report.payment_address, auxBytes: label309(v2) })), /this identity paid for it, and its label-309 value is failed \(validator/);
+  // Fails parsing: {"v": 1} has no items.
+  await assert.rejects(submit(rawTx({ payer: identity, to: run.report.payment_address, auxBytes: label309(new Uint8Array([0xa1, 0x61, 0x76, 0x01])) })), /this identity paid for it, and its label-309 value cannot be parsed/);
+  // Other metadata only (label 674), and no auxiliary data at all: not records.
+  const msgOnly = new Uint8Array([0xa1, 0x19, 0x02, 0xa2, 0xa1, 0x63, 0x6d, 0x73, 0x67, 0x81, 0x62, 0x68, 0x69]);
+  for (const t of [rawTx({ payer: identity, to: run.report.payment_address, auxBytes: msgOnly }), rawTx({ payer: identity, to: run.report.payment_address })]) {
+    const r = await submit(t);
+    assert.equal(r.outcome, 'submitted');
+    store.updateJournal('mainnet', (j) => {
+      j.current = null;
+    });
+  }
 });
