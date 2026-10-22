@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery } from '../../src/checklog.mjs';
+import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery, redactCommand } from '../../src/checklog.mjs';
 import { stripPlan } from '../../src/db.mjs';
 
 test('append, chain, tamper detection, kept outputs', () => {
@@ -54,6 +54,43 @@ test('sanitize replaces counts, addresses and hashes; a refusal keeps its own nu
   assert.equal(sanitize(`credential ${'ab'.repeat(28)} missing`), 'credential <hex> missing');
   assert.equal(sanitizeError(refuse('refusing: a live-fire run needs --test-h <64 lowercase hex>')), 'refusing: a live-fire run needs --test-h <64 lowercase hex>');
   assert.equal(sanitizeError(new Error('needs 64 of them')), 'needs # of them');
+  // Prefixed and joined hex, upper-case bech32, numbers with a unit.
+  assert.equal(sanitize(`bytes \\x${'ab'.repeat(14)} and 0x${'cd'.repeat(14)} and t_${'ef'.repeat(14)}`), 'bytes <hex> and <hex> and t<hex>');
+  assert.equal(sanitize('STAKE1UYEHKCK0LAJQ8GR28T9UXNUVGCQRC6070X3K9R8048Z8Y5GH6FFGW'), '<bech32>');
+  assert.equal(sanitize('37k rows in 1500ms'), '# rows in #');
+});
+
+test('the logged command names no wallet', () => {
+  assert.equal(redactCommand(['a1', '--live-fire', '--stake', 'stake1abc', '--node-stake', 'stake1def', '--purpose', 'p']), 'a1 --live-fire --stake <address> --node-stake <address> --purpose p');
+  assert.equal(redactCommand(['run', '--case', 'stake1abc', '--cases', '/path/cases.txt']), 'run --case <address> --cases /path/cases.txt');
+});
+
+test('a run resumed to a clean finish settles its earlier starts, kept output and failed deletions', () => {
+  const home = mkdtempSync(join(tmpdir(), 'rc-log3-'));
+  const prev = process.env.RESEARCH_CORPUS_HOME;
+  process.env.RESEARCH_CORPUS_HOME = home;
+  try {
+    // Kept, then resumed and deleted.
+    const k = appendEntry('mainnet', 'live-fire-start', { run_id: 'k' });
+    appendEntry('mainnet', 'live-fire', { run_id: 'k', start_seq: k.seq, outcome: 'failed', wallet_level_output: 'kept for debugging' });
+    // Interrupted (no end entry), then resumed.
+    appendEntry('mainnet', 'live-fire-start', { run_id: 'i' });
+    // A failed deletion, then resumed.
+    const d = appendEntry('mainnet', 'live-fire-start', { run_id: 'd' });
+    appendEntry('mainnet', 'live-fire', { run_id: 'd', start_seq: d.seq, outcome: 'failed', wallet_level_output: 'deletion failed: lost' });
+    let v = verifyLog('mainnet');
+    assert.deepEqual([v.kept_not_cleaned.map((x) => x.run_id), v.unclosed.map((x) => x.run_id), v.failed_deletions.map((x) => x.run_id)], [['k'], ['i'], ['d']]);
+    for (const id of ['k', 'i', 'd']) {
+      const st = appendEntry('mainnet', 'live-fire-start', { run_id: id });
+      appendEntry('mainnet', 'live-fire', { run_id: id, start_seq: st.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-10-21T00:00:00Z' });
+    }
+    v = verifyLog('mainnet');
+    assert.deepEqual([v.kept_not_cleaned, v.unclosed, v.failed_deletions], [[], [], []]);
+  } finally {
+    if (prev === undefined) delete process.env.RESEARCH_CORPUS_HOME;
+    else process.env.RESEARCH_CORPUS_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('unclosed starts and failed deletions are reported; loggedQuery logs mainnet only', async () => {

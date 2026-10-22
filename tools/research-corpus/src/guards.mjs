@@ -7,7 +7,9 @@
 // On mainnet the frozen apparatus is the hashed files, so nothing given at run
 // time may change the sample: --set is refused unless every value equals its
 // hashed default, --strata unless the file's bytes are the hashed strata file,
-// --snapshot unless it is the tip, and the Node major must be the pinned one.
+// --snapshot of a live-fire run unless it is the tip (a run on the final
+// freeze takes its snapshot by rule), and the Node major must be the pinned
+// one.
 // A study run also compares the code's own file hashes with the code manifest
 // given at run time (the `npm run hash` output frozen with the final freeze),
 // path by path, and refuses on any difference.
@@ -19,7 +21,7 @@ import { decode as bech32decode } from './bech32.mjs';
 
 export const NODE_MAJOR = 24;
 
-export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, snapshot, nodeVersion = process.version }) {
+export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, snapshot, live = false, nodeVersion = process.version }) {
   const errors = [];
   if (set.length) {
     const d = defaultSettings();
@@ -31,7 +33,8 @@ export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, s
     const h = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
     if (h(strataPath) !== h(defaultStrataPath)) errors.push('--strata is not the hashed strata file');
   }
-  if (snapshot && snapshot !== 'tip') errors.push('--snapshot must be tip on mainnet');
+  if (live && snapshot && snapshot !== 'tip') errors.push('--snapshot must be tip for a live-fire run on mainnet');
+  if (!live && snapshot && snapshot !== 'rule') errors.push('--snapshot: the study run\'s snapshot is fixed by rule (the last block of epoch N - 1)');
   const major = Number(/^v(\d+)\./.exec(nodeVersion)?.[1]);
   if (major !== NODE_MAJOR) errors.push(`Node ${nodeVersion}; the code is pinned to Node ${NODE_MAJOR}`);
   return errors;
@@ -85,12 +88,4 @@ export function checkStakeAddresses(views, what) {
     if (!ok) throw new Error(`${what} must hold bech32 stake addresses, one per line`);
   }
   return [...new Set(views)];
-}
-
-// Case wallets are the ones Adam K. Dean names, and each must be one of his
-// consented keys: a wallet that is not removed from the frames could also be
-// drawn, and a case study is never part of the sample.
-export function caseWalletErrors(cases, consented) {
-  const set = new Set(consented);
-  return cases.filter((c) => !set.has(c)).map((c) => `case wallet ${c} is not in the consented file`);
 }

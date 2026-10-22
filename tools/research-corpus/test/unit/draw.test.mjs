@@ -23,7 +23,6 @@ function credHex(i) {
 async function fixture(db, n) {
   await db.exec(`
     CREATE TABLE study.cred (sa_id bigint PRIMARY KEY, hash_raw bytea, cred_hash bytea, header_type int, network_tag int, is_script boolean, script_hash bytea, view text);
-    CREATE TABLE study.consented (sa_id bigint PRIMARY KEY);
     CREATE TABLE study.activity (win text, sa_id bigint, n_tx_key bigint, n_tx_any bigint, n_spends_key bigint, n_spends_any bigint, n_receipts bigint, n_tx bigint, n_spends bigint);
     CREATE TABLE study.state (point text, sa_id bigint, n_utxo bigint, lovelace numeric, lovelace_all numeric, lovelace_script_pay numeric, n_assets bigint, n_nft bigint, n_units numeric);
     CREATE TABLE study.paycount (point text, sa_id bigint, n_pay bigint, n_pay_key bigint);
@@ -36,16 +35,17 @@ async function fixture(db, n) {
     // Every credential is active in both windows with i spends.
     for (const win of ['recent', 'peak']) await db.query(`INSERT INTO study.activity VALUES ($1, $2, $3, $3, $3, $3, 0, $3, $3)`, [win, i, i]);
     // Credential 4 holds nothing at the snapshot; 5 has 30,000 UTxOs; 6 has 300
-    // payment credentials; 7 has most of its value at script credentials;
+    // key payment credentials; 7 has most of its value at script credentials;
     // even credentials hold one token, 10 holds 150 distinct assets.
     const nUtxo = i === 4 ? 0 : i === 5 ? 30000 : 2;
     const tok = i === 10 ? 150 : i % 2 === 0 ? 1 : 0;
     for (const point of ['snap', 'peak_start', 'peak_end']) {
       if (nUtxo > 0) await db.query(`INSERT INTO study.state VALUES ($1, $2, $3, 100, 100, $4::numeric, $5::bigint, $5::bigint, $5::bigint::numeric)`, [point, i, nUtxo, i === 7 ? 60 : 0, tok]);
     }
-    for (const point of ['snap', 'peak_end']) await db.query(`INSERT INTO study.paycount VALUES ($1, $2, $3, $3)`, [point, i, i === 6 ? 300 : 1]);
+    // 6 has 300 key payment credentials; 11 has 300 payment credentials, only
+    // one of them a key, so the key-credential cap keeps it.
+    for (const point of ['snap', 'peak_end']) await db.query(`INSERT INTO study.paycount VALUES ($1, $2, $3, $4)`, [point, i, i === 6 || i === 11 ? 300 : 1, i === 6 ? 300 : 1]);
   }
-  await db.query('INSERT INTO study.consented VALUES (8)');
 }
 
 function params(over = {}) {
@@ -85,21 +85,20 @@ test('stages, flow, draw order, samples and split on the fixture', async () => {
   const p = params({ guard: 6, target_a: 2, target_b: 1, target_c: 1, ada_only_n: 2 });
   await runBlock('frame', p);
   await runBlock('flow', p);
-  const f = Object.fromEntries((await rows(`SELECT sa_id, eligible, s4, s5, s6, s7, consented, is_script, tok, ge5, ge100 FROM study.frame WHERE frame = 'recent'`)).map((r) => [r.sa_id, r]));
+  const f = Object.fromEntries((await rows(`SELECT sa_id, eligible, s3, s4, s5, s6, is_script, tok, ge5, ge100 FROM study.frame WHERE frame = 'recent'`)).map((r) => [r.sa_id, r]));
   assert.equal(f[3].is_script, true);
-  assert.equal(f[4].s4, false);
-  assert.equal(f[5].s5, false);
-  assert.equal(f[6].s6, false);
-  assert.equal(f[7].s7, false);
-  assert.equal(f[8].consented, true);
+  assert.equal(f[4].s3, false);
+  assert.equal(f[5].s4, false);
+  assert.equal(f[6].s5, false);
+  assert.equal(f[7].s6, false);
   assert.equal(f[10].ge100, true);
   const eligible = Object.values(f).filter((r) => r.eligible).map((r) => Number(r.sa_id)).sort((a, b) => a - b);
-  assert.deepEqual(eligible, [1, 2, 9, 10, 11, 12]);
+  assert.deepEqual(eligible, [1, 2, 8, 9, 10, 11, 12]);
   const flow = await rows(`SELECT stage_no, n_in, n_removed, n_out FROM study.flow WHERE frame = 'recent' ORDER BY stage_no`);
-  assert.deepEqual(flow.map((r) => [r.stage_no, Number(r.n_removed)]), [[1, 0], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1], [8, 0]]);
+  assert.deepEqual(flow.map((r) => [r.stage_no, Number(r.n_removed)]), [[1, 0], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1], [7, 0]]);
   for (let i = 1; i < flow.length; i++) assert.equal(Number(flow[i].n_in), Number(flow[i - 1].n_out));
-  const peakFlow = await rows(`SELECT stage_no, n_removed FROM study.flow WHERE frame = 'peak' AND stage_no = 4`);
-  assert.equal(Number(peakFlow[0].n_removed), 0, 'stage 4 applies to the recent frame only');
+  const peakFlow = await rows(`SELECT stage_no, n_removed FROM study.flow WHERE frame = 'peak' AND stage_no = 3`);
+  assert.equal(Number(peakFlow[0].n_removed), 0, 'stage 3 applies to the recent frame only');
 
   await runBlock('draw', p);
   const order = await rows(`SELECT sa_id, k, tok, ge5, ge100 FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);

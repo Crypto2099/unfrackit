@@ -6,8 +6,9 @@
 // draw key's epoch rule names for the block of S1's seeding transaction, read
 // from the database and from Koios; guard 1,000 so the guard path runs; the
 // real targets (2,400, 1,000, 600 and 1,200), which preprod does not meet. The
-// flow table adds up stage by stage; the consented keys (the funder and S1)
-// are removed at stage 3 and are the case wallets; S1 is never token-holding;
+// flow table adds up stage by stage; the funder and S1 are case wallets, stay
+// in the frames like any wallet, and own-drawn counts them in the drawn
+// samples without writing anything; S1 is never token-holding;
 // S3 and M2 are token-holding, M2 with at least 100 assets, and both are in
 // the sample (the strata of their policies); S3 has one spend event (the
 // sweep), M2 and S1 none; no franken flags on the shapes; the fungible floor
@@ -19,15 +20,13 @@ import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { db, blocks, record, resultsDir, TAG, RUN_A, RUN_B, SHAPES, FUNDER, seederAddress, stakeOf, saIdOf } from './env.mjs';
+import { db, blocks, record, S1_SEEDING_TX, TAG, RUN_A, RUN_B, SHAPES, FUNDER, seederAddress, stakeOf, saIdOf } from './env.mjs';
 import { encode } from '../../src/bech32.mjs';
-import { runPipeline } from '../../src/pipeline.mjs';
+import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
-import { writePrivate } from '../../src/paths.mjs';
 
-export const S1_SEEDING_TX = '0183bce3b177353fec0963164cf4d4693a2f5060decc87bb3ae762a6aadd0152';
 const STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 
 async function fingerprint(c) {
@@ -57,21 +56,17 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     const tip0 = (await q(c, blocks, 'tip_block'))[0];
     const views = Object.fromEntries(SHAPES.map((s) => [s, stakeOf(seederAddress(s)[0])]));
     views.funder = stakeOf(FUNDER);
-    // A consented list: the funder's key (active in both windows), S1's key
-    // (active in the recent window only) and a random key hash, checked to be
-    // absent from the database. (The CIP-19 test vector's stake key is not a
-    // safe choice: it is in use on preprod.) The funder and S1 are the case
-    // wallets; a case wallet must be a consented key.
+    // The case wallets: the funder's key (active in both windows) and S1's key
+    // (active in the recent window only). own-drawn is given them and a random
+    // key hash, checked to be absent from the database. (The CIP-19 test
+    // vector's stake key is not a safe choice: it is in use on preprod.)
     const absent = encode('stake_test', Buffer.concat([Buffer.from([0xe0]), createHash('sha256').update(`absent ${TAG}`).digest().subarray(0, 28)]));
     assert.equal(await saIdOf(c, absent), null, 'the absent key is not on preprod');
-    const consented = join(resultsDir(), 'consented-test.txt');
-    writePrivate(consented, `# test list\n${views.funder}\n${views.S1}\n${absent}\n`);
     const common = {
       expectNetwork: 'preprod',
       snapshot: 'tip',
       standInTx: S1_SEEDING_TX,
       strataList: STRATA,
-      consented,
       hmacKey: process.env.RESEARCH_CORPUS_TEST_HMAC_KEY,
       set: ['guard=1000'],
       caseWallets: [views.funder, views.S1],
@@ -100,7 +95,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     const nCred = Number((await c.query('SELECT count(*) AS n FROM study.cred')).rows[0].n);
     for (const frame of ['recent', 'peak']) {
       const f = b.report.flow.filter((r) => r.frame === frame).sort((x, y) => x.stage_no - y.stage_no);
-      assert.equal(f.length, 8);
+      assert.equal(f.length, 7);
       assert.equal(f[0].n_in, nCred);
       for (let i = 0; i < f.length; i++) {
         assert.equal(f[i].n_removed, f[i].n_in - f[i].n_out);
@@ -108,21 +103,26 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
         if (i > 0) assert.equal(f[i].n_in, f[i - 1].n_out);
       }
       const elig = Number((await c.query('SELECT count(*) AS n FROM study.frame WHERE frame = $1 AND eligible', [frame])).rows[0].n);
-      assert.equal(f[7].n_out, elig);
+      assert.equal(f[6].n_out, elig);
     }
 
-    // The consented keys are removed at stage 3, counted, never written to
-    // the run's files, and are the case wallets.
-    assert.deepEqual(b.report.consented, { listed: 3, matched: 2, unmatched: 1 });
-    assert.equal(b.report.flow.find((r) => r.frame === 'recent' && r.stage_no === 3).n_removed, 2, 'recent: the funder and S1 removed');
-    assert.equal(b.report.flow.find((r) => r.frame === 'peak' && r.stage_no === 3).n_removed, 1, 'peak: the funder removed (S1 never spends)');
+    // The case wallets are matched and named in no published file.
     assert.deepEqual(b.report.case_wallets, { listed: 2, matched: 2 });
-    for (const f of ['params.json', 'report.json', 'manifest.json', 'timings.json', join('raw', 'sample.csv')]) {
+    for (const f of ['params.json', 'report.json', 'manifest.json', 'timings.json']) {
       for (const dir of [a.dir, b.dir]) {
         const text = readFileSync(join(dir, f), 'utf8');
-        assert.ok(!text.includes(views.funder) && !text.includes(views.S1), `${f} names no consented key`);
+        assert.ok(!text.includes(views.funder) && !text.includes(views.S1), `${f} names no case wallet`);
       }
     }
+    // own-drawn: the listed wallets' places in the drawn samples, counted
+    // from the sample table, and nothing written to the run directory.
+    const filesBefore = readdirSync(b.dir).sort();
+    const own = await ownDrawn(c, RUN_B, [views.funder, views.S1, absent]);
+    const ids = [await saIdOf(c, views.funder), await saIdOf(c, views.S1)];
+    const direct = (await c.query('SELECT frame, kind, stratum, count(*) AS n FROM study.sample WHERE sa_id = ANY($1) GROUP BY 1, 2, 3', [ids])).rows;
+    assert.equal(own.by_sample.reduce((x, r) => x + r.drawn, 0), direct.reduce((x, r) => x + Number(r.n), 0));
+    assert.equal(own.listed, 3);
+    assert.deepEqual(readdirSync(b.dir).sort(), filesBefore);
     // The raw list carries no published identifier.
     assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any');
 
@@ -163,11 +163,10 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.ok(s1, 'S1 is in the recent frame');
     assert.equal(s1.tok, false, 'S1 is never token-holding');
     assert.equal(Number(s1.n_spends_any), 0);
-    assert.equal(s1.consented, true, 'S1 is a consented key');
+    assert.equal(s1.eligible, true, 'S1, a case wallet, is eligible like any wallet');
     const s1Samples = (await c.query('SELECT frame, kind FROM study.sample WHERE sa_id = $1', [sa.S1])).rows;
     const s1Rank = (await c.query(`SELECT k, n_ada FROM study.draw_order WHERE frame = 'recent' AND sa_id = $1`, [sa.S1])).rows[0];
-    assert.deepEqual(s1Samples, [], 'a consented key is never sampled');
-    assert.equal(s1Rank, undefined, 'a consented key is not in the draw order');
+    assert.ok(s1Rank, 'S1 is in the draw order');
     assert.equal(await row('peak', sa.S1), undefined, 'S1 has no spend, so it is not in the peak frame');
     const s3 = await row('recent', sa.S3);
     const m2 = await row('recent', sa.M2);
@@ -217,6 +216,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       split: b.report.split,
       split_overall: b.report.split_overall,
       sample_bounds: b.report.sample_bounds,
+      own_drawn: own,
       pointer_wallets: b.report.pointer_wallets,
       probes: b.report.probes,
       era_coverage: b.report.era_coverage,
@@ -225,7 +225,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       check_61: b.report.check_61,
       profiles: b.report.profiles,
       shapes: {
-        S1: { recent: { tok: s1.tok, consented: s1.consented, n_tx: Number(s1.n_tx), n_spends_any: Number(s1.n_spends_any), samples: s1Samples } },
+        S1: { recent: { tok: s1.tok, eligible: s1.eligible, draw_rank: Number(s1Rank.k), n_tx: Number(s1.n_tx), n_spends_any: Number(s1.n_spends_any), samples: s1Samples } },
         S3: { recent: { tok: s3.tok, n_assets: Number(s3.n_assets_a), n_spends_key: Number(s3.n_spends_key) }, peak: s3peak ? { tok: s3peak.tok, n_spends_key: Number(s3peak.n_spends_key) } : null },
         M2: { recent: { tok: m2.tok, ge100: m2.ge100, n_assets: Number(m2.n_assets_a), n_spends_key: Number(m2.n_spends_key) } },
         franken

@@ -21,18 +21,17 @@
 
 import { performance } from 'node:perf_hooks';
 import { readFileSync, rmSync, existsSync } from 'node:fs';
-import { consentedCommitment } from './consented.mjs';
 import { join, resolve } from 'node:path';
 import { loadAll } from './sqlfile.mjs';
 import { connect, applySession, dbMeta, checkHistoryIntact, q, qBound } from './db.mjs';
-import { Runner, dropRunTables } from './runner.mjs';
+import { Runner, dropRunTables, mark } from './runner.mjs';
 import { sqlParams, defaultSettings, applyOverrides, FROZEN_PEAK } from './params.mjs';
 import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { codeVersion, hashList, TOOL_DIR } from './hash.mjs';
 import { buildManifest } from './manifest.mjs';
 import { check61 } from './check61.mjs';
-import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex } from './freeze.mjs';
-import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, caseWalletErrors } from './guards.mjs';
+import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
+import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses } from './guards.mjs';
 import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog } from './checklog.mjs';
 import { Koios } from './koios.mjs';
 
@@ -114,6 +113,15 @@ function functionalChecks(report) {
 // on a resumed run.
 const LIVE_FIRE_AGGREGATES = ['study.flow', 'study.draw_summary', 'study.ft_floor', 'study.nft_top', 'study.unfrackit_tx'];
 
+// A session-level advisory lock held by a run or a cleanup for its whole
+// connection: steps drop and rebuild shared study tables, so two runs at once
+// would read each other's tables.
+const LOCK_KEY = 0x52436f72; // "RCor"
+export async function takeLock(client) {
+  const r = (await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_KEY])).rows[0];
+  if (!r.ok) throw refuse('refusing: another run or cleanup is using the study schema of this database');
+}
+
 export async function runPipeline(opts) {
   const live = opts.liveFire || null;
   const t0 = performance.now();
@@ -123,12 +131,16 @@ export async function runPipeline(opts) {
   const codeAtStart = codeVersion();
   const blocks = loadAll();
   const code = { git_commit: codeAtStart.git_commit, git_dirty: codeAtStart.git_dirty, node: codeAtStart.node };
-  // A live-fire run is logged before its first database query, so even an
-  // interrupted run leaves an entry; the end entry closes it.
+  // A live-fire run's gate (connection, probes, refusals, the hypotheses
+  // record on mainnet, the run's own row) is logged as a query before the
+  // first database query; the live-fire start entry follows only once the
+  // gate has passed, and the end entry closes it.
+  let gateStart = null;
+  let gateClosed = false;
   let startEntry = null;
   if (live) {
     if (!opts.expectNetwork) throw refuse('refusing: a live-fire run needs --expect-network, so that its check-log entry is written before the first query');
-    startEntry = appendEntry(opts.expectNetwork, 'live-fire-start', { run_id: opts.runId, command: opts.command || null, purpose: live.purpose || null, test_h: live.testH || null, code });
+    gateStart = appendEntry(opts.expectNetwork, 'query-start', { name: 'live-fire gate', run_id: opts.runId, command: opts.command || null, code });
   }
   // opts.client lets the unit tests stand a stub in for the database.
   let client = null;
@@ -152,47 +164,42 @@ export async function runPipeline(opts) {
     if (!live && network === 'mainnet') queryStart = appendEntry(network, 'query-start', { name: 'run', run_id: opts.runId, command: opts.command || null, code });
     report.probes = await checkHistoryIntact(client, blocks, meta);
     const mainnet = network === 'mainnet';
+    const finalRun = !live && !!opts.freezeTx;
     const mode = live ? 'live-fire' : mainnet ? 'study' : 'test';
 
     // Options.
     if (mainnet) {
-      const errors = mainnetOptionErrors({ set: opts.set || [], strataPath: opts.strataGiven ? opts.strataList : null, defaultStrataPath: DEFAULT_STRATA, snapshot: opts.snapshot });
+      const errors = mainnetOptionErrors({ set: opts.set || [], strataPath: opts.strataGiven ? opts.strataList : null, defaultStrataPath: DEFAULT_STRATA, snapshot: opts.snapshot, live: !!live });
       if (opts.capture) errors.push('no plan capture under EXPLAIN ANALYZE on mainnet');
       if (opts.hmacKey) errors.push('mainnet runs use the study key in secret/hmac.key');
       if (opts.standInTx) errors.push('a stand-in for h is for test networks only');
       if (errors.length) throw refuse(`refusing: ${errors.join('; ')}`);
     }
-    const consentedViews = opts.consented ? readStakeList(opts.consented, 'the consented file') : [];
+    if (finalRun && opts.snapshot && opts.snapshot !== 'rule') throw refuse('refusing: the snapshot of a run on the final freeze is fixed by rule (the last block of epoch N - 1); give no --snapshot');
     const caseViews = checkStakeAddresses([...new Set([...(opts.caseWallets || []), ...(opts.casesFile ? readStakeList(opts.casesFile, 'the cases file') : [])])], '--case and --cases');
-    const caseErrs = caseWalletErrors(caseViews, consentedViews);
-    if (caseErrs.length) throw refuse(`refusing: ${caseErrs.join('; ')}`);
     if (live) {
       if (!HEX32.test(live.testH || '')) throw refuse('refusing: a live-fire run needs --test-h <64 lowercase hex>');
       if (!live.purpose || !live.purpose.trim()) throw refuse('refusing: a live-fire run needs --purpose');
       if (opts.freezeTx || opts.standInTx) throw refuse('refusing: a live-fire run uses a stated test h, never a freeze or stand-in transaction');
       if (opts.capture) throw refuse('refusing: a live-fire run may use --explain, not --capture');
+      // The hypotheses are frozen before the first live-fire run on mainnet.
+      if (mainnet && (!HEX32.test(opts.hypothesesTx || '') || !HEX32.test(opts.studyKey || ''))) throw refuse('refusing: a mainnet live-fire run needs --hypotheses-tx and --study-key (the hypotheses freeze comes first)');
+      const used = (await q(client, blocks, 'test_h_in_use', { h: { type: 'bytea', value: live.testH } }))[0];
+      if (used.nonce || used.block_hash) throw refuse('refusing: the test h is an epoch nonce or block hash of this chain');
       if (mainnet) {
-        // The hypotheses are frozen before the first live-fire query.
-        if (!HEX32.test(opts.hypothesesTx || '') || !HEX32.test(opts.studyKey || '')) throw refuse('refusing: a mainnet live-fire run needs --hypotheses-tx and --study-key (the hypotheses freeze comes first)');
         const hyp = await readTx(client, blocks, opts.hypothesesTx);
         if (!hyp || !signedBy(hyp, opts.studyKey)) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
         report.hypotheses = { tx: hyp.tx, block_no: hyp.block.block_no, time: hyp.block.time };
       }
     } else if (mainnet) {
-      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['hypothesesTx', '--hypotheses-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey'], ['consented', '--consented'], ['consentedSha256', '--consented-sha256']]) {
+      for (const [k, flag] of [['freezeTx', '--freeze-tx'], ['hypothesesTx', '--hypotheses-tx'], ['prereg', '--prereg'], ['studyKey', '--study-key'], ['codeManifest', '--code-manifest'], ['drawkey', '--drawkey']]) {
         if (!opts[k]) throw refuse(`refusing a mainnet database without ${flag} (or --live-fire before the final freeze)`);
       }
       const errs = codeManifestErrors(readFileSync(opts.codeManifest, 'utf8'), codeAtStart.files);
       if (errs.length) throw refuse(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
     }
-    // The consented file's salted commitment, when one is given.
-    let consentedDigest = null;
-    if (opts.consentedSha256) {
-      if (!opts.consented) throw refuse('refusing: --consented-sha256 needs --consented');
-      consentedDigest = consentedCommitment(opts.consented, opts.consentedSalt);
-      if (consentedDigest !== opts.consentedSha256.toLowerCase()) throw refuse('refusing: the consented file and its salt do not give the committed digest');
-    }
 
+    await takeLock(client);
     const session = await applySession(client, opts.session || {});
     for (const lib of ['schema', 'cip67', 'strata_fn']) {
       await new Runner({ client, blocks, runId: '-', params: {}, log: () => {} }).run(lib);
@@ -201,30 +208,23 @@ export async function runPipeline(opts) {
     const runId = opts.runId;
     const existing = await client.query('SELECT network FROM study.run WHERE run_id = $1', [runId]);
     if (existing.rows.length && existing.rows[0].network !== network) throw refuse(`refusing: run ${runId} belongs to ${existing.rows[0].network}`);
-    const finals = (
-      await client.query(
-        `SELECT p.run_id, (SELECT c.value FROM study.param c WHERE c.run_id = p.run_id AND c.key = 'confirm_snapshot') AS confirm
-           FROM study.param p WHERE p.key = 'freeze' AND p.value->>'role' = 'final-freeze' AND p.run_id <> $1 ORDER BY p.run_id`,
-        [runId]
-      )
-    ).rows;
+    const finals = (await client.query(`SELECT run_id FROM study.param WHERE key = 'freeze' AND value->>'role' = 'final-freeze' AND run_id <> $1 ORDER BY run_id`, [runId])).rows;
     if (live && finals.length) throw refuse(`refusing: this database holds the study's run ${finals[0].run_id}; live-fire runs would overwrite its tables`);
-    // One study run per final freeze: another is allowed only when every
-    // earlier one's snapshot was found rolled back by confirm-snapshot.
-    let restartAfter = [];
-    if (opts.freezeTx && finals.length) {
-      const standing = finals.filter((f) => !(f.confirm && f.confirm.on_chain === false));
-      if (standing.length) throw refuse(`refusing: the study's run ${standing[0].run_id} is already recorded for the final freeze; a second run is allowed only after confirm-snapshot finds its snapshot rolled back`);
-      restartAfter = finals.map((f) => f.run_id);
-    }
+    // One study run per final freeze. Its snapshot is fixed by rule and
+    // confirmed beyond rollback, so a second run could only repeat it; a run
+    // that stopped resumes under its own id.
+    if (finalRun && finals.length) throw refuse(`refusing: the study's run ${finals[0].run_id} is already recorded for the final freeze; resume it under its own run id`);
     const stored0 = existing.rows.length ? await loadParams(client, runId) : {};
     if (stored0.mode && stored0.mode !== mode) throw refuse(`refusing: run ${runId} was started in ${stored0.mode} mode`);
     if (!existing.rows.length) await client.query('INSERT INTO study.run (run_id, network) VALUES ($1, $2)', [runId, network]);
     await storeParam(client, runId, 'mode', mode);
-    if (live) ownsLiveRun = true;
+    if (live) {
+      ownsLiveRun = true;
+      appendEntry(network, 'query', { name: 'live-fire gate', start_seq: gateStart.seq, outcome: 'succeeded', error: null, run_ms: Math.round(performance.now() - t0) });
+      gateClosed = true;
+      startEntry = appendEntry(network, 'live-fire-start', { run_id: opts.runId, gate_seq: gateStart.seq, command: opts.command || null, purpose: live.purpose || null, test_h: live.testH || null, code });
+    }
     const stored = await loadParams(client, runId);
-    if (restartAfter.length) await storeParam(client, runId, 'restart_after_rollback_of', restartAfter);
-    report.restart_after_rollback_of = restartAfter.length ? restartAfter : null;
     dir = runDir(network, runId);
 
     // Settings: fixed values and readings, with overrides. A resumed run must
@@ -236,68 +236,79 @@ export async function runPipeline(opts) {
     await storeParam(client, runId, 'db', { network, version: meta.version, schema_version: meta.schemaVersion, extra_migrations: meta.extraMigrations });
     await storeParam(client, runId, 'session', session);
     Object.assign(report, { mode, settings, session });
-
-    // Snapshot: the tip when the run starts (db-sync stopped there), or on a
-    // test network a given hash; a resumed run keeps the block it recorded.
     const tip = (await q(client, blocks, 'tip_block'))[0];
-    let snapshot = stored.snapshot;
-    if (!snapshot) {
-      const useTip = opts.snapshot === 'tip' || !opts.snapshot;
-      const rows = useTip ? [tip] : await q(client, blocks, 'block_by_hash', { block_hash: { type: 'bytea', value: opts.snapshot } });
-      if (!rows.length) throw new Error(`snapshot block ${opts.snapshot} not found`);
-      const b = rows[0];
-      const t = (await q(client, blocks, 't_of_block', { block_id: { type: 'int', value: b.id } }))[0].t;
-      snapshot = { id: num(b.id), block_no: num(b.block_no), slot_no: num(b.slot_no), epoch_no: num(b.epoch_no), time: b.time, hash: b.hash, t: num(t), chosen: useTip ? 'tip' : 'hash' };
-      await storeParam(client, runId, 'snapshot', snapshot);
-    } else if (opts.snapshot && opts.snapshot !== 'tip' && opts.snapshot !== snapshot.hash) {
-      throw new Error(`run ${runId} has snapshot ${snapshot.hash}`);
-    }
-    report.snapshot = snapshot;
 
     // h. Study: the epoch nonce of the final freeze's epoch rule, after the
     // freeze record is checked. Test networks: the same rule from a stand-in
     // transaction's block, or a rehearsal freeze checked like the study's.
-    // Live-fire: the stated test value, which must not be a nonce or block
-    // hash of this chain.
+    // Live-fire: the stated test value.
     const koios = opts.koios || (!live ? new Koios(network, { log }) : null);
     let freeze = stored.freeze;
     if (live) {
-      const testH = live.testH;
-      if (freeze && freeze.h !== testH) throw refuse(`refusing: run ${runId} was started with another test h`);
-      const used = (await q(client, blocks, 'test_h_in_use', { h: { type: 'bytea', value: testH } }))[0];
-      if (used.nonce || used.block_hash) throw refuse('refusing: the test h is an epoch nonce or block hash of this chain');
-      freeze = { role: 'live-fire test h', h: testH };
+      if (freeze && freeze.h !== live.testH) throw refuse(`refusing: run ${runId} was started with another test h`);
+      freeze = { role: 'live-fire test h', h: live.testH };
     } else {
       const given = opts.freezeTx || opts.standInTx;
-      if (freeze && given && given.toLowerCase() !== freeze.tx) throw new Error(`run ${runId} was started with ${freeze.role} transaction ${freeze.tx}`);
+      if (freeze && given && given.toLowerCase() !== freeze.tx) throw refuse(`refusing: run ${runId} was started with ${freeze.role} transaction ${freeze.tx}`);
       if (opts.freezeTx) {
-        // Digests given at run time that must be items of the final record:
-        // the code manifest, so the path-by-path comparison is the frozen
-        // one; the consented file's commitment; and, on mainnet, a prefix of
-        // the check log.
+        // Digests given at run time that must be items of the final record
+        // and named in the pre-registration: the code manifest, so the
+        // path-by-path comparison is the frozen one; and, on mainnet, a
+        // prefix of the check log.
         const requiredItems = [];
         if (opts.codeManifest) requiredItems.push({ name: 'code_manifest', sha256: sha256hex(readFileSync(opts.codeManifest)) });
-        if (consentedDigest) requiredItems.push({ name: 'consented_commitment', sha256: consentedDigest });
         const checkLogText = mainnet ? (existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '') : undefined;
-        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: snapshot.block_no, requiredItems, checkLogText });
+        const v = await verifyFinalFreeze({ client, blocks, freezeTx: opts.freezeTx, hypothesesTx: opts.hypothesesTx, preregPath: opts.prereg, studyKey: opts.studyKey, codeDigests: hashList(), tipBlockNo: Number(tip.block_no), requiredItems, checkLogText });
         report.freeze_checks = v.checks;
         if (!v.ok) throw refuse(`refusing the freeze transaction: ${v.checks.filter((c) => !c.ok).map((c) => `${c.name}${c.detail && typeof c.detail === 'string' ? ` (${c.detail})` : ''}`).join('; ')}`);
         const dk = await drawKey({ client, blocks, network, block: v.freezeBlock, koios, txHash: v.freeze.tx, drawkeyFile: opts.drawkey || null });
-        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, code_manifest_sha256: requiredItems.find((x) => x.name === 'code_manifest')?.sha256 || null, consented_commitment: consentedDigest, draw: dk, h: dk.nonce };
-        if (freeze && freeze.h !== fresh.h) throw new Error(`run ${runId} was started with another draw key`);
+        const fresh = { tx: v.freeze.tx, role: 'final-freeze', ...v.freeze, document_sha256: v.document.sha256, study_key: opts.studyKey.toLowerCase(), hypotheses: v.hypotheses, code_manifest_sha256: requiredItems.find((x) => x.name === 'code_manifest')?.sha256 || null, draw: dk, h: dk.nonce };
+        if (freeze && freeze.h !== fresh.h) throw refuse(`refusing: run ${runId} was started with another draw key`);
         freeze = fresh;
       } else if (!freeze) {
         if (!HEX32.test((opts.standInTx || '').toLowerCase())) throw refuse('refusing: give --stand-in-tx <64 hex> (test networks), --freeze-tx with its checks, or --live-fire');
-        const s = await readTx(client, blocks, opts.standInTx.toLowerCase());
-        if (!s) throw new Error(`transaction ${opts.standInTx} is not in the database`);
-        const dk = await drawKey({ client, blocks, network, block: s.block, koios });
-        freeze = { tx: s.tx, role: 'stand-in', block_no: s.block.block_no, slot_no: s.block.slot_no, epoch_no: s.block.epoch_no, epoch_slot_no: s.block.epoch_slot_no, block_hash: s.block.hash, time: s.block.time, draw: dk, h: dk.nonce };
+        const st = await readTx(client, blocks, opts.standInTx.toLowerCase());
+        if (!st) throw new Error(`transaction ${opts.standInTx} is not in the database`);
+        const dk = await drawKey({ client, blocks, network, block: st.block, koios });
+        freeze = { tx: st.tx, role: 'stand-in', block_no: st.block.block_no, slot_no: st.block.slot_no, epoch_no: st.block.epoch_no, epoch_slot_no: st.block.epoch_slot_no, block_hash: st.block.hash, time: st.block.time, draw: dk, h: dk.nonce };
       }
-      if (!(snapshot.block_no > freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is not after the freeze block ${freeze.block_no}`);
     }
     await storeParam(client, runId, 'freeze', freeze);
     report.freeze = freeze;
     const h = freeze.h;
+
+    // Snapshot. A run on the final freeze: fixed by rule, the last block of
+    // epoch N - 1, confirmed beyond rollback. A stand-in run on a test network
+    // with --snapshot rule: the same. Otherwise the tip when the run starts
+    // (db-sync stopped there), or on a test network a given block. A resumed
+    // run keeps the block it recorded.
+    let snapshot = stored.snapshot;
+    const byRule = finalRun || (opts.snapshot === 'rule' && freeze.draw);
+    if (!snapshot) {
+      let b;
+      let chosen;
+      let rule = null;
+      if (byRule) {
+        const rs = await ruleSnapshot({ client, blocks, n: freeze.draw.n, koios, tipBlockNo: Number(tip.block_no) });
+        b = rs.block;
+        chosen = 'rule';
+        rule = { ...rs.rule, confirmation: rs.confirmation };
+      } else {
+        if (opts.snapshot === 'rule') throw refuse('refusing: --snapshot rule needs a draw epoch (--freeze-tx or --stand-in-tx)');
+        const useTip = opts.snapshot === 'tip' || !opts.snapshot;
+        const rows = useTip ? [tip] : await q(client, blocks, 'block_by_hash', { block_hash: { type: 'bytea', value: opts.snapshot } });
+        if (!rows.length) throw new Error(`snapshot block ${opts.snapshot} not found`);
+        b = rows[0];
+        chosen = useTip ? 'tip' : 'hash';
+      }
+      const t = (await q(client, blocks, 't_of_block', { block_id: { type: 'int', value: b.id } }))[0].t;
+      snapshot = { id: num(b.id), block_no: num(b.block_no), slot_no: num(b.slot_no), epoch_no: num(b.epoch_no), time: b.time, hash: b.hash, t: num(t), chosen, rule };
+      await storeParam(client, runId, 'snapshot', snapshot);
+    } else if (opts.snapshot && !['tip', 'rule'].includes(opts.snapshot) && opts.snapshot !== snapshot.hash) {
+      throw refuse(`refusing: run ${runId} has snapshot ${snapshot.hash}`);
+    }
+    report.snapshot = snapshot;
+    if (!live && !(snapshot.block_no > freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is not after the freeze block ${freeze.block_no}`);
 
     const run = { network, runId, settings, snapshot, h, windows: stored.windows || null };
     runner = new Runner({ client, blocks, runId, params: sqlParams(run), capture: !!opts.capture && !mainnet && !live, explain: !!opts.explain, quiet: !!live, log: live ? (s) => say(s.replace(/, \d+ rows$/, '')) : log, redo: new Set(opts.redo || []) });
@@ -379,15 +390,11 @@ export async function runPipeline(opts) {
     report.era_coverage = numRow((await q(client, blocks, 'era_coverage'))[0]);
     report.snapshot_epoch_param = JSON.parse((await q(client, blocks, 'snapshot_epoch_param', runner.params))[0].row);
 
-    // Credentials and consented keys.
+    // Credentials.
     await runner.run('cred');
     report.cred_checks = numRow((await q(client, blocks, 'cred_checks', runner.params))[0]);
     const badCred = ['bad_length', 'bad_header', 'bad_script_flag', 'bad_script_hash', 'bad_network'].filter((k) => report.cred_checks[k] !== 0);
     if (badCred.length) throw new Error(`credential checks failed: ${badCred.join(', ')}`);
-    await runner.run('consented_table', {}, (c) => qBound(c, blocks, 'consented_load', [consentedViews]));
-    const nCons = num((await q(client, blocks, 'consented_count'))[0].n);
-    report.consented = { listed: consentedViews.length, matched: nCons, unmatched: consentedViews.length - nCons };
-    await storeParam(client, runId, 'consented_count', report.consented);
 
     // The life table and the frames.
     for (const s of ['txo', 'txo_asset', 'asset']) await runner.run(s);
@@ -423,7 +430,6 @@ export async function runPipeline(opts) {
     report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'stratum']));
     report.split_overall = numRow((await q(client, blocks, 'split_overall'))[0]);
     report.sample_bounds = (await q(client, blocks, 'sample_bounds')).map((r) => ({ ...r, n: num(r.n) }));
-    report.consented_in_bounds = (await q(client, blocks, 'consented_in_bounds', runner.params)).map((r) => ({ frame: r.frame, random: num(r.random), ada_only: num(r.ada_only), strata: num(r.strata) }));
     report.pointer_wallets = numRow((await q(client, blocks, 'pointer_wallets'))[0]);
 
     // Prior-treated and franken flags.
@@ -453,7 +459,7 @@ export async function runPipeline(opts) {
     await storeParam(client, runId, 'code_version', report.code_version);
     report.steps = runner.timings.map((t) => ({ name: t.name, file: t.file, ms: Math.round(t.ms), rows: t.rows }));
     const manifest = await buildManifest({ client, run, report, hmacKeyPath: opts.hmacKey, dir });
-    writeJson(join(dir, 'params.json'), { run_id: runId, network, mode, snapshot, freeze, h, windows: run.windows, settings, session, consented: report.consented, code_version: report.code_version, db: (await loadParams(client, runId)).db });
+    writeJson(join(dir, 'params.json'), { run_id: runId, network, mode, snapshot, freeze, h, windows: run.windows, settings, session, case_wallets: report.case_wallets, code_version: report.code_version, db: (await loadParams(client, runId)).db });
     writeJson(join(dir, 'report.json'), report);
     writeJson(join(dir, 'timings.json'), runner.timings);
     writeJson(join(dir, 'manifest.json'), manifest);
@@ -464,7 +470,11 @@ export async function runPipeline(opts) {
     error = e;
     throw live ? new Error(sanitizeError(e)) : e;
   } finally {
-    if (live) {
+    if (live && gateStart && !gateClosed) {
+      // The gate failed: a query that refused, not a live-fire run.
+      appendEntry(network, 'query', { name: 'live-fire gate', start_seq: gateStart.seq, outcome: 'failed', error: error ? sanitizeError(error) : null, run_ms: Math.round(performance.now() - t0) });
+    }
+    if (live && startEntry) {
       let outputs = 'none written';
       let dropped = null;
       if (ownsLiveRun && client) {
@@ -474,7 +484,11 @@ export async function runPipeline(opts) {
           const m = (await client.query(`SELECT value #>> '{}' AS m FROM study.param WHERE run_id = $1 AND key = 'mode'`, [opts.runId])).rows[0];
           if (!m || m.m !== 'live-fire') throw new Error('the run is not recorded as live-fire');
           if (live.keep) {
-            for (const t of LIVE_FIRE_AGGREGATES) await client.query(`DROP TABLE IF EXISTS ${t}`);
+            // Only aggregates this run built.
+            for (const t of LIVE_FIRE_AGGREGATES) {
+              const own = (await client.query('SELECT obj_description(to_regclass($1), $2) AS c', [t, 'pg_class'])).rows[0].c === mark(opts.runId);
+              if (own) await client.query(`DROP TABLE IF EXISTS ${t}`);
+            }
             outputs = 'kept for debugging';
           } else {
             dropped = (await dropRunTables(client, opts.runId)).length;
@@ -532,14 +546,18 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
     const log = verifyLog(network);
     const text = existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '';
     const entries = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
-    const isA1 = entries.some((e) => e.run_id === runId && (e.type === 'a1-live-fire' || e.type === 'a1-live-fire-start'));
-    if (!mode && !isA1) throw refuse(`refusing: no live-fire run ${runId} in this database or the check log`);
+    // A live-fire run is found by its mode row, or, once its rows are gone (a
+    // run that finished after being kept, an a1 run), by its check-log entries.
+    const logged = entries.some((e) => e.run_id === runId && ['live-fire', 'live-fire-start', 'a1-live-fire', 'a1-live-fire-start'].includes(e.type));
+    if (!mode && !logged) throw refuse(`refusing: no live-fire run ${runId} in this database or the check log`);
     if (mode && mode.m !== 'live-fire') throw refuse(`refusing: run ${runId} is a ${mode.m} run; cleanup is for live-fire runs`);
+    await takeLock(client);
     let outcome = 'succeeded';
     let error = null;
     let n = 0;
     try {
-      if (mode) n = (await dropRunTables(client, runId)).length;
+      // Only tables marked with this run id; with no mode row there may be none.
+      if (reg) n = (await dropRunTables(client, runId)).length;
       const work = join(runDir(network, runId), 'work');
       if (existsSync(work)) rmSync(work, { recursive: true, force: true });
     } catch (e) {
@@ -561,6 +579,27 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
   } finally {
     if (!given) await client.end();
   }
+}
+
+// Private (decided 2026-10-21): Adam K. Dean's own wallets are eligible like
+// any other, and after the draw he checks how many were drawn, states the
+// number, and a sensitivity analysis drops them. This counts the listed
+// stake addresses in each drawn sample of a run and returns the counts; it
+// writes nothing to the run directory, the manifest or the check log.
+export async function ownDrawn(client, runId, views) {
+  const owner = (await client.query('SELECT obj_description(to_regclass($1), $2) AS c', ['study.sample', 'pg_class'])).rows[0].c;
+  if (owner !== mark(runId)) throw refuse(`refusing: study.sample does not belong to run ${runId}`);
+  const rows = (
+    await client.query(
+      `SELECT s.frame, s.kind, s.stratum, count(*) AS drawn
+         FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id
+        WHERE c.view = ANY ($1::text[])
+        GROUP BY s.frame, s.kind, s.stratum ORDER BY s.frame DESC, s.kind, s.stratum`,
+      [views]
+    )
+  ).rows;
+  const wallets = (await client.query(`SELECT count(DISTINCT s.sa_id) AS n FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id WHERE c.view = ANY ($1::text[])`, [views])).rows[0].n;
+  return { run_id: runId, listed: views.length, drawn_wallets: Number(wallets), by_sample: rows.map((r) => ({ frame: r.frame, kind: r.kind, stratum: r.stratum, drawn: Number(r.drawn) })) };
 }
 
 export const resolvePath = (p) => (p ? resolve(p) : p);

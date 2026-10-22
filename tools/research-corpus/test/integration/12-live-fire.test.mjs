@@ -4,9 +4,10 @@
 // T14. The live-fire mode end to end on preprod, as it will run on mainnet
 // before the final freeze: a stated test h (refused when it is a real epoch
 // nonce or block hash), no row count in what the run prints or writes, no
-// report, manifest or raw list, plain EXPLAIN plans reduced to their shape, a
-// start entry and an end entry per run in the check log with the functional
-// outcome only, the run's study tables dropped at the end, or kept for
+// report, manifest or raw list, plain EXPLAIN plans reduced to their shape, the
+// gate logged as a query and then a start entry and an end entry per run in
+// the check log with the functional outcome only, refused attempts logged as
+// failed gate queries and never as live-fire runs, the run's study tables dropped at the end, or kept for
 // debugging without the aggregate tables and then dropped by `cleanup`,
 // which logs when. A refused live-fire run under another run's id drops
 // nothing. This test runs last: the live-fire runs replace the study tables
@@ -46,6 +47,8 @@ test('T14 live-fire runs: no counts, check log, tables dropped or kept and clean
       await assert.rejects(runPipeline({ ...common, runId: RUN_B, liveFire: { testH: TEST_H, purpose: 'refusal under another run' } }), /was started in test mode/);
       assert.deepEqual((await markedTables(c, RUN_B)).sort(), tablesB, `${RUN_B} keeps its tables`);
     }
+    const refusedLog = readFileSync(checkLogPath('preprod'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => [`${TAG}-lf0`, RUN_B].includes(e.run_id) || e.name === 'live-fire gate');
+    assert.ok(!refusedLog.some((e) => e.type === 'live-fire-start' && [`${TAG}-lf0`, RUN_B].includes(e.run_id)), 'a refused attempt is not a live-fire run');
     const before = verifyLog('preprod').entries;
 
     // Kept for debugging, with plans.
@@ -88,7 +91,7 @@ test('T14 live-fire runs: no counts, check log, tables dropped or kept and clean
 
     const v = verifyLog('preprod');
     assert.deepEqual(v.errors, []);
-    assert.equal(v.entries, before + 5, 'two start and end pairs and a cleanup');
+    assert.equal(v.entries, before + 9, 'per run a gate query pair and a start and end pair; a cleanup');
     assert.deepEqual(v.kept_not_cleaned.filter((x) => x.run_id.startsWith(TAG)), []);
     assert.deepEqual(v.unclosed.filter((x) => (x.run_id || '').startsWith(TAG)), []);
     assert.deepEqual(v.failed_deletions.filter((x) => (x.run_id || '').startsWith(TAG)), []);

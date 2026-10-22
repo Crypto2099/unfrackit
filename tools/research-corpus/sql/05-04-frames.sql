@@ -4,8 +4,10 @@
 -- Sections 5.4 and 5.5 of the pre-registration: the two frames, their screens
 -- and exclusions, and the flow table.
 --
--- Frames are exact: every stake credential with a key hash, less Adam K.
--- Dean's keys, screened in SQL as of the snapshot block.
+-- Frames are exact: every stake credential with a key hash, screened in SQL as
+-- of the snapshot block. Adam K. Dean's own wallets are eligible like any
+-- other (decided 2026-10-21), so anyone can reproduce the draw exactly; the
+-- private own-drawn command counts how many of his were drawn.
 --   recent  at least one transaction (spend or receipt) in the recent window,
 --           at least one UTxO at the snapshot, and the exclusions at the
 --           snapshot
@@ -13,16 +15,16 @@
 --           no condition on the state today, and the exclusions as of the
 --           window's end
 -- Stages, each counted in study.flow, applied in this order:
---   1 activity in the window     2 script credentials     3 consented keys
---   4 at least one UTxO at the snapshot (recent only; the removed count is the
+--   1 activity in the window     2 script credentials
+--   3 at least one UTxO at the snapshot (recent only; the removed count is the
 --     number emptied during the window)
---   5 more than 20,000 UTxOs at the reference block
---   6 more than 200 distinct key payment credentials (counted as x12_history
+--   4 more than 20,000 UTxOs at the reference block
+--   5 more than 200 distinct key payment credentials (counted as x12_history
 --     says; script payment credentials are contracts the wallet used, decided
 --     2026-10-21)
---   7 more than half of the lovelace at script payment credentials
+--   6 more than half of the lovelace at script payment credentials
 -- Eligible wallets with more than 5,000 transactions in the window are counted,
--- not removed. Beside stage 6, the report counts the wallets the cap would
+-- not removed. Beside stage 5, the report counts the wallets the cap would
 -- have removed had it counted script payment credentials too (n_pay), which
 -- it keeps: heavy users of per-user script addresses.
 --
@@ -35,9 +37,7 @@
 -- The draw and split keys: SHA-256 of the ASCII bytes of "draw" (or "split"),
 -- then the 32 raw bytes of h, then the 28 raw bytes of the stake credential's
 -- hash (x5_reward29 uses the 29-byte reward address instead). bytea compares
--- bytewise, which orders the digests as big-endian numbers. Keys are computed
--- for every key credential of the frame, so the consented keys' positions can
--- be counted although they are never drawn.
+-- bytewise, which orders the digests as big-endian numbers.
 
 -- @step frame
 -- @outputs study.frame
@@ -74,11 +74,10 @@ pk AS (
 f AS (SELECT * FROM rec UNION ALL SELECT * FROM pk),
 g AS (
   SELECT f.*, c.is_script, c.cred_hash, c.hash_raw,
-         EXISTS (SELECT 1 FROM study.consented k WHERE k.sa_id = f.sa_id) AS consented,
-         (f.frame <> 'recent' OR f.n_utxo >= 1) AS s4,
-         (f.n_utxo <= {{utxo_cap}}) AS s5,
-         (f.n_pay_key <= {{pay_cred_cap}}) AS s6,
-         NOT (f.lovelace_script_pay > {{script_share}} * f.lovelace_all) AS s7,
+         (f.frame <> 'recent' OR f.n_utxo >= 1) AS s3,
+         (f.n_utxo <= {{utxo_cap}}) AS s4,
+         (f.n_pay_key <= {{pay_cred_cap}}) AS s5,
+         NOT (f.lovelace_script_pay > {{script_share}} * f.lovelace_all) AS s6,
          (f.n_assets_a >= 1 OR f.n_assets_b >= 1) AS tok,
          (f.n_spends >= {{spends_b_min}}) AS ge5,
          (CASE {{x8_measure}} WHEN 'units' THEN greatest(f.n_units_a, f.n_units_b)
@@ -88,8 +87,7 @@ g AS (
     FROM f JOIN study.cred c ON c.sa_id = f.sa_id
 )
 SELECT g.*,
-       (NOT g.is_script AND NOT g.consented AND g.s4 AND g.s5 AND g.s6 AND g.s7) AS eligible,
-       (NOT g.is_script AND g.s4 AND g.s5 AND g.s6 AND g.s7) AS eligible_unless_consented,
+       (NOT g.is_script AND g.s3 AND g.s4 AND g.s5 AND g.s6) AS eligible,
        CASE WHEN NOT g.is_script THEN
          sha256(convert_to('draw', 'UTF8') || {{h}} || CASE WHEN {{x5_reward29}} THEN g.hash_raw ELSE g.cred_hash END)
        END AS draw_key,
@@ -111,11 +109,10 @@ st AS (
          (SELECT n FROM n0) AS n0,
          count(*) AS n1,
          count(*) FILTER (WHERE NOT is_script) AS n2,
-         count(*) FILTER (WHERE NOT is_script AND NOT consented) AS n3,
-         count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4) AS n4,
-         count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5) AS n5,
-         count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5 AND s6) AS n6,
-         count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5 AND s6 AND s7) AS n7
+         count(*) FILTER (WHERE NOT is_script AND s3) AS n3,
+         count(*) FILTER (WHERE NOT is_script AND s3 AND s4) AS n4,
+         count(*) FILTER (WHERE NOT is_script AND s3 AND s4 AND s5) AS n5,
+         count(*) FILTER (WHERE NOT is_script AND s3 AND s4 AND s5 AND s6) AS n6
     FROM (VALUES ('recent'::text), ('peak'::text)) fr(frame)
     LEFT JOIN study.frame f ON f.frame = fr.frame
    GROUP BY fr.frame
@@ -125,12 +122,11 @@ SELECT st.frame, v.stage_no, v.stage, v.n_in, v.n_in - v.n_out AS n_removed, v.n
  CROSS JOIN LATERAL (VALUES
    (1, 'activity in the window', st.n0, st.n1),
    (2, 'script stake credentials removed', st.n1, st.n2),
-   (3, 'consented keys removed', st.n2, st.n3),
-   (4, 'no UTxO at the snapshot (recent frame only)', st.n3, st.n4),
-   (5, 'more than 20,000 UTxOs at the reference block', st.n4, st.n5),
-   (6, 'more than 200 distinct key payment credentials', st.n5, st.n6),
-   (7, 'more than half of the lovelace at script payment credentials', st.n6, st.n7),
-   (8, 'eligible', st.n7, st.n7)
+   (3, 'no UTxO at the snapshot (recent frame only)', st.n2, st.n3),
+   (4, 'more than 20,000 UTxOs at the reference block', st.n3, st.n4),
+   (5, 'more than 200 distinct key payment credentials', st.n4, st.n5),
+   (6, 'more than half of the lovelace at script payment credentials', st.n5, st.n6),
+   (7, 'eligible', st.n6, st.n6)
  ) v(stage_no, stage, n_in, n_out)
  ORDER BY st.frame, v.stage_no;
 
@@ -146,10 +142,8 @@ SELECT frame,
        count(*) FILTER (WHERE eligible AND tok AND ge5) AS eligible_tok_ge5,
        count(*) FILTER (WHERE eligible AND tok AND ge100) AS eligible_tok_ge100,
        count(*) FILTER (WHERE eligible AND heavy) AS eligible_over_5000_tx,
-       count(*) FILTER (WHERE consented) AS consented_in_stage1,
-       count(*) FILTER (WHERE consented AND eligible_unless_consented) AS consented_otherwise_eligible,
        count(*) FILTER (WHERE eligible AND n_spends_key <> n_spends_any) AS eligible_x2_differs,
-       count(*) FILTER (WHERE NOT is_script AND NOT consented AND frame = 'recent' AND NOT s4) AS emptied_during_window,
-       count(*) FILTER (WHERE NOT is_script AND NOT consented AND s4 AND s5 AND s6
-                          AND n_pay > {{pay_cred_cap}}) AS s6_kept_by_key_count
+       count(*) FILTER (WHERE NOT is_script AND frame = 'recent' AND NOT s3) AS emptied_during_window,
+       count(*) FILTER (WHERE NOT is_script AND s3 AND s4 AND s5
+                          AND n_pay > {{pay_cred_cap}}) AS s5_kept_by_key_count
   FROM study.frame GROUP BY frame ORDER BY frame DESC;

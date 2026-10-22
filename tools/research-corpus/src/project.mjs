@@ -16,7 +16,6 @@ export const DRIVER = {
   peak_runs: null,
   era_report: null,
   cred: 'stake_address',
-  consented_table: null,
   txo: 'tx_out',
   txo_asset: 'ma_tx_out',
   asset: 'multi_asset',

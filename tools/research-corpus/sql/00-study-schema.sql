@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS study.run (
 
 -- One row per parameter of a run (network, snapshot block, freeze block hash,
 -- window blocks and tx-id bounds, guard and target sizes, the reading
--- settings, the consented-key count, the code version).
+-- settings, the code version).
 CREATE TABLE IF NOT EXISTS study.param (
   run_id  text NOT NULL REFERENCES study.run ON DELETE CASCADE,
   key     text NOT NULL,

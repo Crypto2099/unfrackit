@@ -14,12 +14,12 @@
 -- read from epoch_param.nonce and cross-checked with Koios by the driver
 -- (src/freeze.mjs), which also reads the freeze record below.
 --
--- The snapshot is the database tip when artifact A2 starts, with db-sync
--- stopped there so the database is that block's state. A tip block can still
--- be rolled back after it is recorded, so `confirm-snapshot` checks, once
--- `security_k` (2,160, mainnet's security parameter) more blocks exist, that
--- the snapshot hash is still on chain; if it is not, A2 restarts from the
--- then-tip.
+-- The snapshot of the study's run is fixed by rule (decided 2026-10-21): the
+-- last block of epoch N - 1, N being the draw epoch, confirmed at least
+-- `security_k` (2,160) blocks deep in the database and in Koios before the
+-- run reads it, so whoever starts the run has no choice of block. Wallet state
+-- is read as of that block, whatever the database tip. On a test network a
+-- run may instead take the tip or a given block.
 --
 -- Before anything reads the database, the driver checks db-sync's own
 -- bookkeeping: the network name, the schema version and the extra migrations.
@@ -84,13 +84,23 @@ SELECT m.key, encode(m.bytes, 'hex') AS bytes, m.json::text AS json
  ORDER BY m.key;
 
 -- Label-309 and label-674 metadata of the transactions strictly between two
--- transaction ids (through tx_metadata(tx_id)), for the check that the final
--- freeze is the first transaction carrying its record.
+-- transaction ids (through tx_metadata(tx_id)), for the check that no other
+-- record signed by the study key, and no complete copy of the final record,
+-- lies between the hypotheses record and the final freeze.
 -- @query tx_metadata_between
 SELECT encode(t.hash, 'hex') AS tx, m.tx_id, m.key, encode(m.bytes, 'hex') AS bytes, m.json::text AS json
   FROM public.tx_metadata m JOIN public.tx t ON t.id = m.tx_id
  WHERE m.tx_id > {{lo}} AND m.tx_id < {{hi}} AND m.key IN (309, 674)
  ORDER BY m.tx_id, m.key;
+
+-- The snapshot by rule is the last block of epoch N - 1; a block of epoch N
+-- shows that N - 1 is complete in the database.
+-- @query last_block_of_epoch
+SELECT id, block_no, slot_no, epoch_no, time::text AS time, encode(hash, 'hex') AS hash
+  FROM public.block WHERE epoch_no = {{epoch_no}} ORDER BY id DESC LIMIT 1;
+
+-- @query first_block_of_epoch
+SELECT id, block_no FROM public.block WHERE epoch_no = {{epoch_no}} ORDER BY id LIMIT 1;
 
 -- @query epoch_nonce
 SELECT epoch_no, encode(nonce, 'hex') AS nonce, protocol_major FROM public.epoch_param WHERE epoch_no = {{epoch_no}};

@@ -15,10 +15,10 @@
 -- study.sample_wallet lists every sampled credential once, for the per-wallet
 -- steps that follow (the section 6.1 check, prior-treated flags, franken
 -- flags), and study.sample_frame each (frame, wallet) once, for the profile
--- inputs. Case wallets ride along with in_sample false: the wallets Adam K.
--- Dean names as case studies (pre-registration section 5.2), each of which
--- is also one of the consented keys removed from every frame; they never
--- enter study.sample, and every count over the sample leaves them out.
+-- inputs. Case wallets ride along: the wallets Adam K. Dean names as case
+-- studies (pre-registration section 5.2). A case wallet that was also drawn
+-- is in the sample like any other; one that was not rides along with
+-- in_sample false, and every count over the sample leaves it out.
 
 -- @step split
 -- @outputs study.case_wallet
@@ -33,8 +33,7 @@ UPDATE study.sample x
                   FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id) u) r
  WHERE x.sa_id = r.sa_id;
 
--- The driver binds the case wallets (bech32 stake addresses), after checking
--- that each one is in the consented file.
+-- The driver binds the case wallets (bech32 stake addresses).
 -- @query case_wallet_load
 INSERT INTO study.case_wallet (sa_id)
 SELECT c.sa_id FROM study.cred c WHERE c.view = ANY ($1::text[])

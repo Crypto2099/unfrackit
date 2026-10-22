@@ -57,7 +57,7 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     tool: 'research-corpus',
     network: run.network,
     run_id: run.runId,
-    snapshot: { block_no: run.snapshot.block_no, hash: run.snapshot.hash, time: run.snapshot.time, slot_no: run.snapshot.slot_no, epoch_no: run.snapshot.epoch_no },
+    snapshot: { block_no: run.snapshot.block_no, hash: run.snapshot.hash, time: run.snapshot.time, slot_no: run.snapshot.slot_no, epoch_no: run.snapshot.epoch_no, chosen: run.snapshot.chosen, rule: run.snapshot.rule || null },
     freeze: freezeOf(report.freeze),
     windows: {
       recent: pickWindow(run.windows.recent),
@@ -67,7 +67,6 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     flow: report.flow,
     frame_report: report.frame_report,
     draw: report.draw,
-    consented: { matched: report.consented.matched, in_bounds: report.consented_in_bounds },
     strata: report.strata.map((s) => ({ ord: s.ord, stratum: s.stratum, part: s.part, class: s.class, policy: s.policy, asset_name: s.asset_name, n_recent: s.n_recent, n_peak: s.n_peak })),
     // Holder counts are published for candidates at or above the floor only;
     // the rule needs no more, and a thin candidate's count can be a handful.
@@ -83,7 +82,7 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
 function freezeOf(f) {
   if (!f) return null;
   const draw = f.draw ? { e: f.draw.e, slot_no: f.draw.slot_no, first_slot: f.draw.first_slot, epoch_length: f.draw.epoch_length, k: f.draw.k, f: f.draw.f, window: f.draw.window, cutoff: f.draw.cutoff, n: f.draw.n, nonce: f.draw.nonce, readings: f.draw.readings } : null;
-  return { role: f.role, tx: f.tx || null, block_no: f.block_no ?? null, block_hash: f.block_hash || null, time: f.time || null, document_sha256: f.document_sha256 || null, study_key: f.study_key || null, hypotheses: f.hypotheses || null, draw, h: f.h };
+  return { role: f.role, tx: f.tx || null, block_no: f.block_no ?? null, block_hash: f.block_hash || null, time: f.time || null, document_sha256: f.document_sha256 || null, study_key: f.study_key || null, hypotheses: f.hypotheses || null, code_manifest_sha256: f.code_manifest_sha256 || null, draw, h: f.h };
 }
 
 function pickWindow(w) {

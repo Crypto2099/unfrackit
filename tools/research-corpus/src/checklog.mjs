@@ -41,10 +41,26 @@ export const refuse = (message) => new Refusal(message);
 // database or provider message can reach the log.
 export function sanitize(message, { refusal = false } = {}) {
   let t = String(message)
-    .replace(/\b[a-z][a-z0-9_]*1[02-9ac-hj-np-z]{20,}\b/g, '<bech32>')
-    .replace(/\b[0-9a-fA-F]{20,}\b/g, '<hex>');
-  if (!refusal) t = t.replace(/(?<![\w.])\d[\d,._]*(?![\w])/g, '#');
+    .replace(/\b[a-z][a-z0-9_]*1[02-9ac-hj-np-z]{20,}\b/gi, '<bech32>')
+    .replace(/(?:\\x|0x|_)?[0-9a-fA-F]{20,}/g, '<hex>');
+  // Numbers, with or without a unit suffix (37k rows, 1500ms).
+  if (!refusal) t = t.replace(/(?<![\w.])\d[\d,._]*(?:[a-zA-Z]{1,3})?(?![\w])/g, '#');
   return t.slice(0, 500);
+}
+
+// The command line as logged: the values of options that name wallets are
+// replaced, so the log never carries an address.
+const WALLET_OPTIONS = new Set(['--stake', '--node-stake', '--case']);
+export function redactCommand(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    out.push(argv[i]);
+    if (WALLET_OPTIONS.has(argv[i]) && i + 1 < argv.length) {
+      out.push('<address>');
+      i++;
+    }
+  }
+  return out.join(' ');
 }
 
 export const sanitizeError = (e) => sanitize(e && e.message !== undefined ? e.message : e, { refusal: e instanceof Refusal });
@@ -91,12 +107,21 @@ export function verifyLog(network) {
   for (const e of entries) {
     if (e.type === 'live-fire-start' || e.type === 'a1-live-fire-start' || e.type === 'query-start') starts.set(e.seq, e);
     if (e.start_seq !== undefined && e.start_seq !== null) starts.delete(e.start_seq);
+    // A later end entry that deleted the run's output (a run resumed to a
+    // clean finish) settles its earlier unclosed starts, kept output and
+    // failed deletions.
+    if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && typeof e.wallet_level_output === 'string' && e.wallet_level_output.startsWith('deleted ')) {
+      for (const [seq, st] of starts) if (st.run_id === e.run_id && st.type !== 'query-start') starts.delete(seq);
+      open.delete(e.run_id);
+      for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
+    }
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
       failedDeletions.push({ run_id: e.run_id, seq: e.seq, wallet_level_output: e.wallet_level_output });
     }
     if (e.type === 'cleanup' && e.outcome === 'succeeded') {
       open.delete(e.run_id);
+      for (const [seq, st] of starts) if (st.run_id === e.run_id) starts.delete(seq);
       for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
     }
   }
