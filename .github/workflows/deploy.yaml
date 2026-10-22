@@ -25,5 +25,10 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+      # Before the sync, so the new app never meets a missing file. The app falls back
+      # to its cache and then to built-in defaults, so a Koios outage does not block a release.
+      - name: Publish protocol parameters
+        continue-on-error: true
+        run: node scripts/publish-protocol-parameters.mjs --out "$RUNNER_TEMP/protocol-parameters" --upload "s3://${{ secrets.AWS_S3_BUCKET }}"
       - name: Sync to S3
-        run: aws s3 sync dist/ s3://${{ secrets.AWS_S3_BUCKET }} --acl public-read --delete
+        run: aws s3 sync dist/ s3://${{ secrets.AWS_S3_BUCKET }} --acl public-read --delete --exclude "protocol-parameters/*"

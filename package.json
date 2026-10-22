@@ -1,20 +1,19 @@
 {
   "name": "unfrackit",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "scripts": {
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build",
-    "lint": "vue-cli-service lint"
+    "lint": "vue-cli-service lint",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@emurgo/cardano-serialization-lib-asmjs": "^13.2.1",
-    "axios": "^1.4.0",
     "browserify-zlib": "^0.2.0",
     "core-js": "^3.8.3",
     "fast-safe-stringify": "^2.1.1",
     "https-browserify": "^1.0.0",
-    "lodash.debounce": "^4.0.8",
     "stream-http": "^3.2.0",
     "util": "^0.12.5",
     "vue": "^2.6.14",
