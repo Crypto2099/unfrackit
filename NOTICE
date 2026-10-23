@@ -1,0 +1,21 @@
+UnFrack.It
+Copyright 2023-2026 Adam K. Dean
+
+This repository is licensed in three parts.
+
+Source code and other software files are licensed under the Apache License, Version 2.0 (LICENSE).
+
+Documentation, meaning Markdown and other prose, is licensed under the Creative Commons Attribution 4.0 International license (LICENSE-docs).
+
+The following brand assets are covered by neither license. Its owner reserves all rights:
+
+- src/assets/unfrackit.svg and src/assets/unfrackitinv.svg: the UnFrack.It logo, owned by Adam K. Dean.
+- src/assets/dripdropz.svg, src/assets/logo.svg and public/favicon.png: the DripDropz mark, owned by DripDropz, LLC.
+- public/og.png: the image and its UnFrack.It wordmark are owned by Adam K. Dean; the DripDropz mark and name shown in it are owned by DripDropz, LLC.
+
+The vendored third-party builds in src/lib/ and public/wasm/ remain under their upstream licenses:
+
+- cardano-serialization-lib v11.1.0 (EMURGO), MIT License: src/lib/cardano-serialization-lib-LICENSE.txt and public/wasm/cardano-serialization-lib-LICENSE.txt (from https://github.com/Emurgo/cardano-serialization-lib/blob/11.1.0/LICENSE)
+- cardano-message-signing v1.0.1 (EMURGO), MIT License: src/lib/cardano-message-signing-LICENSE.txt and public/wasm/cardano-message-signing-LICENSE.txt (from https://github.com/Emurgo/message-signing/blob/1.0.1/LICENSE)
+
+Neither license grants any right to use the UnFrack.It or DripDropz names or marks.

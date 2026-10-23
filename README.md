@@ -6,10 +6,11 @@ A simple Vue application to connect and "unfrack" your Cardano Light Wallet!
 
 - Adam K. Dean <adam@crypto2099.io>
 
-## License 
+## License
 
-This software is licensed under [Creative Commons v4.0 Attribution](LICENSE) license. You are free to share, use, modify,
-and distribute this code as you see fit as long as you credit the original authors.
+Source code is licensed under [Apache-2.0](LICENSE). Documentation is licensed under [Creative Commons Attribution 4.0](LICENSE-docs).
+The UnFrack.It and DripDropz logos and marks are not covered by either license, and the vendored builds in `src/lib/` and
+`public/wasm/` keep their upstream MIT licenses, whose texts sit beside them in those directories. See [NOTICE](NOTICE) for the details.
 
 ## Project setup
 ```
