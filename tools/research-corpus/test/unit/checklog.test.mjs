@@ -7,10 +7,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery, redactCommand, closeStart } from '../../src/checklog.mjs';
+import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery, redactCommand, closeStart, CODE_NAMES } from '../../src/checklog.mjs';
 import { stripPlan } from '../../src/db.mjs';
 
 test('append, chain, tamper detection, kept outputs', () => {
@@ -61,6 +61,27 @@ test('sanitize replaces counts, addresses and hashes; a refusal keeps its own nu
   assert.equal(sanitize('STAKE1UYEHKCK0LAJQ8GR28T9UXNUVGCQRC6070X3K9R8048Z8Y5GH6FFGW'), '<bech32>');
   assert.equal(sanitize('37k rows in 1500ms'), '# rows in #');
   assert.equal(sanitize('37rows in 1500msec, value 0x1f4'), '# in #, value <hex>');
+  // Joined to an underscore: every part that begins with a digit, except in
+  // the code's own names; a setting's parts begin with letters.
+  assert.equal(sanitize('rows_37 left, n_12345 wallets in x_1500ms, id _37'), 'rows_# left, n_# wallets in x_#, id _#');
+  assert.equal(sanitize('tx_out_id_99 and pg_temp_3 at a_1e5'), 'tx_out_id_# and pg_temp_# at a_#');
+  assert.equal(sanitize('study.check_61_table and excluded_6_1 under x5_reward29, txo_sa_created'), 'study.check_61_table and excluded_6_1 under x5_reward29, txo_sa_created');
+});
+
+// CODE_NAMES holds exactly the names in sql/ and src/ that have an
+// underscore-separated part beginning with a digit, so sanitize keeps every
+// name the code uses and nothing else.
+test("sanitize's list of the code's names is the code's", () => {
+  const root = new URL('../../', import.meta.url).pathname;
+  const found = new Set();
+  for (const dir of ['sql', 'src']) {
+    for (const f of readdirSync(join(root, dir))) {
+      for (const m of readFileSync(join(root, dir, f), 'utf8').matchAll(/(?<![\w])[A-Za-z]\w*_\w*(?![\w])/g)) {
+        if (m[0].split('_').some((p) => /^\d/.test(p))) found.add(m[0]);
+      }
+    }
+  }
+  assert.deepEqual([...found].sort(), [...CODE_NAMES].sort());
 });
 
 test('the logged command names no wallet', () => {

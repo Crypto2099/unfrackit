@@ -19,6 +19,7 @@ import { loadAll } from '../../src/sqlfile.mjs';
 import { verifyFinalFreeze, drawKey, drawEpoch, stabilityWindow, reassemble, parseRecord, verifySignatures, logPrefixDigests, drawkeyFileErrors, ruleSnapshot, hashTable } from '../../src/freeze.mjs';
 import { decode } from '../../src/cbor.mjs';
 import { studyKeyFor } from '../../src/guards.mjs';
+import { snapshotRuleHolds } from '../../src/cli.mjs';
 import { STUDY_KEY } from '../../src/params.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 
@@ -510,6 +511,23 @@ test('the snapshot by rule: the last block of epoch N - 1 before its cutoff, wit
   const otherFirst = { ...koios(snap.hash, 3000), firstBlockOfEpoch: async () => ({ hash: 'ee'.repeat(32), block_height: 301 }) };
   await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 10, koios: otherFirst, tipBlockNo: 2461 }), /Koios names another first block of epoch 10/);
   await assert.rejects(ruleSnapshot({ client: db, blocks, network: 'preprod', n: 11, koios: koios(snap.hash, 3000), tipBlockNo: 2461 }), /does not yet hold epoch 11/);
+  // confirm-snapshot: the rule names the recorded block (exit 0), names
+  // another (exit 2), or cannot confirm it yet (exit 3). Koios naming another
+  // first block of epoch N leaves the snapshot unconfirmed, not replaced.
+  const holds = async (k, tipBlockNo = 2461, hash = snap.hash, n = 10) => {
+    try {
+      return snapshotRuleHolds(await ruleSnapshot({ client: db, blocks, network: 'preprod', n, koios: k, tipBlockNo }), null, hash);
+    } catch (e) {
+      return snapshotRuleHolds(null, e.message, hash);
+    }
+  };
+  assert.equal(await holds(koios(snap.hash, 3000)), true);
+  assert.equal(await holds(koios(snap.hash, 3000), 2461, 'ff'.repeat(32)), false, 'the rule names another block');
+  assert.equal(await holds(koios('00'.repeat(32), 3000)), false, 'Koios names another last block before the cutoff');
+  assert.equal(await holds(otherFirst), null, 'Koios names another first block of epoch N');
+  assert.equal(await holds(koios(snap.hash, 3000), 2460), null, 'too soon');
+  assert.equal(await holds(koios(snap.hash, 2460)), null, "too soon in Koios");
+  assert.equal(await holds(koios(snap.hash, 3000), 2461, snap.hash, 11), null, 'epoch N not yet in the database');
 });
 
 test('the hypotheses URI is matched whole', async () => {

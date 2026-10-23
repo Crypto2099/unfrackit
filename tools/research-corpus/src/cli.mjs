@@ -292,6 +292,55 @@ export async function a1Command(a, command, { client = null } = {}) {
   if (error) throw a.liveFire ? new Error(sanitizeError(error)) : error;
 }
 
+// The options `run` passes to runPipeline, named one by one from the parsed
+// command line. parseArgs accepts any --name value, so a spread of the parsed
+// arguments would let the command line set options no flag is meant to, such
+// as the unit tests' stand-in for the pinned study key (studyKeyPin).
+export function runOptions(a, command) {
+  return {
+    db: dbOpts(a),
+    runId: a.runId,
+    command,
+    snapshot: a.snapshot,
+    freezeTx: lower(a.freezeTx),
+    hypothesesTx: lower(a.hypothesesTx),
+    fromBlock: a.fromBlock !== undefined ? Number(a.fromBlock) : undefined,
+    prereg: a.prereg,
+    studyKey: lower(a.studyKey),
+    codeManifest: a.codeManifest,
+    drawkey: a.drawkey,
+    standInTx: lower(a.standInTx),
+    liveFire: a.liveFire ? { testH: lower(a.testH), purpose: a.purpose, keep: !!a.keepForDebug } : null,
+    explain: !!a.explain,
+    strataList: a.strata || DEFAULT_STRATA,
+    strataGiven: !!a.strata,
+    hmacKey: a.hmacKey,
+    caseWallets: a.case,
+    casesFile: a.cases,
+    set: a.set,
+    redo: a.redo,
+    capture: !!a.capture,
+    expectNetwork: a.expectNetwork,
+    session: {
+      work_mem: a.workMem,
+      maintenance_work_mem: a.maintenanceWorkMem,
+      parallel_workers: a.parallelWorkers === undefined ? undefined : Number(a.parallelWorkers),
+      temp_tablespaces: a.tempTablespaces
+    }
+  };
+}
+
+// Whether the rule, applied again by confirm-snapshot, still names the
+// recorded snapshot: true or false when it does or names another block (the
+// database's or Koios's last block before the cutoff), null when it cannot
+// tell yet. Koios naming another first block of epoch N, or that block not
+// yet deep enough, leaves the snapshot unconfirmed rather than replaced, so
+// the command exits 3 for it, not 2.
+export function snapshotRuleHolds(rs, error, hash) {
+  if (rs) return rs.block.hash === hash;
+  return /Koios names another last block|no block before its cutoff/.test(error || '') ? false : null;
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const a = parseArgs(rest);
@@ -304,37 +353,7 @@ async function main() {
     }
     case 'run': {
       if (!a.runId) throw new Error('--run-id is required');
-      const r = await runPipeline({
-        db: dbOpts(a),
-        runId: a.runId,
-        command,
-        snapshot: a.snapshot,
-        freezeTx: lower(a.freezeTx),
-        hypothesesTx: lower(a.hypothesesTx),
-        fromBlock: a.fromBlock !== undefined ? Number(a.fromBlock) : undefined,
-        prereg: a.prereg,
-        studyKey: lower(a.studyKey),
-        codeManifest: a.codeManifest,
-        drawkey: a.drawkey,
-        standInTx: lower(a.standInTx),
-        liveFire: a.liveFire ? { testH: lower(a.testH), purpose: a.purpose, keep: !!a.keepForDebug } : null,
-        explain: !!a.explain,
-        strataList: a.strata || DEFAULT_STRATA,
-        strataGiven: !!a.strata,
-        hmacKey: a.hmacKey,
-        caseWallets: a.case,
-        casesFile: a.cases,
-        set: a.set,
-        redo: a.redo,
-        capture: !!a.capture,
-        expectNetwork: a.expectNetwork,
-        session: {
-          work_mem: a.workMem,
-          maintenance_work_mem: a.maintenanceWorkMem,
-          parallel_workers: a.parallelWorkers === undefined ? undefined : Number(a.parallelWorkers),
-          temp_tablespaces: a.tempTablespaces
-        }
-      });
+      const r = await runPipeline(runOptions(a, command));
       console.log(r.live ? JSON.stringify(r.entry, null, 2) : r.dir);
       return;
     }
@@ -420,7 +439,7 @@ async function main() {
             } catch (e) {
               err = e.message;
             }
-            const ruleHolds = rs ? rs.block.hash === snap.hash : /Koios names another|no block before its cutoff/.test(err || '') ? false : null;
+            const ruleHolds = snapshotRuleHolds(rs, err, snap.hash);
             result = { run_id: a.runId, snapshot: snap, on_chain: r.snap_block_no !== null, rule_holds: ruleHolds, confirmation: rs ? rs.confirmation : null, error: err, required: FIXED.security_k, confirmed: r.snap_block_no !== null && ruleHolds === true, checked_at: new Date().toISOString() };
           } else {
             let koiosReading;
