@@ -74,6 +74,7 @@ test('a final freeze record passes every check, with the transactions named or f
     assert.deepEqual(failed(v), []);
     assert.equal(v.freeze.tx, s.freezeTx);
     assert.equal(v.hypotheses.tx, s.hypTx);
+    assert.deepEqual([v.hypotheses.cited_tx, v.hypotheses.document_sha256, v.hypotheses.items_sha256], [s.hypTx, s.ctx.hypDigest, [s.ctx.hypDigest]]);
     const found = await verifyFinalFreeze({ ...s.args, freezeTx: null, hypothesesTx: null });
     assert.deepEqual(failed(found), []);
     assert.equal(found.freeze.tx, s.freezeTx);
@@ -196,6 +197,70 @@ test('a bare copy of the hypotheses record landing first blocks no final: the do
   }
 });
 
+// Copies of the hypotheses record landing ahead of the key holder's, with a
+// stranger's 674 line, a stranger's valid co-signature, or both: each is the
+// first carrier and blocks no final, whichever carrier the document cites.
+// The record is reported from its signed content: its items, the carrier the
+// document cites, and as its document the item that carrier's 674 line names,
+// so the stranger's line is never published as the document's digest.
+test("front-run copies with a stranger's 674 line or co-signature block no final, and the hypotheses record is reported from its signed content", async () => {
+  const stranger = keypair();
+  const forged = sha('a document a stranger names');
+  const copies = {
+    "a stranger's 674 line": (c) => ({ body: metadataBytes(record([c.hypDigest], c.key), 40), msg: forged }),
+    "a stranger's co-signature": (c) => ({ body: metadataBytes(record([c.hypDigest], c.key, { cosigners: [stranger] })) }),
+    'both': (c) => ({ body: metadataBytes(record([c.hypDigest], c.key, { cosigners: [stranger] })), msg: forged })
+  };
+  for (const [what, copy] of Object.entries(copies)) {
+    for (const citesCopy of [false, true]) {
+      const s = await scenario({ before: (c) => c.add({ blockNo: 999, slot: 49000, epoch: 10, epochSlot: 900, ...copy(c) }), citeTx: citesCopy ? (c) => c.before : undefined });
+      const label = `${what}, the document citing ${citesCopy ? 'the copy' : "the key holder's own"}`;
+      try {
+        const v = await verifyFinalFreeze({ ...s.args, hypothesesTx: null });
+        assert.deepEqual(failed(v), [], label);
+        assert.equal(v.freeze.tx, s.freezeTx, label);
+        assert.equal(v.freezeBlock.block_no, 2000, label);
+        assert.equal(v.hypotheses.tx, s.ctx.before, `${label}: the copy is the first carrier`);
+        assert.deepEqual(v.hypotheses.items_sha256, [s.ctx.hypDigest], label);
+        assert.equal(v.hypotheses.cited_tx, citesCopy ? s.ctx.before : s.hypTx, label);
+        // The key holder's line names the document; a copy's line, the
+        // stranger's digest, is no item of the record and is not published.
+        assert.equal(v.hypotheses.document_sha256, citesCopy ? null : s.ctx.hypDigest, label);
+        assert.notEqual(v.hypotheses.document_sha256, forged, label);
+      } finally {
+        s.cleanup();
+      }
+    }
+  }
+});
+
+// The document cites a carrier of the hypotheses record's signed content that
+// lands after the final freeze: later in the same epoch, after the draw key is
+// fixed (epoch 12's nonce is fixed at epoch 11's cutoff), or never. None of
+// them makes the final freeze pass, and the draw block stays the final's.
+test('a carrier of the hypotheses record landing after the final freeze never makes it pass, even after the draw key is fixed', async () => {
+  for (const [when, at] of [
+    ['later in epoch 11', { blockNo: 2500, slot: 4820000, epoch: 11, epochSlot: 25000 }],
+    ['in epoch 12, after the draw key is fixed', { blockNo: 4000, slot: 5184100, epoch: 12, epochSlot: 100 }],
+    ['never', null]
+  ]) {
+    // H is the chain's transaction 1 and F its transaction 2, so the carrier
+    // the document names in advance is transaction 3.
+    const s = await scenario({ citeTx: sha('tx 3') });
+    try {
+      if (at) assert.equal(await s.ctx.add({ ...at, body: metadataBytes(record([s.ctx.hypDigest], s.key), 40) }), sha('tx 3'));
+      const v = await verifyFinalFreeze(s.args);
+      assert.deepEqual(failed(v), ['document_cites_hypotheses_record'], when);
+      assert.equal(v.freeze.tx, s.freezeTx, when);
+      assert.equal(v.freezeBlock.block_no, 2000, when);
+      assert.equal(v.hypotheses.cited_tx, null, when);
+      assert.equal((await verifyFinalFreeze({ ...s.args, freezeTx: null, hypothesesTx: null })).ok, false, when);
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
 test('records in the same block are ordered by transaction', async () => {
   const at = (blockNo, epoch, epochSlot) => ({ blockNo, slot: epoch * 432000 + epochSlot, epoch, epochSlot });
   const run = async (build) => {
@@ -241,6 +306,23 @@ test('records in the same block are ordered by transaction', async () => {
   });
   assert.deepEqual(failed(r.v), []);
   assert.equal(r.v.hypotheses.tx, r.copy);
+  // A carrier of H in F's block, cited by the document: ahead of F it
+  // precedes the final freeze and counts; after F it does not.
+  for (const ahead of [true, false]) {
+    r = await run(async (c) => {
+      await c.add({ ...at(1000, 10, 1000), body: c.hBody, msg: c.hypDigest });
+      // H is transaction 1; the copy and F are transactions 2 and 3.
+      const copyTx = sha(ahead ? 'tx 2' : 'tx 3');
+      const f = c.final(copyTx);
+      const b = await c.block(at(2000, 11, 5000));
+      const copy = { body: metadataBytes(record([c.hypDigest], c.key), 40) };
+      const freeze = { body: metadataBytes(f.raw), msg: f.d };
+      for (const t of ahead ? [copy, freeze] : [freeze, copy]) await c.tx(b, t);
+      return { copyTx };
+    });
+    assert.deepEqual(failed(r.v), ahead ? [] : ['document_cites_hypotheses_record'], ahead ? 'the cited carrier ahead of F' : 'the cited carrier after F');
+    assert.equal(r.v.hypotheses.cited_tx, ahead ? r.copyTx : null);
+  }
   // A complete copy of F in F's block: ahead of F it is the final freeze,
   // after F it is not.
   for (const ahead of [true, false]) {

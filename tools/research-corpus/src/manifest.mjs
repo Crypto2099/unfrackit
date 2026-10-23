@@ -5,10 +5,12 @@
 // hash, time), the published identifiers per frame and sample with their split,
 // the flow tables and the code version. It names no stake address, address or
 // policy of a wallet's holdings; the only transaction hashes it names are the
-// two freeze records'. The raw lists, which name stake addresses, stay in the
-// run directory under raw/ (mode 0600) and are never deposited; they carry no
-// published identifier, so once the HMAC key is destroyed nothing links an
-// identifier back to an address.
+// freeze records' carriers: the final freeze, the hypotheses record's first
+// carrier and the carrier the final document cites, usually the same
+// transaction as the first. The raw lists, which name stake addresses, stay
+// in the run directory under raw/ (mode 0600) and are never deposited; they
+// carry no published identifier, so once the HMAC key is destroyed nothing
+// links an identifier back to an address.
 // Within each sample the identifiers are sorted, so the manifest does not carry
 // the draw order (which anyone can recompute from the public rule).
 
@@ -81,7 +83,11 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
   };
 }
 
-function freezeOf(f) {
+// The freeze as published. The hypotheses record is the run's report of it
+// (src/freeze.mjs): its items from the signed content and the document digest
+// named by the carrier the final document cites, never a first carrier's 674
+// line on its own.
+export function freezeOf(f) {
   if (!f) return null;
   const draw = f.draw ? { e: f.draw.e, slot_no: f.draw.slot_no, first_slot: f.draw.first_slot, epoch_length: f.draw.epoch_length, k: f.draw.k, f: f.draw.f, window: f.draw.window, cutoff: f.draw.cutoff, n: f.draw.n, nonce: f.draw.nonce, readings: f.draw.readings } : null;
   return { role: f.role, tx: f.tx || null, block_no: f.block_no ?? null, block_hash: f.block_hash || null, time: f.time || null, document_sha256: f.document_sha256 || null, study_key: f.study_key || null, hypotheses: f.hypotheses || null, code_manifest_sha256: f.code_manifest_sha256 || null, draw, h: f.h };

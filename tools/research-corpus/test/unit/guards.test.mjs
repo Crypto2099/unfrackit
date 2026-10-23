@@ -27,6 +27,7 @@ import { logPrefixDigests } from '../../src/freeze.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 import { STUDY_KEY } from '../../src/params.mjs';
 import { verifyFreezeCommand, a1Command } from '../../src/cli.mjs';
+import { freezeOf } from '../../src/manifest.mjs';
 
 const FIXTURE_STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 const STAKE_A = 'stake1uyehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gh6ffgw';
@@ -275,9 +276,13 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   // listed: [{ sha256, name }] the document lists besides the code files;
   // items: run-time digests in the record; deep: epoch 501 is in the database
   // with its first block 2,160 below the tip.
-  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false, freezeIsSnap = false }) => {
+  const hypDigest = sha('hypotheses');
+  const forged = sha('a document a stranger names');
+  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false, freezeIsSnap = false, frontRun = false }) => {
     const m = await mainnetDb({ withChain: true, studyRun: false });
-    const hypDigest = sha('hypotheses');
+    // With frontRun, a stranger's copy of the hypotheses body with the
+    // stranger's own 674 line lands one block ahead: the first carrier.
+    const copy = frontRun ? await m.ch.add({ blockNo: 99, slot: 500 * E + 400, epoch: 500, epochSlot: 400, body: metadataBytes(record([hypDigest], key), 40), msg: forged, time: old }) : null;
     const hypTx = await m.ch.add({ blockNo: 100, slot: 500 * E + 500, epoch: 500, epochSlot: 500, body: metadataBytes(record([hypDigest], key)), msg: hypDigest, time: old });
     const lines = [...files.map((f) => `${f.sha256}  ${f.path}`), ...listed.map((l) => `${l.sha256}  ${l.name}`)];
     const text = `final\nkey ${studyKey}\nweb+cardano://transaction/${hypTx}/metadata/309\n\n${lines.join('\n')}\n`;
@@ -309,7 +314,8 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
     const runId = `study-${++k}`;
     const error = await runPipeline({ client: m.client, runId, log: () => {}, koios, freezeTx: f, prereg: finalDoc, studyKeyPin: studyKey, codeManifest: manifest, drawkey }).then(() => null, (e) => e);
     const stored = (await m.db.query(`SELECT value FROM study.param WHERE run_id = $1 AND key = 'snapshot'`, [runId])).rows[0];
-    return { error, snapshot: stored ? stored.value : null, snap };
+    const freeze = (await m.db.query(`SELECT value FROM study.param WHERE run_id = $1 AND key = 'freeze'`, [runId])).rows[0];
+    return { error, snapshot: stored ? stored.value : null, snap, freeze: freeze ? freeze.value : null, hypTx, copy };
   };
   const named = [{ sha256: manifestDigest, name: 'code-manifest.txt' }, { sha256: frozenDigest, name: 'check-log.jsonl' }];
   // Items the document does not list: refused.
@@ -337,6 +343,18 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   assert.equal(r.snapshot.block_no, 2500);
   assert.deepEqual([r.snapshot.rule.epoch, r.snapshot.rule.n, r.snapshot.rule.cutoff_slot], [500, 501, 500 * E + 259200]);
   assert.equal(r.snapshot.rule.confirmation.db_depth, 4761 - 2601);
+  // The hypotheses record as the run stores it and the manifest publishes it:
+  // its document digest from the key holder's line, the one of the carrier
+  // the document cites.
+  assert.equal(freezeOf(r.freeze).hypotheses.document_sha256, hypDigest);
+  // After a front-run with a stranger's 674 line, the run still passes and
+  // publishes the hypotheses document's digest, not the stranger's.
+  r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], deep: true, frontRun: true });
+  assert.ok(r.error, 'the stand-in chain has no tables for the steps');
+  assert.equal(r.snapshot.block_no, 2500);
+  const published = freezeOf(r.freeze).hypotheses;
+  assert.deepEqual([published.tx, published.cited_tx, published.document_sha256, published.items_sha256], [r.copy, r.hypTx, hypDigest, [hypDigest]]);
+  assert.ok(!JSON.stringify(freezeOf(r.freeze)).includes(forged));
   // The final freeze is the last block before the cutoff, so the rule's
   // snapshot is the freeze block itself: not refused for its order.
   r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], deep: true, freezeIsSnap: true });
