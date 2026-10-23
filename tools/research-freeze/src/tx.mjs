@@ -80,6 +80,13 @@ export function buildTransaction({ utxos, outputAddress, signer, networkId, para
   return { bytes: built.bytes, hash: built.hash, size: built.size, fee, ttl, inputs: pure, total: built.total, outCoin: built.outCoin, minAda };
 }
 
+// The raw auxiliary data of a serialized transaction, as sliced by CSL, or
+// null when it has none.
+export function auxiliaryBytes(txBytes) {
+  const raw = CSL.FixedTransaction.from_bytes(txBytes).raw_auxiliary_data();
+  return raw ? new Uint8Array(raw) : null;
+}
+
 const BODY_KEYS_ALLOWED = new Set([0, 1, 2, 3, 7, 15]);
 
 function setItems(v) {

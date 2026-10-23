@@ -7,7 +7,8 @@
 //    is written before the first submission, and no second transaction is
 //    written for a network while an unresolved one is journaled. Every
 //    read-modify-write of the journal holds an exclusive lock file.
-// 2. Every resubmission sends the identical bytes; nothing is rebuilt.
+// 2. Every resubmission sends the identical bytes; nothing is rebuilt
+//    except by an explicit `build --rebuild` (rule 7).
 // 3. A returned transaction id must equal the computed hash.
 // 4. On "All inputs are spent", "already been included" or BadInputsUTxO the
 //    hash is looked up for up to ten minutes. Seen: the transaction was
@@ -25,15 +26,24 @@
 //    nor does Blockfrost when a project id is present (always on mainnet),
 //    and its inputs are unspent; or, for an entry recorded as failed, while
 //    another transaction in the address history is found to have spent them.
+//    On mainnet a hypotheses- or final-stage freeze whose record may have
+//    left the machine is never abandoned: a broadcast body can be replayed
+//    later, so the key signs no other record in its place.
+// 7. Such an entry is rebuilt instead, after its TTL and under rule 6's
+//    checks for it and for every transaction it replaced: a new transaction
+//    carrying the same label-309 record and 674 line byte for byte takes its
+//    place in the journal, and the old entry is recorded as replaced.
 //
-// States: unsubmitted, submitted, failed (all unresolved); confirmed and
-// abandoned (resolved).
+// States: unsubmitted, submitted, failed (all unresolved); confirmed,
+// abandoned and replaced (resolved).
 
 import { KoiosError } from './koios.mjs';
-import { fromHex, sleep as realSleep, UserError } from './util.mjs';
+import { auxiliaryBytes } from './tx.mjs';
+import { equalBytes, fromHex, sleep as realSleep, UserError } from './util.mjs';
 
 export const CONFIRMATION_THRESHOLD = 15; // CIP-190 "Chain facts": RECOMMENDED >= 15 blocks
-const RESOLVED = new Set(['confirmed', 'abandoned']);
+const RESOLVED = new Set(['confirmed', 'abandoned', 'replaced']);
+const STAGED = new Set(['hypotheses', 'final']);
 const SPENT_RE = /All inputs are spent|already been included|BadInputsUTxO/i;
 const MAX_RETRY_AFTER_MS = 600000;
 
@@ -41,10 +51,15 @@ export function isResolved(entry) {
   return !entry || RESOLVED.has(entry.state);
 }
 
+function entriesOf(j) {
+  return [...(j.history || []), ...(j.current ? [j.current] : [])];
+}
+
 function checkNoUnresolved(j, network, exceptHash) {
   if (j.current && !isResolved(j.current) && j.current.txHash !== exceptHash) {
-    const next =
-      j.current.state === 'failed'
+    const next = keepsRecord(entriesOf(j), j.current)
+      ? `its record cannot be abandoned: ${keptRecordNext(j.current)}`
+      : j.current.state === 'failed'
         ? 'run "wait" if it may still land, or after its TTL "abandon", which looks the hash up again'
         : 'run "submit", "wait" or, after its TTL, "abandon"';
     throw new UserError(`an unresolved ${network} transaction is journaled (${j.current.txHash}, state ${j.current.state}); ${next} before writing another`);
@@ -62,7 +77,7 @@ function retire(j) {
   j.current = null;
 }
 
-export function journalEntry({ network, txHash, cbor, ttl, inputs, run, kind = null, stage = null, identity = null, signingPublicKey = null }) {
+export function journalEntry({ network, txHash, cbor, ttl, inputs, run, kind = null, stage = null, identity = null, signingPublicKey = null, replaces = null }) {
   return {
     network,
     txHash,
@@ -74,6 +89,7 @@ export function journalEntry({ network, txHash, cbor, ttl, inputs, run, kind = n
     stage,
     identity,
     signing_public_key: signingPublicKey,
+    ...(replaces ? { replaces } : {}),
     state: 'unsubmitted',
     journaledAt: new Date().toISOString(),
     attempts: []
@@ -82,31 +98,124 @@ export function journalEntry({ network, txHash, cbor, ttl, inputs, run, kind = n
 
 // Every entry of a network's journal, current and retired.
 export function journalEntries(store, network) {
-  const j = store.readJournal(network);
-  return [...(j.history || []), ...(j.current ? [j.current] : [])];
+  return entriesOf(store.readJournal(network));
+}
+
+// Whether a submission of the entry may have left this machine, whatever
+// the answer: a lost response can hide an accepted submission.
+// `submitJournaled` records `sentAt` before its first request, so a process
+// killed while the request was in flight still counts. Any recorded attempt,
+// or a state that only a submission reaches, counts as well.
+export function wasSent(entry) {
+  return Boolean(entry.sentAt) || (entry.attempts || []).length > 0 || ['submitted', 'failed', 'confirmed'].includes(entry.state);
+}
+
+// The entry and the entries it replaced, newest first: the transactions
+// that carry the same signed record.
+export function carriersOf(entries, entry) {
+  const out = [entry];
+  for (let e = entry; e.replaces; ) {
+    e = entries.find((x) => x.txHash === e.replaces);
+    if (!e || out.includes(e)) break;
+    out.push(e);
+  }
+  return out;
+}
+
+// On mainnet the record of a hypotheses- or final-stage freeze is kept once
+// it may have left this machine in any transaction that carries it: the
+// entry is never abandoned, and the key signs no other record in its place,
+// because a broadcast body can be replayed later. An entry that was built
+// and journaled but never sent, and never replaced a sent one, stays
+// abandonable.
+export function keepsRecord(entries, entry) {
+  return entry.network === 'mainnet' && STAGED.has(entry.stage) && carriersOf(entries, entry).some(wasSent);
+}
+
+// What to do with a kept record instead of abandoning it. `submit` sends
+// the journaled bytes again only while no answer has accepted them; after an
+// HTTP 202 it sends nothing more, and for a failed entry it looks the hash
+// up again.
+function keptRecordNext(entry) {
+  const submit =
+    entry.state === 'unsubmitted' ? ', or "submit" again to send the same bytes' : entry.state === 'failed' ? ', or "submit" again to look the hash up' : '';
+  return (
+    `before its TTL (slot ${entry.ttl}), run "wait" if it may still land${submit}; once the TTL has passed without it landing, ` +
+    `"build --rebuild ${entry.txHash} --network ${entry.network}" builds a new transaction around the same signed record and 674 line, and "submit" sends it in this one's place`
+  );
+}
+
+export function assertAbandonable(entries, entry) {
+  if (!keepsRecord(entries, entry)) return;
+  const sent = carriersOf(entries, entry).filter(wasSent).map((e) => e.txHash);
+  throw new UserError(
+    `${entry.txHash} carries a ${entry.stage}-stage freeze record that may have left this machine (sent in ${sent.join(', ')}); on mainnet that record is never abandoned for a newly signed one, because a broadcast body can be replayed later. ` +
+      `Instead: ${keptRecordNext(entry)}`
+  );
 }
 
 // The draw is keyed to one final freeze: on mainnet, another final-stage
-// entry that was not abandoned rules out a second one.
-export function blockingFinal(entries, exceptHash) {
-  return entries.find((e) => e.stage === 'final' && e.txHash !== exceptHash && e.state !== 'abandoned') || null;
+// entry that was neither abandoned nor replaced rules out a second one. A
+// replaced entry does not count because the entry replacing it carries the
+// same record and counts instead. `except`: a hash or a list of hashes.
+export function blockingFinal(entries, except) {
+  const skip = new Set([].concat(except ?? []));
+  return entries.find((e) => e.stage === 'final' && !skip.has(e.txHash) && e.state !== 'abandoned' && e.state !== 'replaced') || null;
 }
 
-export function assertNoOtherFinal(entries, network, exceptHash) {
+export function assertNoOtherFinal(entries, network, except) {
   if (network !== 'mainnet') return;
-  const other = blockingFinal(entries, exceptHash);
+  const other = blockingFinal(entries, except);
   if (other) throw new UserError(`a final-stage freeze is already journaled on mainnet (${other.txHash}, state ${other.state}); the draw is keyed to one final freeze, so a second is refused`);
+}
+
+// A rebuilt entry takes the place of the unresolved entry it `replaces`,
+// which is retired as replaced, only when that entry is still in the state
+// `expect` recorded when the caller checked that it cannot land, it is a
+// staged freeze signed by the same key, the new transaction carries
+// byte for byte the same auxiliary data (the label-309 record and the 674
+// line), and, unless the old entry failed because another transaction
+// spent its inputs, the new one spends every input of the old one, so at
+// most one of the two can land.
+function replaceCurrent(j, entry, expect) {
+  const old = j.current;
+  if (!old || old.txHash !== entry.replaces || isResolved(old)) {
+    throw new UserError(`${entry.txHash} replaces ${entry.replaces}, which is not the unresolved ${entry.network} transaction of the journal${old && !isResolved(old) ? ` (that is ${old.txHash})` : ''}; refusing`);
+  }
+  if (!expect || expect.txHash !== old.txHash || expect.state !== old.state || (expect.sentAt || null) !== (old.sentAt || null) || (expect.attempts || []).length !== (old.attempts || []).length) {
+    throw new UserError(`the journal entry of ${old.txHash} changed while it was checked, or was not checked; run "submit" again`);
+  }
+  if (!STAGED.has(old.stage) || old.stage !== entry.stage || old.signing_public_key !== entry.signing_public_key) {
+    throw new UserError(`${entry.txHash} is not the same staged freeze as ${old.txHash} (stage ${entry.stage} and ${old.stage}); refusing to replace it`);
+  }
+  const before = auxiliaryBytes(fromHex(old.cbor));
+  const after = auxiliaryBytes(fromHex(entry.cbor));
+  if (!before || !after || !equalBytes(before, after)) {
+    throw new UserError(`${entry.txHash} does not carry the record of ${old.txHash} byte for byte (its label-309 value or its 674 line differs); a rebuild carries the same signed record, so it is refused`);
+  }
+  const spends = new Set(entry.inputs.map((u) => `${u.txHash}#${u.index}`));
+  if (old.state !== 'failed' && !old.inputs.every((u) => spends.has(`${u.txHash}#${u.index}`))) {
+    throw new UserError(`${entry.txHash} does not spend every input of ${old.txHash}, so both could land; refusing to replace it`);
+  }
+  old.replacedFrom = old.state;
+  old.state = 'replaced';
+  old.replacedBy = entry.txHash;
+  old.replacedAt = new Date().toISOString();
+  retire(j);
 }
 
 // Journal the entry (rule 1). Refuses while another unresolved entry exists,
 // and, for a mainnet final freeze, while another final freeze is journaled.
 // Both checks run inside the locked read-modify-write, immediately before
 // the first submission, so nothing that happened while the operator was at
-// the prompt can slip past them.
-export function journal(store, entry) {
+// the prompt can slip past them. An entry that `replaces` another first
+// takes that one's place (see replaceCurrent); `replacing` is the replaced
+// entry as the caller found it.
+export function journal(store, entry, { replacing = null } = {}) {
   return store.updateJournal(entry.network, (j) => {
+    if (entry.replaces && !(j.current && j.current.txHash === entry.txHash)) replaceCurrent(j, entry, replacing);
     checkNoUnresolved(j, entry.network, entry.txHash);
-    if (entry.stage === 'final') assertNoOtherFinal([...(j.history || []), ...(j.current ? [j.current] : [])], entry.network, entry.txHash);
+    if (entry.stage === 'final') assertNoOtherFinal(entriesOf(j), entry.network, entry.txHash);
     if (j.current && j.current.txHash === entry.txHash) return j.current;
     retire(j);
     j.current = entry;
@@ -210,6 +319,12 @@ export async function submitJournaled({ koios, store, entry, address, sleep = re
   const bytes = fromHex(entry.cbor, { lower: true });
   for (let attempt = 1; ; attempt++) {
     const at = new Date(now()).toISOString();
+    if (!entry.sentAt) {
+      // Written before the request leaves: from here on the bytes may be
+      // out, whatever answer comes back or fails to.
+      entry.sentAt = at;
+      save(store, entry);
+    }
     let id;
     try {
       id = await koios.submit(bytes);
@@ -256,35 +371,55 @@ async function spenderOf(koios, address, entry) {
   return null;
 }
 
-// Rule 6. `bf` is the Blockfrost client when the home holds a project id
-// (the caller requires one on mainnet): it must not know the hash either.
-export async function abandon({ koios, store, network, address, bf = null }) {
-  const entry = store.readJournal(network).current;
-  if (!entry || isResolved(entry)) throw new UserError(`no unresolved ${network} transaction is journaled`);
-  const tip = await koios.tip();
-  if (tip.slot <= entry.ttl) throw new UserError(`the TTL of ${entry.txHash} (slot ${entry.ttl}) has not passed (tip slot ${tip.slot})`);
-  koios.allowTx(entry.txHash);
-  if ((await koios.txStatus(entry.txHash)) !== null) throw new UserError(`${entry.txHash} is known to Koios /tx_status; it cannot be abandoned`);
-  if ((await koios.txInfo(entry.txHash)) !== null) throw new UserError(`${entry.txHash} is known to Koios /tx_info; it cannot be abandoned`);
-  if (await inAddressHistory(koios, address, entry.txHash)) throw new UserError(`${entry.txHash} is in the payment address's transaction history; it cannot be abandoned`);
+async function assertUnknown({ koios, bf, address, entry, txHash, verb }) {
+  const who = txHash === entry.txHash ? 'it' : entry.txHash;
+  koios.allowTx(txHash);
+  if ((await koios.txStatus(txHash)) !== null) throw new UserError(`${txHash} is known to Koios /tx_status; ${who} cannot be ${verb}`);
+  if ((await koios.txInfo(txHash)) !== null) throw new UserError(`${txHash} is known to Koios /tx_info; ${who} cannot be ${verb}`);
+  if (await inAddressHistory(koios, address, txHash)) throw new UserError(`${txHash} is in the payment address's transaction history; ${who} cannot be ${verb}`);
   // One provider's negative answers are not authoritative (CIP-190 Part B,
   // "Pipeline", step 1): the second provider must not know the hash either.
   if (bf) {
-    bf.allowTx(entry.txHash);
-    if ((await bf.tx(entry.txHash)) !== null) throw new UserError(`${entry.txHash} is known to Blockfrost; it cannot be abandoned`);
+    bf.allowTx(txHash);
+    if ((await bf.tx(txHash)) !== null) throw new UserError(`${txHash} is known to Blockfrost; ${who} cannot be ${verb}`);
   }
+}
+
+// Rule 6's checks that a journaled transaction can no longer land: its TTL
+// has passed, neither Koios nor Blockfrost (when given) knows its hash, and
+// its inputs are unspent; or, for an entry recorded as failed, another
+// transaction in the address history spent them. `earlier`: the hashes of
+// transactions the entry replaced, carrying the same record, none of which
+// may be known either. `bf` is the Blockfrost client when the home holds a
+// project id (the callers require one on mainnet).
+export async function assertCannotLand({ koios, bf = null, entry, address, earlier = [], verb = 'abandoned' }) {
+  const tip = await koios.tip();
+  if (tip.slot <= entry.ttl) throw new UserError(`the TTL of ${entry.txHash} (slot ${entry.ttl}) has not passed (tip slot ${tip.slot})`);
+  for (const txHash of [entry.txHash, ...earlier]) await assertUnknown({ koios, bf, address, entry, txHash, verb });
   let spentBy = null;
   if (entry.state === 'failed') {
     // A failed entry's inputs read as spent while its hash is unknown. Most
     // likely a provider is inconsistent, so it is released only when the
     // transaction that did spend those inputs is found.
     spentBy = await spenderOf(koios, address, entry);
-    if (!spentBy) throw new UserError(`the inputs of ${entry.txHash} read as spent, but no other transaction in the payment address's history spends them; it cannot be abandoned`);
+    if (!spentBy) throw new UserError(`the inputs of ${entry.txHash} read as spent, but no other transaction in the payment address's history spends them; it cannot be ${verb}`);
   } else if (!(await inputsUnspent(koios, address, entry))) {
-    throw new UserError(`the inputs of ${entry.txHash} are not all unspent; it cannot be abandoned (run "submit" to look the hash up)`);
+    throw new UserError(`the inputs of ${entry.txHash} are not all unspent; it cannot be ${verb} (run "submit" to look the hash up)`);
   }
+  return { spentBy };
+}
+
+// Rule 6. On mainnet a staged freeze whose record may have left this
+// machine is refused before anything is asked of a provider, and again
+// inside the locked write, where a submission begun meanwhile would show.
+export async function abandon({ koios, store, network, address, bf = null }) {
+  const entry = store.readJournal(network).current;
+  if (!entry || isResolved(entry)) throw new UserError(`no unresolved ${network} transaction is journaled`);
+  assertAbandonable(journalEntries(store, network), entry);
+  const { spentBy } = await assertCannotLand({ koios, bf, entry, address });
   return store.updateJournal(network, (j) => {
     if (!j.current || j.current.txHash !== entry.txHash || j.current.state !== entry.state) throw new UserError('the journal changed while abandon was checking; run it again');
+    assertAbandonable(entriesOf(j), j.current);
     j.current.state = 'abandoned';
     j.current.abandonedFrom = entry.state;
     j.current.abandonedAt = new Date().toISOString();
@@ -294,6 +429,28 @@ export async function abandon({ koios, store, network, address, bf = null }) {
     retire(j);
     return out;
   });
+}
+
+// The entry a rebuild replaces: the journal's unresolved entry, which must
+// be a hypotheses- or final-stage freeze. Nothing is asked of a provider.
+export function rebuildTarget(store, network, txHash) {
+  const entry = store.readJournal(network).current;
+  if (!entry || entry.txHash !== txHash || isResolved(entry)) {
+    throw new UserError(`${txHash} is not the unresolved ${network} transaction of the journal${entry && !isResolved(entry) ? ` (that is ${entry.txHash})` : ''}; only that one can be rebuilt`);
+  }
+  if (!STAGED.has(entry.stage)) throw new UserError(`${txHash} is ${entry.kind ? `a ${entry.kind}` : 'an unstaged'} transaction; only a hypotheses- or final-stage freeze is rebuilt around its signed record (abandon this one instead)`);
+  return entry;
+}
+
+// Rule 7's checks, run by `build --rebuild` and again by `submit` of the
+// rebuilt run: neither the entry nor any transaction it replaced can land
+// (rule 6's checks, for each of them). Returns the entry as it was found,
+// for `journal` to compare under the lock.
+export async function assertRebuildable({ koios, bf = null, store, network, txHash, address }) {
+  const entry = rebuildTarget(store, network, txHash);
+  const earlier = carriersOf(journalEntries(store, network), entry).slice(1).map((e) => e.txHash);
+  const { spentBy } = await assertCannotLand({ koios, bf, entry, address, earlier, verb: 'rebuilt' });
+  return { entry, earlier, spentBy };
 }
 
 // Poll until the threshold, then record what Koios reports for the block.

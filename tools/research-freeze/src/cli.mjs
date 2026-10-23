@@ -4,7 +4,7 @@
 
 import { Store } from './store.mjs';
 import { newMnemonicPair, deriveIdentity, publicFacts } from './keys.mjs';
-import { hashManifest, build, checkRun, defaultIdentity } from './build.mjs';
+import { hashManifest, build, rebuild, checkRun, defaultIdentity } from './build.mjs';
 import { requireAllPass } from './checks.mjs';
 import { Cardanowall } from './cardanowall.mjs';
 import { koiosFor, resolveRun, submitRun, waitRun, verifyRun, drawKey, abandonJournal, sweep } from './ops.mjs';
@@ -31,6 +31,9 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
                                              (a freeze names its stage; the hypotheses stage is core-only; --hypotheses
                                              names the cited hypotheses record when this home has no run for it, and
                                              --hypotheses-document gives its document when the home has no record of it)
+  build --rebuild <hash> --network <n> [--identity <name>]
+                                             after its TTL, carry the journaled hypotheses or final freeze's signed record,
+                                             byte for byte, in a new transaction with new inputs, fee and TTL; submits nothing
   check <run>                                re-run the offline checks on a run directory
   submit <run>                               submit the run's exact signed bytes (mainnet: interactive confirmation)
   wait <run>                                 wait for 15 confirmations and record the block facts
@@ -39,6 +42,7 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
                                              verify on chain (this tool, the SDK, the cardanowall CLI) and cross-check with Blockfrost
   drawkey <run>                              once epoch N has started, read its nonce from Koios and Blockfrost and record both
   abandon --network <n> [--identity <name>]  drop a journaled transaction whose TTL has passed and which never landed
+                                             (never, on mainnet, a hypotheses or final freeze that may have been sent)
   rehearse <manifest> --network preprod [--doi <doi>] | rehearse --resume <id> --network preprod
                                              the whole sequence on preprod with placeholder files
   registry datacite <doi> [--tx <hash>]      check a DOI at DataCite and its back-link to the record
@@ -168,6 +172,23 @@ async function main() {
       return;
     }
     case 'build': {
+      if (flags.rebuild !== undefined) {
+        if (args.length || flags.stage || flags['core-only'] || flags.hypotheses || flags['hypotheses-document']) {
+          throw new UserError('build --rebuild <hash> --network <n> takes no manifest and no other build option: it carries the record of the journaled transaction unchanged');
+        }
+        const network = needNetwork(flags);
+        const name = flags.identity || defaultIdentity(network);
+        const pub = store.readPublic(name);
+        const cli = Cardanowall.require();
+        const koios = koiosFor(store, network, { addresses: [pub.addresses[network]] });
+        const r = await rebuild({ store, koios, bf: blockfrostFor(store, network), cli, network, identityName: name, replaces: flags.rebuild, log: note });
+        say(`rebuilt the ${r.report.stage}-stage freeze record of ${r.report.replaces} on ${network} into ${r.tx.hash}: the same signed record and 674 line, new inputs, fee and TTL`);
+        say(`  transaction ${r.tx.size} bytes; fee ${tada(r.tx.fee)} ADA; TTL slot ${r.report.ttl}`);
+        say(`  ${r.report.uri}`);
+        say(`  ${r.report.checks.length} offline checks passed; run directory ${r.dir}`);
+        say(`Nothing was submitted. "submit" on the new run journals it in place of ${r.report.replaces}.`);
+        return;
+      }
       if (!args[0]) throw new UserError('build <manifest> --network <n>');
       const network = needNetwork(flags);
       const name = flags.identity || defaultIdentity(network);

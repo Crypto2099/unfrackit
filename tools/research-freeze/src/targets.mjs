@@ -212,11 +212,11 @@ async function addressHistory({ koios, bf, address }) {
 }
 
 // Records this identity paid for that sit on chain at its payment address
-// but that this home's journal does not know, or knows only as abandoned (an
-// entry abandoned on wrong provider answers may have landed). A restored
-// home's journal may predate a record the lost home sent, the final freeze
-// included; the address history shows every transaction this identity paid
-// for, because each one spends UTxOs of that address.
+// but that this home's journal does not know, or knows only as abandoned or
+// replaced (an entry released on wrong provider answers may have landed). A
+// restored home's journal may predate a record the lost home sent, the final
+// freeze included; the address history shows every transaction this identity
+// paid for, because each one spends UTxOs of that address.
 //
 // Each unknown transaction is first read only far enough to decide who paid
 // for it (payerCheck: the body hashed as sent, and a verifying witness from
@@ -234,7 +234,7 @@ async function addressHistory({ koios, bf, address }) {
 // fresh transaction yet; the next attempt clears it), or bytes that are not
 // a well-formed transaction with the requested hash.
 export async function unknownRecordsOnChain({ store, koios, bf = null, network, address, publicKeyHex, paymentKeyHash, exclude = [] }) {
-  const known = new Set([...journalEntries(store, network).filter((e) => e.state !== 'abandoned').map((e) => e.txHash), ...exclude]);
+  const known = new Set([...journalEntries(store, network).filter((e) => e.state !== 'abandoned' && e.state !== 'replaced').map((e) => e.txHash), ...exclude]);
   const hashes = await addressHistory({ koios, bf, address });
   const found = [];
   let skipped = 0;
