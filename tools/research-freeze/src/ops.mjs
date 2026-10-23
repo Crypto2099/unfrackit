@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { Koios, networkOf } from './koios.mjs';
-import { journal, journalEntry, journalEntries, submitJournaled, waitConfirmed, abandon, assertNoUnresolved, assertNoOtherFinal } from './journal.mjs';
+import { journal, journalEntry, journalEntries, submitJournaled, waitConfirmed, abandon, assertAbandonable, assertNoUnresolved, assertNoOtherFinal, assertRebuildable, isResolved, keepsRecord } from './journal.mjs';
 import { unknownRecordsOnChain } from './targets.mjs';
 import { loadRun, assertIdentityNetwork, defaultIdentity } from './build.mjs';
 import { verifyAll, crossCheck, verifyDrawPlan } from './verify.mjs';
@@ -51,7 +51,8 @@ export function submissionFacts(run) {
     ['fee', `${tada(r.fee)} ADA`],
     ['inputs', `${r.inputs.length} UTxOs, ${tada(r.inputs.reduce((s, u) => s + BigInt(u.coin), 0n))} ADA`],
     ['change', `${tada(r.output_coin)} ADA to ${r.payment_address}`],
-    ['TTL', `slot ${r.ttl}`]
+    ['TTL', `slot ${r.ttl}`],
+    ...(r.replaces ? [['replaces', `${r.replaces} (the same signed record, in a new transaction)`]] : [])
   ];
 }
 
@@ -62,27 +63,36 @@ export async function submitRun({ store, dir, log = console.error, streams, koio
   assertTransaction(run.txBytes, run.txExpect);
   const network = run.report.network;
   const finalOnMainnet = network === 'mainnet' && run.report.stage === 'final';
+  // A rebuilt run (`build --rebuild`) carries the record of the transaction
+  // it replaces; until it is journaled, that one is the journal's unresolved
+  // entry and is checked again here before this one takes its place.
+  const replaces = run.report.replaces || null;
+  const replacing = Boolean(replaces) && store.readJournal(network).current?.txHash !== run.txHash;
   // The draw is keyed to one final freeze: on mainnet a second one is refused
-  // once another is journaled (an abandoned one does not count). This early
-  // refusal saves a prompt; `journal` checks again under the lock, right
-  // before sending.
-  if (finalOnMainnet) assertNoOtherFinal(journalEntries(store, network), network, run.txHash);
-  const bf = givenBlockfrost !== undefined ? givenBlockfrost : finalOnMainnet ? blockfrostFor(store, network, { own: { addresses: [run.report.payment_address] } }) : null;
+  // once another is journaled (an abandoned or replaced one does not count,
+  // nor does the one a rebuild replaces). This early refusal saves a prompt;
+  // `journal` checks again under the lock, right before sending.
+  if (finalOnMainnet) assertNoOtherFinal(journalEntries(store, network), network, [run.txHash, replaces].filter(Boolean));
+  const bf = givenBlockfrost !== undefined ? givenBlockfrost : finalOnMainnet || replacing ? blockfrostFor(store, network, { own: { addresses: [run.report.payment_address] } }) : null;
   if (finalOnMainnet && !bf) throw new UserError(`a mainnet final freeze is submitted only after its payment address's history is read from Koios and Blockfrost; save the mainnet project id as secrets/${tokenFileName('mainnet')}`);
+  if (replacing && network === 'mainnet' && !bf) throw new UserError(`a rebuilt transaction takes the journaled one's place on mainnet only after Blockfrost too is found not to know it; save the mainnet project id as secrets/${tokenFileName('mainnet')}`);
   const koios = givenKoios || koiosFor(store, network, { addresses: [run.report.payment_address] });
   koios.allowTx(run.txHash);
   await koios.guard();
+  if (bf) await bf.guard();
   if (finalOnMainnet) {
     // The journal knows only what this home sent. The chain knows every
     // record this identity paid for, so a final freeze sent from a lost home
     // shows up there.
-    await bf.guard();
     const { found, skipped } = await unknownRecordsOnChain({ store, koios, bf, network, address: run.report.payment_address, publicKeyHex: run.report.signing_public_key, paymentKeyHash: run.txExpect.paymentKeyHash, exclude: [run.txHash, run.report.hypotheses_record].filter(Boolean) });
     if (skipped) log(`${skipped} transaction(s) in the payment address's history were not paid by this identity and were not read further`);
     if (found.length) {
       throw new UserError(`refusing a final freeze: the payment address's history holds transactions this home's journal does not know:\n${found.map((f) => `  ${f.tx_hash}: ${f.reason}`).join('\n')}\nOne of them may be a final freeze sent from a lost home.`);
     }
   }
+  // Neither the replaced transaction nor any it replaced can land (rule 6's
+  // checks); `journal` then requires its entry unchanged under the lock.
+  const replaced = replacing ? (await assertRebuildable({ koios, bf, store, network, txHash: replaces, address: run.report.payment_address })).entry : null;
   if (network === 'mainnet') await confirmMainnet(run.txHash, 'submission', streams, submissionFacts(run));
   const entry = journal(
     store,
@@ -96,11 +106,16 @@ export async function submitRun({ store, dir, log = console.error, streams, koio
       kind: run.report.kind,
       stage: run.report.stage || null,
       identity: run.report.identity,
-      signingPublicKey: run.report.signing_public_key
-    })
+      signingPublicKey: run.report.signing_public_key,
+      replaces
+    }),
+    { replacing: replaced }
   );
   const tip = await koios.tip();
-  if (entry.state === 'unsubmitted' && tip.slot > entry.ttl) throw new UserError(`the TTL of ${run.txHash} (slot ${entry.ttl}) has passed (tip slot ${tip.slot}); abandon it and build again`);
+  if (entry.state === 'unsubmitted' && tip.slot > entry.ttl) {
+    const next = keepsRecord(journalEntries(store, network), entry) ? `its record cannot be abandoned; run "build --rebuild ${run.txHash} --network ${network}" and submit the new run` : 'abandon it and build again';
+    throw new UserError(`the TTL of ${run.txHash} (slot ${entry.ttl}) has passed (tip slot ${tip.slot}); ${next}`);
+  }
   const r = await submitJournaled({ koios, store, entry, address: run.report.payment_address, log });
   log(`${run.txHash}: ${r.outcome}`);
   return r;
@@ -319,6 +334,10 @@ export async function drawKey({ store, dir, log = console.error, koios: givenKoi
 }
 
 export async function abandonJournal({ store, network, identityName, koios: givenKoios, blockfrost: givenBlockfrost }) {
+  // A mainnet staged freeze whose record may have left this machine is
+  // refused first, before anything is asked of a provider.
+  const current = store.readJournal(network).current;
+  if (current && !isResolved(current)) assertAbandonable(journalEntries(store, network), current);
   const name = identityName || defaultIdentity(network);
   const pub = store.readPublic(name);
   const koios = givenKoios || koiosFor(store, network, { addresses: [pub.addresses[network]] });

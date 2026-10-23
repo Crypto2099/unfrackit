@@ -9,14 +9,15 @@ import path from 'node:path';
 import { readManifest, recordUri } from './manifest.mjs';
 import { hashItems, documentChecks, citedRecords, DOCUMENT_CHECKED_KINDS } from './hashing.mjs';
 import { deriveIdentity } from './keys.mjs';
-import { buildRecord, signRecord, carry, messageLines, auxiliaryData, detailedMetadataJson, topLevelKeys } from './record.mjs';
-import { buildTransaction, TTL_SLOTS } from './tx.mjs';
+import { buildRecord, signRecord, carry, messageLines, auxiliaryData, expectedAuxiliaryBytes, detailedMetadataJson, topLevelKeys } from './record.mjs';
+import { buildTransaction, auxiliaryBytes, TTL_SLOTS } from './tx.mjs';
 import { checkArtifacts, requireAllPass } from './checks.mjs';
-import { assertNoUnresolved, assertNoOtherFinal, journalEntries } from './journal.mjs';
+import { assertNoUnresolved, assertNoOtherFinal, assertRebuildable, carriersOf, journalEntries, rebuildTarget } from './journal.mjs';
 import { checkTargets, checkCitedHypotheses } from './targets.mjs';
 import { networkOf } from './koios.mjs';
 import { versions } from './pins.mjs';
-import { fromHex, stringify, toHex, UserError } from './util.mjs';
+import { decode, encode, mapGet } from './cbor.mjs';
+import { equalBytes, fromHex, stringify, toHex, UserError } from './util.mjs';
 
 export function defaultIdentity(network) {
   return network === 'preprod' ? 'rehearsal' : 'freeze';
@@ -183,15 +184,133 @@ export function runReport({ network, name, pub, manifest, coreOnly, hashed, doc,
     label_309_chunks: p.chunks.length,
     label_309_value_bytes: p.valueBytes.length,
     message: p.lines,
+    ...transactionFacts(p, params),
+    items: hashed.map((h) => ({ name: h.name, sha256: h.hex, size: h.size, type: h.type || null, ids: h.ids || null, document: h.document })),
+    document_checks: doc,
+    checks,
+    versions: versions(cli)
+  };
+}
+
+// The facts of the carrying transaction, as a run report records them.
+function transactionFacts(p, params) {
+  return {
     tx_size: p.tx.size,
     fee: p.tx.fee.toString(),
     ttl: p.ttl,
     tip_at_build: params.tip,
     protocol: { epoch: params.epoch, major: params.protocolMajor, minor: params.protocolMinor, min_fee_a: params.minFeeA.toString(), min_fee_b: params.minFeeB.toString(), max_tx_size: params.maxTxSize, coins_per_utxo_size: params.coinsPerUtxoByte.toString() },
     inputs: p.tx.inputs.map((u) => ({ tx_hash: u.txHash, index: u.index, coin: u.coin.toString() })),
-    output_coin: p.tx.outCoin.toString(),
-    items: hashed.map((h) => ({ name: h.name, sha256: h.hex, size: h.size, type: h.type || null, ids: h.ids || null, document: h.document })),
-    document_checks: doc,
+    output_coin: p.tx.outCoin.toString()
+  };
+}
+
+// The rebuild of a hypotheses- or final-stage freeze (`build --rebuild
+// <hash>`). Once such a record may have left this machine it is never signed
+// again or replaced by another (on mainnet `abandon` refuses it, because a
+// broadcast body can be replayed later). When its transaction's TTL has
+// passed without it landing, a new transaction carries the same record: the
+// auxiliary data of the journaled transaction byte for byte (the label-309
+// value, with its COSE_Sign1, and the 674 line), with the inputs, fee and TTL
+// read anew and a new payment witness. Nothing is signed over the record.
+// Before anything is built, the journal's unresolved entry and every
+// transaction it replaced are shown unable to land, by rule 6's checks;
+// unless that entry failed because another transaction spent its inputs, the
+// new transaction spends every one of those inputs, so at most one of the two
+// can land. The new run directory holds the old one's record files and names
+// the transaction it replaces; `submit` journals it in that one's place.
+export async function rebuild({ store, koios, bf = null, cli, network, identityName, replaces, log = () => {} }) {
+  networkOf(network);
+  const name = identityName || defaultIdentity(network);
+  const pub = store.readPublic(name);
+  assertIdentityNetwork(pub, network);
+  if (!/^[0-9a-f]{64}$/.test(replaces || '')) throw new UserError(`--rebuild takes the 64-digit lowercase hash of the journaled transaction: ${replaces}`);
+  const entry = rebuildTarget(store, network, replaces);
+  if (entry.signing_public_key !== pub.signing_public_key) throw new UserError(`${replaces} was signed by ${entry.signing_public_key}, not by identity "${name}"'s key`);
+  if (!cli) throw new UserError('build requires the cardanowall CLI 0.12.0 for its offline checks');
+  if (network === 'mainnet' && !bf) throw new UserError('a rebuild on mainnet asks Blockfrost too whether the journaled transaction landed; save the mainnet project id as secrets/blockfrost-mainnet.token');
+  const dir = store.runDir(network, replaces);
+  if (!fs.existsSync(path.join(dir, 'report.json'))) throw new UserError(`no run directory for ${replaces} in ${store.home}; it holds the signed record to carry`);
+  const old = loadRun(dir);
+  if (old.txHash !== replaces || old.report.network !== network || old.report.stage !== entry.stage || old.report.signing_public_key !== pub.signing_public_key || old.report.payment_address !== pub.addresses[network]) {
+    throw new UserError(`the run directory of ${replaces} does not match its journal entry or identity "${name}"`);
+  }
+
+  await koios.guard();
+  if (bf) await bf.guard();
+  await assertRebuildable({ koios, bf, store, network, txHash: replaces, address: pub.addresses[network] });
+  if (entry.stage === 'final') assertNoOtherFinal(journalEntries(store, network), network, carriersOf(journalEntries(store, network), entry).map((e) => e.txHash));
+  const params = await koios.params();
+
+  const { signingMnemonic, paymentMnemonic } = store.readMnemonics(name);
+  const id = deriveIdentity(signingMnemonic, paymentMnemonic);
+  const address = id.payment.address(network).to_bech32();
+  if (toHex(id.signing.publicKey) !== pub.signing_public_key || toHex(id.payment.keyHash) !== pub.payment_key_hash || address !== pub.addresses[network]) {
+    throw new UserError(`identity "${name}": the public file does not match the keys its mnemonics derive; refusing`);
+  }
+  koios.addresses.add(address);
+  const utxos = await koios.addressUtxos(address);
+  const p = prepareRebuild({ run: old, sentCbor: entry.cbor, utxos, payment: id.payment, params, network, ttl: params.tip.slot + TTL_SLOTS, paymentKeyHash: pub.payment_key_hash, mustSpend: entry.state === 'failed' ? [] : entry.inputs });
+  // The same offline checks as any build. Nothing is signed over the record,
+  // so the reference CLI is not asked to sign it with the rehearsal seed.
+  const checks = checkArtifacts(
+    { body: p.signed.body, bodyNoSigs: p.signed.bodyNoSigs, sigStructure: p.signed.sigStructure, coseSign1: p.signed.coseSign1, txBytes: p.tx.bytes, txExpect: p.txExpect, digests: old.report.items.map((i) => i.sha256), publicKeyHex: pub.signing_public_key },
+    { cli, store, rehearsalSeed: null }
+  );
+  requireAllPass(checks);
+  const report = rebuildReport({ old: old.report, p, params, checks, cli });
+  const out = store.writeRun(network, p.tx.hash, runFiles(p, report));
+  log(`run directory: ${out}`);
+  return { dir: out, report, tx: p.tx, signed: p.signed };
+}
+
+// From the run directory of the transaction being replaced, the bytes that
+// transaction carried (`sentCbor`, from its journal entry), UTxOs and
+// parameters to the new signed transaction. No I/O. Refuses unless the run
+// directory's record is the one the journaled transaction carries, its files
+// agree with each other, and the new transaction's auxiliary data equals the
+// old one's byte for byte and spends every input in `mustSpend`.
+export function prepareRebuild({ run, sentCbor, utxos, payment, params, network, ttl, paymentKeyHash, mustSpend = [] }) {
+  const net = networkOf(network);
+  const address = payment.address(network).to_bech32();
+  const sent = auxiliaryBytes(fromHex(sentCbor, { lower: true }));
+  const { chunks, valueBytes } = carry(run.body);
+  const lines = run.report.message;
+  if (!sent || !equalBytes(sent, expectedAuxiliaryBytes(chunks, lines))) {
+    throw new UserError(`the run directory of ${run.txHash} does not hold the record its journaled transaction carries (the label-309 value or the 674 line differs); a rebuild carries that record unchanged, so it is refused`);
+  }
+  const record = decode(run.body, { canonical: true });
+  const sigs = mapGet(record, 'sigs');
+  const withoutSigs = new Map(record);
+  withoutSigs.delete('sigs');
+  if (!equalBytes(encode(withoutSigs), run.bodyNoSigs) || !Array.isArray(sigs) || sigs.length !== 1 || !equalBytes(mapGet(sigs[0], 'cose_sign1'), run.coseSign1)) {
+    throw new UserError(`the record files of ${run.txHash} do not agree with its body (the body without sigs or the COSE_Sign1 differs); refusing to rebuild`);
+  }
+  const tx = buildTransaction({ utxos, outputAddress: payment.address(network), signer: payment.privateKey, networkId: net.networkId, params, ttl, aux: auxiliaryData(chunks, lines) });
+  const spent = new Set(tx.inputs.map((u) => `${u.txHash}#${u.index}`));
+  const missing = mustSpend.filter((u) => !spent.has(`${u.txHash}#${u.index}`));
+  if (missing.length) {
+    throw new UserError(`the new transaction must spend every input of ${run.txHash}, so that at most one of the two can land, but ${missing.map((u) => `${u.txHash}#${u.index}`).join(', ')} is not among the pure-ADA UTxOs at the address`);
+  }
+  if (!equalBytes(auxiliaryBytes(tx.bytes), sent)) throw new Error('the rebuilt transaction\'s auxiliary data differs from the journaled transaction\'s');
+  const txExpect = { txHash: tx.hash, chunks, lines, recordBody: run.body, maxTxSize: params.maxTxSize, networkId: net.networkId, ttl, params, inputs: tx.inputs, outputAddress: address, paymentKeyHash };
+  return { signed: { body: run.body, bodyNoSigs: run.bodyNoSigs, sigStructure: run.sigStructure, coseSign1: run.coseSign1 }, chunks, valueBytes, lines, tx, txExpect, ttl, address };
+}
+
+// The rebuilt run's report: the old report's record facts (kind, stage,
+// items, the 674 line, the document checks, the targets), the new
+// transaction's facts and checks, and the hash it replaces. What the old run
+// recorded about its own transaction's fate (wait, verify, the draw plan) is
+// not carried over.
+export function rebuildReport({ old, p, params, checks, cli }) {
+  const { confirmed: _c, verified: _v, draw: _d, drawkey: _k, replaces: _r, ...record } = old;
+  return {
+    ...record,
+    created: new Date().toISOString(),
+    replaces: old.tx_hash,
+    tx_hash: p.tx.hash,
+    uri: recordUri(p.tx.hash),
+    ...transactionFacts(p, params),
     checks,
     versions: versions(cli)
   };

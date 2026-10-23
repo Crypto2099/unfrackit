@@ -10,7 +10,7 @@ import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { Koios, NETWORKS } from '../src/koios.mjs';
 import { Blockfrost } from '../src/blockfrost.mjs';
 import { deriveIdentity, mnemonicFromEntropy, publicFacts } from '../src/keys.mjs';
-import { prepareRun, runReport, runFiles } from '../src/build.mjs';
+import { prepareRun, runReport, runFiles, loadRun, prepareRebuild, rebuildReport } from '../src/build.mjs';
 import { journal, journalEntry } from '../src/journal.mjs';
 import { toHex } from '../src/util.mjs';
 
@@ -95,6 +95,21 @@ export async function fabricateRun(store, { network = 'preprod', identity, kind 
   const report = runReport({ network, name: identity.pub.name, pub: identity.pub, manifest, coreOnly, hashed, doc: null, p, params, checks: [], cli: null, extra });
   const dir = store.writeRun(network, p.tx.hash, runFiles(p, report));
   return { dir, p, report, hash: p.tx.hash, cbor: toHex(p.tx.bytes), body: p.signed.body };
+}
+
+// A rebuilt run directory written as `build --rebuild` writes it (without
+// the reference CLI's checks): the journal's current entry's record in a new
+// transaction over `utxos` (by default the entry's own inputs), built at
+// `tipSlot`.
+export function fabricateRebuild(store, { network = 'mainnet', identity, tipSlot, utxos }) {
+  const entry = store.readJournal(network).current;
+  const old = loadRun(store.runDir(network, entry.txHash));
+  const params = { epoch: 320, protocolMajor: 11, protocolMinor: 0, minFeeA: 44n, minFeeB: 155381n, maxTxSize: 16384, coinsPerUtxoByte: 4310n, tip: { slot: tipSlot, epoch: 320, height: 1, hash: '00', time: 1 } };
+  const spend = utxos || entry.inputs.map((u) => ({ txHash: u.txHash, index: u.index, coin: BigInt(u.coin), assets: [], datumBytes: null, datumHash: null, refScript: null }));
+  const p = prepareRebuild({ run: old, sentCbor: entry.cbor, utxos: spend, payment: identity.id.payment, params, network, ttl: tipSlot + 7200, paymentKeyHash: identity.pub.payment_key_hash, mustSpend: entry.state === 'failed' ? [] : entry.inputs });
+  const report = rebuildReport({ old: old.report, p, params, checks: [], cli: null });
+  const dir = store.writeRun(network, p.tx.hash, runFiles(p, report));
+  return { dir, p, report, hash: p.tx.hash, cbor: toHex(p.tx.bytes) };
 }
 
 // Journal a fabricated run and mark it confirmed, as `submit` and `wait` would.

@@ -25,12 +25,13 @@ function res(status, body, headers = {}) {
 // `status` gives the confirmations for the hash (null when unknown), `info`
 // whether /tx_info has a row, `unspent` whether the journaled input is still
 // unspent, and `history` the transaction hashes of the address.
-function fakeKoios({ submit = [], status = () => null, info = () => status() !== null, unspent = () => true, history = () => [], spends = {}, tipSlot = 100, infoRow = {} } = {}) {
+function fakeKoios({ submit = [], status = () => null, info = () => status() !== null, unspent = () => true, history = () => [], spends = {}, tipSlot = 100, infoRow = {}, network = 'preprod', onSubmit = () => {} } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     const path = url.replace('https://fake.koios/api/v1', '');
     calls.push({ path, method: init.method });
     if (path === '/submittx') {
+      onSubmit();
       const next = submit.shift();
       if (next === 'lost' || next === undefined) throw new Error('socket hang up');
       return next;
@@ -49,14 +50,14 @@ function fakeKoios({ submit = [], status = () => null, info = () => status() !==
     if (path === '/tip') return res(200, [{ epoch_no: 1, abs_slot: tipSlot, block_height: 1000, hash: '00', block_time: 1 }]);
     throw new Error(`unexpected ${path}`);
   };
-  const k = new Koios('preprod', { baseUrl: 'https://fake.koios/api/v1', fetchImpl, sleepImpl: async () => {}, own: { addresses: [ADDR], txHashes: [HASH] }, spacingMs: 0 });
+  const k = new Koios(network, { baseUrl: 'https://fake.koios/api/v1', fetchImpl, sleepImpl: async () => {}, own: { addresses: [ADDR], txHashes: [HASH] }, spacingMs: 0 });
   return { k, calls };
 }
 
-function setup(hash = HASH) {
+function setup(hash = HASH, { network = 'preprod', kind = null, stage = null } = {}) {
   const store = new Store(tempHome());
   store.ensure();
-  const entry = journal(store, journalEntry({ network: 'preprod', txHash: hash, cbor: '84a0a0f5f6', ttl: 500, inputs: [INPUT], run: '/nowhere' }));
+  const entry = journal(store, journalEntry({ network, txHash: hash, cbor: '84a0a0f5f6', ttl: 500, inputs: [INPUT], run: '/nowhere', kind, stage }));
   return { store, entry };
 }
 
@@ -247,6 +248,71 @@ test('abandon a failed entry: after its TTL, with the hash unknown everywhere, o
   assert.equal(e.inputsSpentBy, OTHER);
   assert.deepEqual(e.abandonCheckedWith, ['koios', 'blockfrost']);
   assert.doesNotThrow(() => assertNoUnresolved(store, 'preprod'));
+});
+
+// A journaled entry brought to each state a submission can leave it in.
+// `sent: 'killed'` is a process killed while its request was in flight: the
+// journal as it stood at that moment, with no answer recorded.
+async function sentEntry({ network = 'mainnet', kind = 'freeze', stage, sent }) {
+  const { store, entry } = setup(HASH, { network, kind, stage });
+  const c = clock();
+  const run = (koios, opts = {}) => submitJournaled({ koios, store, entry, address: ADDR, sleep: c.sleep, now: c.now, pollMs: 60000, windowMs: 600000, ...opts });
+  if (sent === 'accepted') await run(fakeKoios({ network, submit: [res(202, `"${HASH}"`)] }).k);
+  if (sent === 'lost') await assert.rejects(run(fakeKoios({ network, submit: ['lost'] }).k, { maxAttempts: 1 }), /no usable response/);
+  if (sent === 'killed') {
+    let inFlight = null;
+    await run(fakeKoios({ network, submit: [res(202, `"${HASH}"`)], onSubmit: () => (inFlight = store.readJournal(network)) }).k);
+    store.writeJournal(network, inFlight);
+  }
+  if (sent === 'failed') await assert.rejects(run(fakeKoios({ network, submit: [res(400, 'BadInputsUTxO')], unspent: () => false }).k), /recorded as failed/);
+  return store;
+}
+
+// What abandon would otherwise accept: the TTL passed, the hash unknown to
+// Koios and Blockfrost, the inputs unspent, or for a failed entry spent by a
+// transaction that is found.
+function releasable(state, network = 'mainnet') {
+  const failed = state === 'failed';
+  return { koios: fakeKoios({ network, tipSlot: 600, unspent: () => !failed, history: () => (failed ? [OTHER] : []), spends: failed ? { [OTHER]: [INPUT] } : {} }), bf: fakeBlockfrost(network).bf() };
+}
+
+for (const stage of ['hypotheses', 'final']) {
+  test(`on mainnet a ${stage}-stage freeze that may have been sent is never abandoned, whatever the answer was; one never sent still is`, async () => {
+    for (const [sent, state] of [['accepted', 'submitted'], ['lost', 'unsubmitted'], ['killed', 'unsubmitted'], ['failed', 'failed']]) {
+      const store = await sentEntry({ stage, sent });
+      const current = store.readJournal('mainnet').current;
+      assert.equal(current.state, state, sent);
+      assert.ok(current.sentAt, `${sent}: the send is recorded before the request leaves`);
+      if (sent === 'killed') assert.equal(current.attempts.length, 0, 'no answer was recorded');
+      const { koios, bf } = releasable(state);
+      await assert.rejects(abandon({ koios: koios.k, store, network: 'mainnet', address: ADDR, bf }), (e) => {
+        assert.match(e.message, new RegExp(`carries a ${stage}-stage freeze record that may have left this machine`), sent);
+        assert.match(e.message, /never abandoned for a newly signed one, because a broadcast body can be replayed later/);
+        assert.match(e.message, /before its TTL \(slot 500\), run "wait" if it may still land/);
+        if (state === 'unsubmitted') assert.match(e.message, /or "submit" again to send the same bytes/);
+        if (state === 'failed') assert.match(e.message, /or "submit" again to look the hash up/);
+        if (state === 'submitted') assert.doesNotMatch(e.message, /"submit" again/, 'after an HTTP 202 submit sends nothing more');
+        assert.match(e.message, new RegExp(`once the TTL has passed without it landing, "build --rebuild ${HASH} --network mainnet" builds a new transaction around the same signed record and 674 line`));
+        return true;
+      });
+      assert.deepEqual(koios.calls, [], `${sent}: refused before anything is asked of a provider`);
+      assert.equal(store.readJournal('mainnet').current.state, state, `${sent}: the entry stays unresolved`);
+      assert.throws(() => assertNoUnresolved(store, 'mainnet'), new RegExp(`its record cannot be abandoned: before its TTL .*"build --rebuild ${HASH} --network mainnet" builds a new transaction`));
+    }
+    const store = await sentEntry({ stage, sent: null });
+    const { koios, bf } = releasable('unsubmitted');
+    const e = await abandon({ koios: koios.k, store, network: 'mainnet', address: ADDR, bf });
+    assert.equal(e.state, 'abandoned', 'built and journaled but never sent: abandonable');
+  });
+}
+
+test('the rule is mainnet\'s and the staged freezes\' only: a sent preprod final, a sent mainnet scripts record and a sent sweep are abandoned as before', async () => {
+  for (const [network, kind, stage] of [['preprod', 'freeze', 'final'], ['preprod', 'freeze', 'hypotheses'], ['mainnet', 'scripts', null], ['mainnet', 'retype', null], ['mainnet', 'sweep', null]]) {
+    const store = await sentEntry({ network, kind, stage, sent: 'accepted' });
+    const { koios, bf } = releasable('submitted', network);
+    const e = await abandon({ koios: koios.k, store, network, address: ADDR, bf });
+    assert.equal(e.state, 'abandoned', `${network} ${kind} ${stage}`);
+  }
 });
 
 test('a mainnet final freeze is refused inside the locked journal write while another final is journaled; an abandoned one does not count', () => {
