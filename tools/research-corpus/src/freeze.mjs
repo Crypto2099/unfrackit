@@ -4,32 +4,45 @@
 // The final freeze and the draw key.
 //
 // The order of the study's records is decided by the chain alone (decided
-// 2026-10-22). Reading every label-309 record that verifies under the study
-// key, in transaction order:
+// 2026-10-22). Under CIP-190 each transaction carrying a record is a record
+// of its own: a rebroadcast of an identical body with another `sigs` set
+// "creates a separate, independent record at its own block time"
+// (CIPs@58b4dd1417, CIP-0190, "Signed payload and Sig_structure"), "all
+// record identity comes from the on-chain transaction hash" ("Service
+// independence"), and "the same signed body MAY be submitted in two
+// transactions" ("Security and Privacy Considerations", "Signature replay").
+// The study's rule counts signed content and its first carrier: every
+// transaction carrying the same signed content (the body without `sigs`) is
+// a carrier of one study record, and the first carrier in chain order is the
+// one whose block counts, as for a replayed sealed item, the analogue there
+// of a replayed body, "the earliest transaction carrying the item remains the
+// one whose timestamp has evidentiary weight" (CIP-190, "Cross-record
+// envelope replay"). Signatures are read per transaction, never merged across
+// carriers. Reading every label-309 record that verifies under the study key,
+// in transaction order:
 //   - the hypotheses record is the study key's first record on chain;
 //   - the final record is the first later record signed by the study key,
-//     without `supersedes`, whose signed content (the body without `sigs`)
-//     differs from the hypotheses record's. A replay of either, with or
-//     without added co-signatures, is the same record (CIP-190, "Security and
-//     Privacy Considerations", "Signature replay"); a record with
-//     `supersedes` retypes an earlier one (CIP-190, "Supersedence") and is
-//     never the final;
+//     without `supersedes`, whose signed content differs from the hypotheses
+//     record's; a record with `supersedes` retypes an earlier one (CIP-190,
+//     "Supersedence") and is never the final;
 //   - the final freeze transaction is the first transaction carrying the
 //     final record's signed content with a label-674 message that is exactly
 //     the SHA-256 of the final pre-registration given at run time (CIP-20,
 //     "Specification": {"msg": [strings]}). A copy without that line does not
 //     count, and a complete copy that lands first is the final freeze.
 // Which transactions the operator names (--hypotheses-tx, --freeze-tx) or the
-// document cites decides nothing: each must agree with the chain's, and the
-// document may cite any carrier of the hypotheses record's signed content,
-// since all of them are that record. On a test network, where one key signs
-// many rehearsals, --from-block starts the scan later; mainnet refuses it,
-// and on mainnet the study key is STUDY_KEY (src/params.mjs). So the study
-// key signs nothing between the hypotheses record and the final freeze, and
-// a broadcast hypotheses or final record is never abandoned and replaced by a
-// newly signed one, but resubmitted with the same bytes: a broadcast body
-// can be replayed later, and a replayed body would take the place of one of
-// the two records, so that the intended final would not pass.
+// document cites decides nothing: each must agree with the chain's. The
+// document may cite any carrier of the hypotheses record's signed content
+// that precedes the final freeze in chain order (block, then position in the
+// block), so the citation is settled when the final freeze lands: a carrier
+// landing after it never counts. On a test network, where one key
+// signs many rehearsals, --from-block starts the scan later; mainnet refuses
+// it, and on mainnet the study key is STUDY_KEY (src/params.mjs). So the
+// study key signs nothing between the hypotheses record and the final
+// freeze, and a broadcast hypotheses or final record is never abandoned and
+// replaced by a newly signed one, but resubmitted with the same bytes: a
+// broadcast body can be replayed later, and a replayed body would take the
+// place of one of the two records, so that the intended final would not pass.
 //
 // The final freeze transaction must then carry the study's final record:
 //   - its label-309 value is a CIP-190 record (CIPs@58b4dd1417, CIP-0190,
@@ -42,9 +55,9 @@
 //     `sigs`, inside the RFC 9052 Sig_structure with the protected header as
 //     published; the key is the 32-byte protected-header kid, path 1);
 //   - the document names the study key and cites a transaction carrying the
-//     chain's hypotheses record by its CIP-0107 URI
-//     (web+cardano://transaction/<hash>/metadata/309), and is not an item of
-//     the hypotheses record;
+//     chain's hypotheses record, earlier than the final freeze, by its
+//     CIP-0107 URI (web+cardano://transaction/<hash>/metadata/309), and is
+//     not an item of the hypotheses record;
 //   - the document lists every other item of the record exactly once, as the
 //     freeze tool requires, in lines of <64 lowercase hex><two spaces><name>;
 //     every such line names an item, and the document does not list itself.
@@ -126,8 +139,9 @@ export function parseRecord(body) {
   });
   const sigs = rec.get('sigs');
   if (!Array.isArray(sigs) || sigs.length === 0) throw new Error('record: no sigs');
-  // The signed content: the body without sigs. Two carriers of the same
-  // signed content are one record, whatever co-signatures were added.
+  // The signed content: the body without sigs. The study counts carriers of
+  // the same signed content as one of its records, whatever co-signatures
+  // were added (see the header).
   return { body, map: rec, digests, sigs, supersedes: rec.has('supersedes'), signed: withoutKeys(body, rec, ['sigs']) };
 }
 
@@ -245,13 +259,14 @@ export async function studyRecords(client, blocks, studyKey, loTxId = 0) {
 }
 
 // The chain's order of the study's records (see the header). Returns
-// { hypotheses, hypothesesCarriers, final, finalTx } (any may be null or
-// empty): hypothesesCarriers are every transaction carrying the hypotheses
-// record's signed content, the first one first.
+// { hypotheses, hypothesesCarriers, final, finalTx, records } (any may be
+// null or empty): hypothesesCarriers are every transaction carrying the
+// hypotheses record's signed content, as { tx, tx_id } in chain order, the
+// first carrier first.
 export async function chainOrder({ client, blocks, studyKey, docDigest, loTxId = 0 }) {
   const recs = await studyRecords(client, blocks, studyKey, loTxId);
   const hypotheses = recs[0] || null;
-  const hypothesesCarriers = hypotheses ? recs.filter((r) => r.signed === hypotheses.signed).map((r) => r.tx) : [];
+  const hypothesesCarriers = hypotheses ? recs.filter((r) => r.signed === hypotheses.signed).map((r) => ({ tx: r.tx, tx_id: r.tx_id })) : [];
   const final = hypotheses ? recs.find((r) => r.tx_id > hypotheses.tx_id && !r.record.supersedes && r.signed !== hypotheses.signed) || null : null;
   let finalTx = null;
   if (final) {
@@ -333,14 +348,18 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
   if (codeManifestSha256) check('code_manifest_is_the_named_one', manifests.length === 1 && manifests[0].sha256 === codeManifestSha256, codeManifestSha256);
 
   // The hypotheses record, as the chain orders it: h is its first carrier.
-  // Every carrier of its signed content is the same record, so the document
-  // may cite any of them, and whether the final document differs is read
-  // from the signed content, never from a carrier's 674 line, which anyone
-  // copying the body may leave out or write.
+  // The document may cite any carrier of its signed content that precedes
+  // the final freeze in chain order (transaction id: block, then position in
+  // the block), so the citation is settled when the final freeze lands; a
+  // carrier landing after it never counts, even one the document named in
+  // advance. Whether the final document differs is read from the signed
+  // content, never from a carrier's 674 line, which anyone copying the body
+  // may leave out or write.
   const h = order.hypotheses ? await readTx(client, blocks, order.hypotheses.tx) : null;
   const cited = [...new Set([...docText.matchAll(CITATION)].map((m) => m[1].toLowerCase()))];
-  const carriers = order.hypothesesCarriers || [];
-  check('document_cites_hypotheses_record', !!h && cited.some((t) => carriers.includes(t)), h ? `web+cardano://transaction/${h.tx}/metadata/309, or another of the ${carriers.length} carrier(s) of its signed content` : null);
+  const carriers = (order.hypothesesCarriers || []).filter((c) => c.tx_id < f.block.tx_id);
+  const citedCarrier = carriers.find((c) => cited.includes(c.tx)) || null;
+  check('document_cites_hypotheses_record', !!h && !!citedCarrier, h ? `web+cardano://transaction/${h.tx}/metadata/309, or another of the ${carriers.length} carrier(s) of its signed content earlier than the final freeze` : null);
   if (h) {
     check('hypotheses_block_earlier', h.block.block_no < f.block.block_no, `${h.block.block_no} < ${f.block.block_no}`);
     check('hypotheses_document_differs', !order.hypotheses.record.digests.includes(docDigest), 'the final pre-registration must not be an item of the hypotheses record');
@@ -358,7 +377,21 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
   }
   const ok = checks.every((c) => c.ok);
   const brief = (t) => (t ? { tx: t.tx, block_no: t.block.block_no, slot_no: t.block.slot_no, epoch_no: t.block.epoch_no, epoch_slot_no: t.block.epoch_slot_no, block_hash: t.block.hash, time: t.block.time, document_sha256: t.msg ? t.msg[0] : null, items: t.record ? t.record.digests.length : null } : null);
-  return { ok, checks, document, freeze: brief(f), freezeBlock: f.block, hypotheses: brief(h), scan: { from_block: fromBlock ?? null, records: order.records } };
+  // The hypotheses record as reported and published: its first carrier's
+  // transaction and block, its items from the signed content, the carrier the
+  // document cites, and as its document the item that carrier's 674 line
+  // names. The first carrier may be anyone's copy of the body, with any 674
+  // line or none; the cited carrier is the one the key holder's signed
+  // document names, and its line counts only when it is exactly one item of
+  // the record, so no 674 line can publish a digest the signed content
+  // lacks.
+  let hypotheses = null;
+  if (h) {
+    const items = order.hypotheses.record.digests;
+    const line = !citedCarrier ? null : citedCarrier.tx === h.tx ? h.msg : msgOf(await q(client, blocks, 'tx_metadata_of_tx', { tx_hash: { type: 'bytea', value: citedCarrier.tx } }));
+    hypotheses = { ...brief(h), document_sha256: line && line.length === 1 && items.includes(line[0]) ? line[0] : null, items_sha256: items, cited_tx: citedCarrier ? citedCarrier.tx : null };
+  }
+  return { ok, checks, document, freeze: brief(f), freezeBlock: f.block, hypotheses, scan: { from_block: fromBlock ?? null, records: order.records } };
 }
 
 export function stabilityWindow(k, f, coef) {
