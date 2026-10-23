@@ -104,10 +104,17 @@ SELECT encode(t.hash, 'hex') AS tx, m.tx_id, encode(m.bytes, 'hex') AS bytes
  ORDER BY m.tx_id;
 
 -- The first transaction id at or after a block height (test networks: the
--- start of the scan).
+-- start of the scan). Four index probes, on block(block_no) and on
+-- tx(block_id), as in study.first_tx_from_block: min(id) under a range filter
+-- on another column is planned as a scan in id order that stops at the first
+-- match, which for a recent height reads nearly the whole table. The result
+-- is the same because block ids increase with height and transaction ids with
+-- block id (the order check).
 -- @query first_tx_from_block_no
 SELECT min(t.id) AS tx_id FROM public.tx t
- WHERE t.block_id >= (SELECT min(id) FROM public.block WHERE block_no >= {{block_no}});
+ WHERE t.block_id = (SELECT min(t2.block_id) FROM public.tx t2
+                      WHERE t2.block_id >= (SELECT min(b.id) FROM public.block b
+                                             WHERE b.block_no = (SELECT min(b2.block_no) FROM public.block b2 WHERE b2.block_no >= {{block_no}})));
 
 -- @query epoch_nonce
 SELECT epoch_no, encode(nonce, 'hex') AS nonce, protocol_major FROM public.epoch_param WHERE epoch_no = {{epoch_no}};
