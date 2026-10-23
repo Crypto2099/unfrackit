@@ -179,7 +179,8 @@ export async function runPipeline(opts) {
     // The study key: on mainnet the pinned one (src/params.mjs), and any
     // other --study-key is refused; on a test network the flag.
     // opts.studyKeyPin lets the unit tests stand a key they can sign with in
-    // for the pinned one; the command line never sets it.
+    // for the pinned one; the command line never sets it, since runOptions
+    // (src/cli.mjs) names each option it passes.
     const studyKey = studyKeyFor(network, opts.studyKey, opts.studyKeyPin);
     if (finalRun && opts.snapshot && opts.snapshot !== 'rule') throw refuse('refusing: the snapshot of a run on the final freeze is fixed by rule (the last block of epoch N - 1 before its randomness stabilization cutoff); give no --snapshot');
     const caseViews = checkStakeAddresses([...new Set([...(opts.caseWallets || []), ...(opts.casesFile ? readStakeList(opts.casesFile, 'the cases file') : [])])], '--case and --cases');

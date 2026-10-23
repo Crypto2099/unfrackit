@@ -26,7 +26,7 @@ import { checkLogPath, verifyLog, appendEntry } from '../../src/checklog.mjs';
 import { logPrefixDigests } from '../../src/freeze.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 import { STUDY_KEY } from '../../src/params.mjs';
-import { verifyFreezeCommand, a1Command } from '../../src/cli.mjs';
+import { verifyFreezeCommand, a1Command, parseArgs, runOptions } from '../../src/cli.mjs';
 import { freezeOf } from '../../src/manifest.mjs';
 
 const FIXTURE_STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
@@ -185,14 +185,19 @@ test('verify-freeze and a1 on mainnet refuse --from-block and another study key;
   await assert.rejects(verifyFreezeCommand({ ...base, fromBlock: '1' }, 'verify-freeze', opts), /--from-block is for test networks only/);
   await assert.rejects(verifyFreezeCommand({ ...base, codeManifest: undefined }, 'verify-freeze', opts), /need --code-manifest/);
   await assert.rejects(verifyFreezeCommand({ ...base, studyKey: 'cc'.repeat(32) }, 'verify-freeze', opts), /pinned freeze identity/);
+  // The parsed command line may carry --study-key-pin; neither command reads it.
+  await assert.rejects(verifyFreezeCommand({ ...base, studyKey: 'cc'.repeat(32), studyKeyPin: 'cc'.repeat(32) }, 'verify-freeze', opts), /pinned freeze identity/);
   await assert.rejects(a1Command({ ...base, fromBlock: '1' }, 'a1', opts), /--from-block is for test networks only/);
   await assert.rejects(a1Command({ ...base, studyKey: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
+  await assert.rejects(a1Command({ ...base, studyKey: 'cc'.repeat(32), studyKeyPin: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
   await assert.rejects(a1Command({ liveFire: true, purpose: 'p', expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(entries.filter((e) => e.type === 'query').map((e) => [e.name, e.outcome]), [
     ['verify-freeze', 'failed'],
     ['verify-freeze', 'failed'],
     ['verify-freeze', 'failed'],
+    ['verify-freeze', 'failed'],
+    ['a1', 'failed'],
     ['a1', 'failed'],
     ['a1', 'failed'],
     ['a1 live-fire gate', 'failed']
@@ -200,6 +205,19 @@ test('verify-freeze and a1 on mainnet refuse --from-block and another study key;
   assert.equal(entries.filter((e) => e.type === 'a1-live-fire-start').length, 0);
   assert.deepEqual(verifyLog('mainnet').unclosed, []);
 }));
+
+// The pin's only stand-in is the unit tests' studyKeyPin. parseArgs takes any
+// --name value, so `run` must name each option it passes to runPipeline: the
+// parsed --study-key-pin never reaches it, and --study-key arrives as given.
+test('run passes runPipeline its options one by one, so --study-key-pin never reaches it', () => {
+  const pin = 'cc'.repeat(32);
+  const a = parseArgs(['--run-id', 'r1', '--study-key-pin', pin, '--study-key', 'DD'.repeat(32), '--freeze-tx', 'AA'.repeat(32)]);
+  assert.equal(a.studyKeyPin, pin, 'parseArgs maps the flag');
+  const o = runOptions(a, 'run');
+  assert.equal(Object.hasOwn(o, 'studyKeyPin'), false);
+  assert.ok(!JSON.stringify(o).includes(pin));
+  assert.deepEqual([o.runId, o.studyKey, o.freezeTx], ['r1', 'dd'.repeat(32), 'aa'.repeat(32)]);
+});
 
 test('a test network takes run-time options the mainnet refuses', () => {
   assert.deepEqual(mainnetOptionErrors({ set: ['guard=200000'], strataPath: DEFAULT_STRATA, defaultStrataPath: DEFAULT_STRATA, snapshot: 'tip', live: true, nodeVersion: 'v24.1.0' }), []);

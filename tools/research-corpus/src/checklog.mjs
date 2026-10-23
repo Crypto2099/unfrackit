@@ -36,12 +36,24 @@ export const refuse = (message) => new Refusal(message);
 
 // Error text with every bech32 string (an address, a stake address) and every
 // hex run of 20 or more characters (a hash, a key, a credential) replaced, and,
-// unless the error is one of the code's own refusals, every number and every
-// other word with a digit in it, except snake_case names (settings, tables,
-// columns), so neither wallet-level data nor a count inside a database or
-// provider message can reach the log.
+// unless the error is one of the code's own refusals, every number, every
+// other word with a digit in it, and every part of an underscore-joined word
+// that begins with a digit, except in the code's own names, so neither
+// wallet-level data nor a count inside a database or provider message can
+// reach the log.
 const NUMBER = /(?<![\w.])\d[\d,._]*[a-zA-Z]*(?![\w])/g;
 const WORD_WITH_DIGIT = /(?<![\w])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+(?![\w])/g;
+const JOINED = /(?<![\w])\w*_\w*(?![\w])/g;
+// The names in sql/ and src/ with an underscore-separated part that begins
+// with a digit (steps, tables, columns, functions, queries and checks), kept
+// whole; a unit test keeps the list complete. A setting such as x5_reward29
+// needs no entry, since none of its parts begins with a digit.
+export const CODE_NAMES = new Set([
+  'check_61', 'check_61_agree', 'check_61_counts', 'check_61_load', 'check_61_mark', 'check_61_run', 'check_61_table',
+  'check_6_1', 'check_6_1_all_agree', 'crc8_2', 'eligible_over_5000_tx', 'excluded_6_1', 'label_309_from', 'label_309_record',
+  'label_674_is_document_digest', 'metadata_674', 'n_674', 'n_674_json_null', 'n_674_msg_array', 'n_excluded_6_1'
+]);
+const joined = (w) => (CODE_NAMES.has(w) ? w : w.split('_').map((p) => (/^\d/.test(p) ? '#' : p)).join('_'));
 export function sanitize(message, { refusal = false } = {}) {
   let t = String(message)
     .replace(/\b[a-z][a-z0-9_]*1[02-9ac-hj-np-z]{20,}\b/gi, '<bech32>')
@@ -49,9 +61,10 @@ export function sanitize(message, { refusal = false } = {}) {
     .replace(/(?:\\x|\b0x)[0-9a-fA-F]+\b/g, '<hex>');
   // Numbers, with or without a unit or word joined to them (3,400, 0.05, 37k,
   // 1500ms, 37rows); then any word that still holds a digit (row37, 1e5,
-  // 12h30m, abc0x1f4) unless it joins an underscore. The placeholders above
-  // are left as they are.
-  if (!refusal) t = t.split(/(<bech32>|<hex>)/).map((part, i) => (i % 2 ? part : part.replace(NUMBER, '#').replace(WORD_WITH_DIGIT, '#'))).join('');
+  // 12h30m, abc0x1f4); then, in a word joined by underscores, every part
+  // that begins with a digit, unless the word is one of the code's names.
+  // The placeholders above are left as they are.
+  if (!refusal) t = t.split(/(<bech32>|<hex>)/).map((part, i) => (i % 2 ? part : part.replace(NUMBER, '#').replace(WORD_WITH_DIGIT, '#').replace(JOINED, joined))).join('');
   return t.slice(0, 500);
 }
 
