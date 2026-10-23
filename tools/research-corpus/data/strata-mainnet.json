@@ -1,0 +1,1748 @@
+{
+  "format": "research-corpus-strata-v2",
+  "note": "Part 1 (named) is always included; part 2 takes these candidates in rank order, skipping any held by fewer than 1,000 stake credentials of the recent frame at the snapshot, until ten qualify; part 3 is computed by the run.",
+  "named": [
+    {
+      "project": "Clay Nation",
+      "stratum": "Clay Nation",
+      "class": "NFT",
+      "policy": "40fa2aa67258b4ce7b5782f74831d46a84c59a0ff0c28262fab21728",
+      "nft_top_exclude": true,
+      "own_source": "project FAQ, archived copy of claynation.io/faqs dated 2025-04-05"
+    },
+    {
+      "project": "SpaceBudz",
+      "stratum": "SpaceBudz (CIP-68)",
+      "group": "SpaceBudz",
+      "class": "NFT",
+      "policy": "4523c5e21d409b81c95b45b0aea275b8ea1406e6cafea5583b9f8a5f",
+      "nft_top_exclude": true,
+      "own_source": "github.com/spacebudz/wormhole README and src/config.ts; spacebudz.io"
+    },
+    {
+      "project": "SpaceBudz",
+      "stratum": "SpaceBudz (CIP-25)",
+      "group": "SpaceBudz",
+      "class": "NFT",
+      "policy": "d5e6bf0500378d4f0da4e8dde6becec7621cd8cbf5cbb9b87013d4cc",
+      "nft_top_exclude": true,
+      "own_source": "github.com/spacebudz/wormhole README and src/config.ts; spacebudz.io"
+    },
+    {
+      "project": "NIGHT (Midnight)",
+      "stratum": "NIGHT (Midnight)",
+      "class": "FT",
+      "policy": "0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa",
+      "asset_name": "4e49474854",
+      "nft_top_exclude": false,
+      "own_source": "github.com/midnightntwrk/midnight-node, res/mainnet/cnight-config.json"
+    },
+    {
+      "project": "IAG (Iagon)",
+      "stratum": "IAG (Iagon)",
+      "class": "FT",
+      "policy": "5d16cc1a177b5d9ba9cfa9793b07e60f1fb70fea1f8aef064415d114",
+      "asset_name": "494147",
+      "nft_top_exclude": false,
+      "own_source": "docs.iagon.com, tokenomics"
+    },
+    {
+      "project": "HOSKY",
+      "stratum": "HOSKY",
+      "class": "FT",
+      "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235",
+      "asset_name": "484f534b59",
+      "nft_top_exclude": false,
+      "own_source": "confirmed by Adam K. Dean"
+    },
+    {
+      "project": "SNEK",
+      "stratum": "SNEK",
+      "class": "FT",
+      "policy": "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f",
+      "asset_name": "534e454b",
+      "nft_top_exclude": false,
+      "own_source": "confirmed by Adam K. Dean"
+    }
+  ],
+  "candidates": [
+    {
+      "rank": 1,
+      "market_position": 7,
+      "coingecko_id": "world-mobile-token",
+      "symbol": "wmtx",
+      "name": "World Mobile Token",
+      "market_cap": 17355928,
+      "market_cap_rank": 920,
+      "asset_platform_id": "base",
+      "cardano_first": {
+        "coingecko_id": "world-mobile-token",
+        "reason": "WMTX was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+        "source": "ruling by Adam K. Dean, 2026-10-21"
+      },
+      "project": "World Mobile Token (WMTX)",
+      "stratum": "World Mobile Token (WMTX)",
+      "policy": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a",
+      "asset_name": "576f726c644d6f62696c65546f6b656e58",
+      "contract": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a576f726c644d6f62696c65546f6b656e58",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a576f726c644d6f62696c65546f6b656e58",
+        "ticker": "WMTX",
+        "name": "World Mobile Token X",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "confirmed by Adam K. Dean"
+    },
+    {
+      "rank": 2,
+      "market_position": 11,
+      "coingecko_id": "strike-2",
+      "symbol": "strike",
+      "name": "Strike",
+      "market_cap": 9192564,
+      "market_cap_rank": 1271,
+      "asset_platform_id": "cardano",
+      "project": "Strike (STRIKE)",
+      "stratum": "Strike (STRIKE)",
+      "policy": "f13ac4d66b3ee19a6aa0f2a22298737bd907cc95121662fc971b5275",
+      "asset_name": "535452494b45",
+      "contract": "f13ac4d66b3ee19a6aa0f2a22298737bd907cc95121662fc971b5275535452494b45",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "f13ac4d66b3ee19a6aa0f2a22298737bd907cc95121662fc971b5275535452494b45",
+        "ticker": "STRIKE",
+        "name": "STRIKE",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 3,
+      "market_position": 13,
+      "coingecko_id": "minswap",
+      "symbol": "min",
+      "name": "Minswap",
+      "market_cap": 6205252,
+      "market_cap_rank": 1523,
+      "asset_platform_id": "cardano",
+      "project": "Minswap (MIN)",
+      "stratum": "Minswap (MIN)",
+      "policy": "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c6",
+      "asset_name": "4d494e",
+      "contract": "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c64d494e",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c64d494e",
+        "ticker": "MIN",
+        "name": "Minswap",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 4,
+      "market_position": 14,
+      "coingecko_id": "liqwid-finance",
+      "symbol": "lq",
+      "name": "Liqwid Finance",
+      "market_cap": 5627181,
+      "market_cap_rank": 1572,
+      "asset_platform_id": "cardano",
+      "project": "Liqwid Finance (LQ)",
+      "stratum": "Liqwid Finance (LQ)",
+      "policy": "da8c30857834c6ae7203935b89278c532b3995245295456f993e1d24",
+      "asset_name": "4c51",
+      "contract": "da8c30857834c6ae7203935b89278c532b3995245295456f993e1d244c51",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "da8c30857834c6ae7203935b89278c532b3995245295456f993e1d244c51",
+        "ticker": "LQ",
+        "name": "Liqwid DAO Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 5,
+      "market_position": 16,
+      "coingecko_id": "infinity-rising",
+      "symbol": "rise",
+      "name": "Infinity Rising",
+      "market_cap": 4277674,
+      "market_cap_rank": 1772,
+      "asset_platform_id": "base",
+      "cardano_first": {
+        "coingecko_id": "infinity-rising",
+        "reason": "RISE was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+        "source": "ruling by Adam K. Dean, 2026-10-21"
+      },
+      "project": "Infinity Rising (RISE)",
+      "stratum": "Infinity Rising (RISE)",
+      "policy": "31bdb2d8ed6e2623e121b6db134a1491f4252b9ea87d928eb5290026",
+      "asset_name": "496e66696e69747920526973696e67",
+      "contract": "31bdb2d8ed6e2623e121b6db134a1491f4252b9ea87d928eb5290026496e66696e69747920526973696e67",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "31bdb2d8ed6e2623e121b6db134a1491f4252b9ea87d928eb5290026496e66696e69747920526973696e67",
+        "ticker": "RISE",
+        "name": "Infinity Rising Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 6,
+      "market_position": 18,
+      "coingecko_id": "ascend-3",
+      "symbol": "ascend",
+      "name": "Ascend",
+      "market_cap": 3885722,
+      "market_cap_rank": 1832,
+      "asset_platform_id": "cardano",
+      "project": "Ascend (ASCEND)",
+      "stratum": "Ascend (ASCEND)",
+      "policy": "eb7a93ebc321647673490810f618b548d7c24aa64d30ae342dba7076",
+      "asset_name": "0014df10415343454e44",
+      "contract": "eb7a93ebc321647673490810f618b548d7c24aa64d30ae342dba70760014df10415343454e44",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "eb7a93ebc321647673490810f618b548d7c24aa64d30ae342dba70760014df10415343454e44",
+        "ticker": "ASCEND",
+        "name": "Ascend",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 7,
+      "market_position": 20,
+      "coingecko_id": "indigo-dao-governance-token",
+      "symbol": "indy",
+      "name": "Indigo Protocol",
+      "market_cap": 2454089,
+      "market_cap_rank": 2175,
+      "asset_platform_id": "cardano",
+      "project": "Indigo Protocol (INDY)",
+      "stratum": "Indigo Protocol (INDY)",
+      "policy": "533bb94a8850ee3ccbe483106489399112b74c905342cb1792a797a0",
+      "asset_name": "494e4459",
+      "contract": "533bb94a8850ee3ccbe483106489399112b74c905342cb1792a797a0494e4459",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "533bb94a8850ee3ccbe483106489399112b74c905342cb1792a797a0494e4459",
+        "ticker": "INDY",
+        "name": "Indigo DAO Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 8,
+      "market_position": 21,
+      "coingecko_id": "nuvola-digital",
+      "symbol": "nvl",
+      "name": "Nuvola Digital",
+      "market_cap": 2146707,
+      "market_cap_rank": 2283,
+      "asset_platform_id": "cardano",
+      "project": "Nuvola Digital (NVL)",
+      "stratum": "Nuvola Digital (NVL)",
+      "policy": "5b26e685cc5c9ad630bde3e3cd48c694436671f3d25df53777ca60ef",
+      "asset_name": "4e564c",
+      "contract": "5b26e685cc5c9ad630bde3e3cd48c694436671f3d25df53777ca60ef",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "5b26e685cc5c9ad630bde3e3cd48c694436671f3d25df53777ca60ef4e564c",
+        "ticker": "NVL",
+        "name": "NuvolaDigital",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "confirmed by Adam K. Dean"
+    },
+    {
+      "rank": 9,
+      "market_position": 23,
+      "coingecko_id": "cornucopias",
+      "symbol": "copi",
+      "name": "Cornucopias",
+      "market_cap": 1501631,
+      "market_cap_rank": 2568,
+      "asset_platform_id": "binance-smart-chain",
+      "cardano_first": {
+        "coingecko_id": "cornucopias",
+        "reason": "COPI was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+        "source": "ruling by Adam K. Dean, 2026-10-21"
+      },
+      "project": "Cornucopias (COPI)",
+      "stratum": "Cornucopias (COPI)",
+      "policy": "b6a7467ea1deb012808ef4e87b5ff371e85f7142d7b356a40d9b42a0",
+      "asset_name": "436f726e75636f70696173205b76696120436861696e506f72742e696f5d",
+      "contract": "asset1c6uau7pufsxhnm7eg0eerhu4snwfd9sn7kvvvz",
+      "resolved_by": "registry: CIP-14 fingerprint",
+      "registry": {
+        "subject": "b6a7467ea1deb012808ef4e87b5ff371e85f7142d7b356a40d9b42a0436f726e75636f70696173205b76696120436861696e506f72742e696f5d",
+        "ticker": "COPI",
+        "name": "Cornucopias Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 10,
+      "market_position": 24,
+      "coingecko_id": "flow-lending",
+      "symbol": "surf",
+      "name": "Surf Lending",
+      "market_cap": 1405747,
+      "market_cap_rank": 2635,
+      "asset_platform_id": "cardano",
+      "project": "Surf Lending (SURF)",
+      "stratum": "Surf Lending (SURF)",
+      "policy": "2d9db8a89f074aa045eab177f23a3395f62ced8b53499a9e4ad46c80",
+      "asset_name": "464c4f57",
+      "contract": "2d9db8a89f074aa045eab177f23a3395f62ced8b53499a9e4ad46c80464c4f57",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "2d9db8a89f074aa045eab177f23a3395f62ced8b53499a9e4ad46c80464c4f57",
+        "ticker": "SURF",
+        "name": "SURF",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 11,
+      "market_position": 25,
+      "coingecko_id": "cockcardano",
+      "symbol": "cock",
+      "name": "CockCardano",
+      "market_cap": 1349190,
+      "market_cap_rank": 2674,
+      "asset_platform_id": "cardano",
+      "project": "CockCardano (COCK)",
+      "stratum": "CockCardano (COCK)",
+      "policy": "49e423161ef818adc475c783571cb479d5f15ad52a01a240eacc0d3b",
+      "asset_name": "434f434b",
+      "contract": "49e423161ef818adc475c783571cb479d5f15ad52a01a240eacc0d3b",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "49e423161ef818adc475c783571cb479d5f15ad52a01a240eacc0d3b434f434b",
+        "ticker": "COCK",
+        "name": "COCK",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 12,
+      "market_position": 26,
+      "coingecko_id": "book-2",
+      "symbol": "stuff",
+      "name": "STUFF.io",
+      "market_cap": 1280580,
+      "market_cap_rank": 2731,
+      "asset_platform_id": "cardano",
+      "project": "STUFF.io (STUFF)",
+      "stratum": "STUFF.io (STUFF)",
+      "policy": "51a5e236c4de3af2b8020442e2a26f454fda3b04cb621c1294a0ef34",
+      "asset_name": "424f4f4b",
+      "contract": "51a5e236c4de3af2b8020442e2a26f454fda3b04cb621c1294a0ef34424f4f4b",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "51a5e236c4de3af2b8020442e2a26f454fda3b04cb621c1294a0ef34424f4f4b",
+        "ticker": "STUFF",
+        "name": "STUFF",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 13,
+      "market_position": 28,
+      "coingecko_id": "l4va",
+      "symbol": "l4va",
+      "name": "L4VA",
+      "market_cap": 778447,
+      "market_cap_rank": 3198,
+      "asset_platform_id": "robinhood",
+      "cardano_first": {
+        "coingecko_id": "l4va",
+        "reason": "L4VA was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+        "source": "ruling by Adam K. Dean, 2026-10-21"
+      },
+      "project": "L4VA (L4VA)",
+      "stratum": "L4VA (L4VA)",
+      "policy": "ac1e9156039f0c88d91fb17bbcd4e6bf7755e1c13546ab3388e5278f",
+      "asset_name": "4c345641",
+      "contract": "ac1e9156039f0c88d91fb17bbcd4e6bf7755e1c13546ab3388e5278f4c345641",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "ac1e9156039f0c88d91fb17bbcd4e6bf7755e1c13546ab3388e5278f4c345641",
+        "ticker": "L4VA",
+        "name": "L4VA",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 14,
+      "market_position": 29,
+      "coingecko_id": "palm-economy",
+      "symbol": "palm",
+      "name": "Palm Economy",
+      "market_cap": 754054,
+      "market_cap_rank": 3243,
+      "asset_platform_id": "cardano",
+      "project": "Palm Economy (PALM)",
+      "stratum": "Palm Economy (PALM)",
+      "policy": "b7c5cd554f3e83c8aa0900a0c9053284a5348244d23d0406c28eaf4d",
+      "asset_name": "50414c4d0a",
+      "contract": "b7c5cd554f3e83c8aa0900a0c9053284a5348244d23d0406c28eaf4d50414c4d0a",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "b7c5cd554f3e83c8aa0900a0c9053284a5348244d23d0406c28eaf4d50414c4d0a",
+        "ticker": "PALM",
+        "name": "PALM Economy Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 15,
+      "market_position": 30,
+      "coingecko_id": "babysnek",
+      "symbol": "bbsnek",
+      "name": "BabySNEK",
+      "market_cap": 735188,
+      "market_cap_rank": 3266,
+      "asset_platform_id": "cardano",
+      "project": "BabySNEK (BBSNEK)",
+      "stratum": "BabySNEK (BBSNEK)",
+      "policy": "7507734918533b3b896241b4704f3d4ce805256b01da6fcede430436",
+      "asset_name": "42616279534e454b",
+      "contract": "7507734918533b3b896241b4704f3d4ce805256b01da6fcede43043642616279534e454b",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "7507734918533b3b896241b4704f3d4ce805256b01da6fcede43043642616279534e454b",
+        "ticker": "BBSNEK",
+        "name": "BabySNEK",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 16,
+      "market_position": 31,
+      "coingecko_id": "optim-finance",
+      "symbol": "o",
+      "name": "Optim Finance",
+      "market_cap": 490535,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Optim Finance (O)",
+      "stratum": "Optim Finance (O)",
+      "policy": "2852268cf6e2db42e20f2fd3125f541e5d6c5a3d70b4dda17c2daa82",
+      "asset_name": "",
+      "contract": "2852268cf6e2db42e20f2fd3125f541e5d6c5a3d70b4dda17c2daa82",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "2852268cf6e2db42e20f2fd3125f541e5d6c5a3d70b4dda17c2daa82",
+        "ticker": "O ",
+        "name": "The O Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 17,
+      "market_position": 32,
+      "coingecko_id": "xerberus",
+      "symbol": "xer",
+      "name": "Xerberus",
+      "market_cap": 466938,
+      "market_cap_rank": 3724,
+      "asset_platform_id": "cardano",
+      "project": "Xerberus (XER)",
+      "stratum": "Xerberus (XER)",
+      "policy": "6d06570ddd778ec7c0cca09d381eca194e90c8cffa7582879735dbde",
+      "asset_name": "584552",
+      "contract": "6d06570ddd778ec7c0cca09d381eca194e90c8cffa7582879735dbde",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "6d06570ddd778ec7c0cca09d381eca194e90c8cffa7582879735dbde584552",
+        "ticker": "XER",
+        "name": "Xerberus DAO LLC",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 18,
+      "market_position": 33,
+      "coingecko_id": "wingriders",
+      "symbol": "wrt",
+      "name": "WingRiders",
+      "market_cap": 424129,
+      "market_cap_rank": 3821,
+      "asset_platform_id": "cardano",
+      "project": "WingRiders (WRT)",
+      "stratum": "WingRiders (WRT)",
+      "policy": "c0ee29a85b13209423b10447d3c2e6a50641a15c57770e27cb9d5073",
+      "asset_name": "57696e67526964657273",
+      "contract": "c0ee29a85b13209423b10447d3c2e6a50641a15c57770e27cb9d507357696e67526964657273",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "c0ee29a85b13209423b10447d3c2e6a50641a15c57770e27cb9d507357696e67526964657273",
+        "ticker": "WRT",
+        "name": "WingRiders Governance Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 19,
+      "market_position": 34,
+      "coingecko_id": "nikepig",
+      "symbol": "nikepig",
+      "name": "Nikepig",
+      "market_cap": 396682,
+      "market_cap_rank": 3891,
+      "asset_platform_id": "cardano",
+      "project": "Nikepig (NIKEPIG)",
+      "stratum": "Nikepig (NIKEPIG)",
+      "policy": "c881c20e49dbaca3ff6cef365969354150983230c39520b917f5cf7c",
+      "asset_name": "4e696b65",
+      "contract": "c881c20e49dbaca3ff6cef365969354150983230c39520b917f5cf7c4e696b65",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "c881c20e49dbaca3ff6cef365969354150983230c39520b917f5cf7c4e696b65",
+        "ticker": "NIKEPIG",
+        "name": "NikePig",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 20,
+      "market_position": 35,
+      "coingecko_id": "revuto",
+      "symbol": "revu",
+      "name": "Revuto",
+      "market_cap": 362979,
+      "market_cap_rank": 3999,
+      "asset_platform_id": "cardano",
+      "project": "Revuto (REVU)",
+      "stratum": "Revuto (REVU)",
+      "policy": "94cbb4fcbcaa2975779f273b263eb3b5f24a9951e446d6dc4c135864",
+      "asset_name": "52455655",
+      "contract": "94cbb4fcbcaa2975779f273b263eb3b5f24a9951e446d6dc4c13586452455655",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "94cbb4fcbcaa2975779f273b263eb3b5f24a9951e446d6dc4c13586452455655",
+        "ticker": "REVU",
+        "name": "Revuto",
+        "decimals": 8,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 21,
+      "market_position": 36,
+      "coingecko_id": "titan-3",
+      "symbol": "titan",
+      "name": "TITAN",
+      "market_cap": 320413,
+      "market_cap_rank": 4161,
+      "asset_platform_id": "cardano",
+      "project": "TITAN (TITAN)",
+      "stratum": "TITAN (TITAN)",
+      "policy": "8483844875ce4d61c2aa459240f277d32081ee08fe0ad16899a0f581",
+      "asset_name": "0014df10544954414e",
+      "contract": "8483844875ce4d61c2aa459240f277d32081ee08fe0ad16899a0f581",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "8483844875ce4d61c2aa459240f277d32081ee08fe0ad16899a0f5810014df10544954414e",
+        "ticker": "TITAN",
+        "name": "TITAN",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 22,
+      "market_position": 38,
+      "coingecko_id": "atlas-2",
+      "symbol": "atlas",
+      "name": "ATLAS",
+      "market_cap": 252678,
+      "market_cap_rank": 4461,
+      "asset_platform_id": "cardano",
+      "project": "ATLAS (ATLAS)",
+      "stratum": "ATLAS (ATLAS)",
+      "policy": "9ff9a1b456f074e03be90631e1a5f9b6ed08eacabd0e7f95a11ffff1",
+      "asset_name": "0014df1041544c4153",
+      "contract": "9ff9a1b456f074e03be90631e1a5f9b6ed08eacabd0e7f95a11ffff1",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "9ff9a1b456f074e03be90631e1a5f9b6ed08eacabd0e7f95a11ffff10014df1041544c4153",
+        "ticker": "ATLAS",
+        "name": "ATLAS",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 23,
+      "market_position": 39,
+      "coingecko_id": "charli3",
+      "symbol": "c3",
+      "name": "Charli3",
+      "market_cap": 251474,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Charli3 (C3)",
+      "stratum": "Charli3 (C3)",
+      "policy": "8e51398904a5d3fc129fbf4f1589701de23c7824d5c90fdb9490e15a",
+      "asset_name": "434841524c4933",
+      "contract": "8e51398904a5d3fc129fbf4f1589701de23c7824d5c90fdb9490e15a",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "8e51398904a5d3fc129fbf4f1589701de23c7824d5c90fdb9490e15a434841524c4933",
+        "ticker": "C3",
+        "name": "CHARLI3",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 24,
+      "market_position": 40,
+      "coingecko_id": "surge-3",
+      "symbol": "surge",
+      "name": "Surge",
+      "market_cap": 250032,
+      "market_cap_rank": 4477,
+      "asset_platform_id": "cardano",
+      "project": "Surge (SURGE)",
+      "stratum": "Surge (SURGE)",
+      "policy": "e992ef75f2367e6ecd93716ae88eba0d005dd91fd3a21f650b6496b5",
+      "asset_name": "5355524745",
+      "contract": "e992ef75f2367e6ecd93716ae88eba0d005dd91fd3a21f650b6496b55355524745",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "e992ef75f2367e6ecd93716ae88eba0d005dd91fd3a21f650b6496b55355524745",
+        "ticker": "SURGE",
+        "name": "SURGE",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 25,
+      "market_position": 41,
+      "coingecko_id": "gold-fgld-finest-tokenized-gold",
+      "symbol": "fgld",
+      "name": "Gold fGLD (finest Tokenized Gold)",
+      "market_cap": 197264,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Gold fGLD (finest Tokenized Gold) (FGLD)",
+      "stratum": "Gold fGLD (finest Tokenized Gold) (FGLD)",
+      "policy": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e8",
+      "asset_name": "66474c44",
+      "contract": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e866474c44",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e866474c44",
+        "ticker": "fGLD",
+        "name": "fGLD",
+        "decimals": null,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 26,
+      "market_position": 43,
+      "coingecko_id": "talos",
+      "symbol": "agent",
+      "name": "AGENT",
+      "market_cap": 194537,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "AGENT (AGENT)",
+      "stratum": "AGENT (AGENT)",
+      "policy": "97bbb7db0baef89caefce61b8107ac74c7a7340166b39d906f174bec",
+      "asset_name": "54616c6f73",
+      "contract": "97bbb7db0baef89caefce61b8107ac74c7a7340166b39d906f174bec",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "97bbb7db0baef89caefce61b8107ac74c7a7340166b39d906f174bec54616c6f73",
+        "ticker": "AGENT",
+        "name": "Agent",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 27,
+      "market_position": 44,
+      "coingecko_id": "nft-maker",
+      "symbol": "$nmkr",
+      "name": "NMKR",
+      "market_cap": 148390,
+      "market_cap_rank": 5226,
+      "asset_platform_id": "cardano",
+      "project": "NMKR ($NMKR)",
+      "stratum": "NMKR ($NMKR)",
+      "policy": "5dac8536653edc12f6f5e1045d8164b9f59998d3bdc300fc92843489",
+      "asset_name": "4e4d4b52",
+      "contract": "5dac8536653edc12f6f5e1045d8164b9f59998d3bdc300fc92843489",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "5dac8536653edc12f6f5e1045d8164b9f59998d3bdc300fc928434894e4d4b52",
+        "ticker": "NMKR",
+        "name": "NMKR",
+        "decimals": 6,
+        "match": "name"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 28,
+      "market_position": 45,
+      "coingecko_id": "bodega",
+      "symbol": "bodega",
+      "name": "Bodega",
+      "market_cap": 136773,
+      "market_cap_rank": 5327,
+      "asset_platform_id": "cardano",
+      "project": "Bodega (BODEGA)",
+      "stratum": "Bodega (BODEGA)",
+      "policy": "5deab590a137066fef0e56f06ef1b830f21bc5d544661ba570bdd2ae",
+      "asset_name": "424f44454741",
+      "contract": "5deab590a137066fef0e56f06ef1b830f21bc5d544661ba570bdd2ae424f44454741",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "5deab590a137066fef0e56f06ef1b830f21bc5d544661ba570bdd2ae424f44454741",
+        "ticker": "BODEGA",
+        "name": "BODEGA",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 29,
+      "market_position": 47,
+      "coingecko_id": "charles-the-chad",
+      "symbol": "chad",
+      "name": "Charles the Chad",
+      "market_cap": 117738,
+      "market_cap_rank": 5514,
+      "asset_platform_id": "cardano",
+      "project": "Charles the Chad (CHAD)",
+      "stratum": "Charles the Chad (CHAD)",
+      "policy": "97075bf380e65f3c63fb733267adbb7d42eec574428a754d2abca55b",
+      "asset_name": "436861726c6573207468652043686164",
+      "contract": "97075bf380e65f3c63fb733267adbb7d42eec574428a754d2abca55b",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "97075bf380e65f3c63fb733267adbb7d42eec574428a754d2abca55b436861726c6573207468652043686164",
+        "ticker": "CHAD",
+        "name": "Charles the Chad",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 30,
+      "market_position": 48,
+      "coingecko_id": "crawju",
+      "symbol": "crawju",
+      "name": "CRAWJU",
+      "market_cap": 98471,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "CRAWJU (CRAWJU)",
+      "stratum": "CRAWJU (CRAWJU)",
+      "policy": "ac597ca62a32cab3f4766c8f9cd577e50ebb1d00383ec7fa3990b016",
+      "asset_name": "435241574a55",
+      "contract": "ac597ca62a32cab3f4766c8f9cd577e50ebb1d00383ec7fa3990b016435241574a55",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "ac597ca62a32cab3f4766c8f9cd577e50ebb1d00383ec7fa3990b016435241574a55",
+        "ticker": "CRAWJU",
+        "name": "CRAWJU",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 31,
+      "market_position": 49,
+      "coingecko_id": "ada-peepos",
+      "symbol": "fren",
+      "name": "FREN",
+      "market_cap": 95112,
+      "market_cap_rank": 5853,
+      "asset_platform_id": "cardano",
+      "project": "FREN (FREN)",
+      "stratum": "FREN (FREN)",
+      "policy": "fc11a9ef431f81b837736be5f53e4da29b9469c983d07f321262ce61",
+      "asset_name": "4652454e",
+      "contract": "fc11a9ef431f81b837736be5f53e4da29b9469c983d07f321262ce61",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "fc11a9ef431f81b837736be5f53e4da29b9469c983d07f321262ce614652454e",
+        "ticker": "FREN",
+        "name": "FREN",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 32,
+      "market_position": 51,
+      "coingecko_id": "viper-2",
+      "symbol": "viper",
+      "name": "VIPER",
+      "market_cap": 58270,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "VIPER (VIPER)",
+      "stratum": "VIPER (VIPER)",
+      "policy": "caff93803e51c7b97bf79146790bfa3feb0d0b856ef16113b391b997",
+      "asset_name": "5649504552",
+      "contract": "caff93803e51c7b97bf79146790bfa3feb0d0b856ef16113b391b997",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "caff93803e51c7b97bf79146790bfa3feb0d0b856ef16113b391b9975649504552",
+        "ticker": "VIPER",
+        "name": "VIPER",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 33,
+      "market_position": 52,
+      "coingecko_id": "danzo",
+      "symbol": "danzo",
+      "name": "Danzo",
+      "market_cap": 41581,
+      "market_cap_rank": 7124,
+      "asset_platform_id": "cardano",
+      "project": "Danzo (DANZO)",
+      "stratum": "Danzo (DANZO)",
+      "policy": "bf3e19192da77dfadc7c9065944e50ca7e1a439d90833e3ae58b720a",
+      "asset_name": "44414e5a4f",
+      "contract": "bf3e19192da77dfadc7c9065944e50ca7e1a439d90833e3ae58b720a",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "bf3e19192da77dfadc7c9065944e50ca7e1a439d90833e3ae58b720a44414e5a4f",
+        "ticker": "DANZO",
+        "name": "DANZO",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 34,
+      "market_position": 53,
+      "coingecko_id": "sugar-bush",
+      "symbol": "sugr",
+      "name": "SUGAR BUSH",
+      "market_cap": 36274,
+      "market_cap_rank": 7340,
+      "asset_platform_id": "cardano",
+      "project": "SUGAR BUSH (SUGR)",
+      "stratum": "SUGAR BUSH (SUGR)",
+      "policy": "766fce8055f39d40fcfc19721677b3deb2e7846950ae08dce757f1e7",
+      "asset_name": "53554741522042555348",
+      "contract": "766fce8055f39d40fcfc19721677b3deb2e7846950ae08dce757f1e753554741522042555348",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "766fce8055f39d40fcfc19721677b3deb2e7846950ae08dce757f1e753554741522042555348",
+        "ticker": "SUGR",
+        "name": "SUGAR BUSH",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 35,
+      "market_position": 54,
+      "coingecko_id": "mithrandir-token",
+      "symbol": "mithr",
+      "name": "Mithrandir Token",
+      "market_cap": 34042,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Mithrandir Token (MITHR)",
+      "stratum": "Mithrandir Token (MITHR)",
+      "policy": "65bdf33f8f7fd4debeb2ad659473749eb4eac177e06650bb75a8fe50",
+      "asset_name": "4d69746872546f6b656e",
+      "contract": "65bdf33f8f7fd4debeb2ad659473749eb4eac177e06650bb75a8fe50",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "65bdf33f8f7fd4debeb2ad659473749eb4eac177e06650bb75a8fe504d69746872546f6b656e",
+        "ticker": "MITHR",
+        "name": "Mithrandir Token",
+        "decimals": null,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 36,
+      "market_position": 55,
+      "coingecko_id": "lobster",
+      "symbol": "$lobster",
+      "name": "LOBSTER",
+      "market_cap": 31297,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "LOBSTER ($LOBSTER)",
+      "stratum": "LOBSTER ($LOBSTER)",
+      "policy": "8654e8b350e298c80d2451beb5ed80fc9eee9f38ce6b039fb8706bc3",
+      "asset_name": "4c4f4253544552",
+      "contract": "8654e8b350e298c80d2451beb5ed80fc9eee9f38ce6b039fb8706bc34c4f4253544552",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "8654e8b350e298c80d2451beb5ed80fc9eee9f38ce6b039fb8706bc34c4f4253544552",
+        "ticker": "$LOBSTER",
+        "name": "LOBSTER",
+        "decimals": null,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 37,
+      "market_position": 56,
+      "coingecko_id": "orcfax",
+      "symbol": "fact",
+      "name": "Orcfax",
+      "market_cap": 21051,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Orcfax (FACT)",
+      "stratum": "Orcfax (FACT)",
+      "policy": "a3931691f5c4e65d01c429e473d0dd24c51afdb6daf88e632a6c1e51",
+      "asset_name": "6f7263666178746f6b656e",
+      "contract": "a3931691f5c4e65d01c429e473d0dd24c51afdb6daf88e632a6c1e51",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "a3931691f5c4e65d01c429e473d0dd24c51afdb6daf88e632a6c1e516f7263666178746f6b656e",
+        "ticker": "FACT",
+        "name": "Orcfax Token",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 38,
+      "market_position": 58,
+      "coingecko_id": "metera",
+      "symbol": "metera",
+      "name": "METERA",
+      "market_cap": 13738.26,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "METERA (METERA)",
+      "stratum": "METERA (METERA)",
+      "policy": "8ebb4f0eb39543cdab83eb35f5f194798817eaaa3061872b4101efdb",
+      "asset_name": "0014df104d4554455241",
+      "contract": "8ebb4f0eb39543cdab83eb35f5f194798817eaaa3061872b4101efdb0014df104d4554455241",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "8ebb4f0eb39543cdab83eb35f5f194798817eaaa3061872b4101efdb0014df104d4554455241",
+        "ticker": "METERA",
+        "name": "METERA",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 39,
+      "market_position": 59,
+      "coingecko_id": "tokeo",
+      "symbol": "toke",
+      "name": "Tokeo",
+      "market_cap": 10215.37,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Tokeo (TOKE)",
+      "stratum": "Tokeo (TOKE)",
+      "policy": "375df3f2fb44d3c42b3381a09edd4ea2303a57ada32b5308c0774ee0",
+      "asset_name": "544f4b45",
+      "contract": "375df3f2fb44d3c42b3381a09edd4ea2303a57ada32b5308c0774ee0",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "375df3f2fb44d3c42b3381a09edd4ea2303a57ada32b5308c0774ee0544f4b45",
+        "ticker": "TOKE",
+        "name": "TOKE",
+        "decimals": 0,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    },
+    {
+      "rank": 40,
+      "market_position": 61,
+      "coingecko_id": "gerowallet",
+      "symbol": "gero",
+      "name": "GeroWallet",
+      "market_cap": 0,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "GeroWallet (GERO)",
+      "stratum": "GeroWallet (GERO)",
+      "policy": "10a49b996e2402269af553a8a96fb8eb90d79e9eca79e2b4223057b6",
+      "asset_name": "4745524f",
+      "contract": "10a49b996e2402269af553a8a96fb8eb90d79e9eca79e2b4223057b6",
+      "resolved_by": "registry: the only subject under the policy",
+      "registry": {
+        "subject": "10a49b996e2402269af553a8a96fb8eb90d79e9eca79e2b4223057b64745524f",
+        "ticker": "GERO",
+        "name": "GERO",
+        "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    }
+  ],
+  "excluded": [
+    {
+      "market_position": 1,
+      "coingecko_id": "cardano",
+      "symbol": "ada",
+      "name": "Cardano",
+      "market_cap": 8270656258,
+      "market_cap_rank": 18,
+      "reason": "ADA itself"
+    },
+    {
+      "market_position": 2,
+      "coingecko_id": "midnight-3",
+      "symbol": "night",
+      "name": "Midnight",
+      "market_cap": 676181332,
+      "market_cap_rank": 95,
+      "asset_platform_id": "cardano",
+      "policy": "0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa",
+      "asset_name": "4e49474854",
+      "reason": "named in part 1"
+    },
+    {
+      "market_position": 3,
+      "coingecko_id": "fetch-ai",
+      "symbol": "fet",
+      "name": "Artificial Superintelligence Alliance",
+      "market_cap": 438926274,
+      "market_cap_rank": 122,
+      "reason": "bridged: the Cardano FET token is a bridge copy of a token first issued on Ethereum",
+      "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/fetch-ai gives asset_platform_id ethereum"
+    },
+    {
+      "market_position": 4,
+      "coingecko_id": "snek",
+      "symbol": "snek",
+      "name": "Snek",
+      "market_cap": 53959915,
+      "market_cap_rank": 418,
+      "asset_platform_id": "cardano",
+      "policy": "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f",
+      "asset_name": "534e454b",
+      "reason": "named in part 1"
+    },
+    {
+      "market_position": 5,
+      "coingecko_id": "cicle-xreserve-bridged-usdc-cardano",
+      "symbol": "usdcx",
+      "name": "Circle xReserve Bridged USDC (Cardano)",
+      "market_cap": 39910113,
+      "market_cap_rank": null,
+      "reason": "bridged (CoinGecko category \"Bridged USDC\")"
+    },
+    {
+      "market_position": 6,
+      "coingecko_id": "rserg",
+      "symbol": "rserg",
+      "name": "rsERG",
+      "market_cap": 29232418,
+      "market_cap_rank": null,
+      "reason": "wrapped (CoinGecko category \"Wrapped-Tokens\")"
+    },
+    {
+      "market_position": 8,
+      "coingecko_id": "usdm-2",
+      "symbol": "usdm",
+      "name": "USDM",
+      "market_cap": 13084743,
+      "market_cap_rank": 1073,
+      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
+    },
+    {
+      "market_position": 9,
+      "coingecko_id": "iagon",
+      "symbol": "iag",
+      "name": "Iagon",
+      "market_cap": 11657624,
+      "market_cap_rank": 1134,
+      "asset_platform_id": "cardano",
+      "policy": "5d16cc1a177b5d9ba9cfa9793b07e60f1fb70fea1f8aef064415d114",
+      "asset_name": "494147",
+      "reason": "named in part 1"
+    },
+    {
+      "market_position": 10,
+      "coingecko_id": "iusd",
+      "symbol": "iusd",
+      "name": "Indigo Protocol iUSD",
+      "market_cap": 9342942,
+      "market_cap_rank": 1259,
+      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
+    },
+    {
+      "market_position": 12,
+      "coingecko_id": "anzens-usda",
+      "symbol": "usda",
+      "name": "Anzens USDA",
+      "market_cap": 6776592,
+      "market_cap_rank": 1462,
+      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
+    },
+    {
+      "market_position": 15,
+      "coingecko_id": "hosky",
+      "symbol": "hosky",
+      "name": "Hosky",
+      "market_cap": 5090217,
+      "market_cap_rank": 1648,
+      "asset_platform_id": "cardano",
+      "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235",
+      "asset_name": "484f534b59",
+      "reason": "named in part 1"
+    },
+    {
+      "market_position": 17,
+      "coingecko_id": "djed",
+      "symbol": "djed",
+      "name": "Djed",
+      "market_cap": 3995090,
+      "market_cap_rank": 1819,
+      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
+    },
+    {
+      "market_position": 19,
+      "coingecko_id": "wanchain-bridged-usdc-cardano",
+      "symbol": "usdc",
+      "name": "Wanchain Bridged USDC (Cardano)",
+      "market_cap": 3806664,
+      "market_cap_rank": null,
+      "reason": "bridged (CoinGecko category \"Bridged USDC\")"
+    },
+    {
+      "market_position": 22,
+      "coingecko_id": "kinka",
+      "symbol": "xnk",
+      "name": "Kinka",
+      "market_cap": 1934665,
+      "market_cap_rank": null,
+      "reason": "bridged: the Cardano XNK token is a bridge copy of a token first issued on another chain",
+      "source": "ruling by Adam K. Dean, 2026-10-21"
+    },
+    {
+      "market_position": 27,
+      "coingecko_id": "singularitynet",
+      "symbol": "agix",
+      "name": "SingularityNET",
+      "market_cap": 914891,
+      "market_cap_rank": 3040,
+      "reason": "bridged: the Cardano AGIX token is a bridge copy of a token first issued on Ethereum",
+      "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/singularitynet gives asset_platform_id ethereum"
+    },
+    {
+      "market_position": 37,
+      "coingecko_id": "rejuve-ai",
+      "symbol": "rjv",
+      "name": "Rejuve.AI",
+      "market_cap": 276270,
+      "market_cap_rank": 4339,
+      "reason": "bridged: the Cardano RJV token is a bridge copy of a token first issued on another chain",
+      "source": "ruling by Adam K. Dean, 2026-10-21"
+    },
+    {
+      "market_position": 42,
+      "coingecko_id": "nunet",
+      "symbol": "ntx",
+      "name": "NuNet",
+      "market_cap": 194818,
+      "market_cap_rank": 4821,
+      "reason": "bridged: the Cardano NTX token is a bridge copy of a token first issued on Ethereum",
+      "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/nunet gives asset_platform_id ethereum"
+    },
+    {
+      "market_position": 46,
+      "coingecko_id": "cogito-protocol",
+      "symbol": "cgv",
+      "name": "Cogito Finance",
+      "market_cap": 132542,
+      "market_cap_rank": null,
+      "reason": "bridged: the Cardano CGV token is a bridge copy of a token first issued on another chain",
+      "source": "ruling by Adam K. Dean, 2026-10-21"
+    },
+    {
+      "market_position": 50,
+      "coingecko_id": "occamfi",
+      "symbol": "occ",
+      "name": "OccamFi",
+      "market_cap": 79974,
+      "market_cap_rank": 6123,
+      "reason": "bridged: the Cardano OCC token is a bridge copy of a token first issued on another chain",
+      "source": "ruling by Adam K. Dean, 2026-10-21"
+    },
+    {
+      "market_position": 57,
+      "coingecko_id": "blue-bull",
+      "symbol": "blue",
+      "name": "BLUE BULL",
+      "market_cap": 15883.34,
+      "market_cap_rank": 8557,
+      "asset_platform_id": "cardano",
+      "contract": "c842cfbf207bdbe97c6622ec90d2297d9f5dad70fad2df7a3010c9bf",
+      "reason": "policy only, and 0 registry subjects under it"
+    },
+    {
+      "market_position": 60,
+      "coingecko_id": "paribus",
+      "symbol": "pbx",
+      "name": "Paribus",
+      "market_cap": 10211.96,
+      "market_cap_rank": null,
+      "reason": "bridged: the Cardano PBX token is a bridge copy of a token first issued on another chain",
+      "source": "ruling by Adam K. Dean, 2026-10-21"
+    }
+  ],
+  "provenance": {
+    "captured_at": "2026-10-22T05:09:14.535Z",
+    "tool": "research-corpus capture-strata at bef933a7400a504896ec880572b878ca6705a467",
+    "coingecko": {
+      "category": "cardano-ecosystem",
+      "ranking": [
+        {
+          "endpoint": "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=cardano-ecosystem&order=market_cap_desc&per_page=250&page=1",
+          "response_date": "Thu, 22 Oct 2026 04:56:27 GMT",
+          "read_at": "2026-10-22T04:56:27.285Z",
+          "sha256": "554babae493e21c03626d3c102a8447da9567538bcde28ff7cbf70e90e93ea89"
+        }
+      ],
+      "details": [
+        {
+          "coingecko_id": "midnight-3",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/midnight-3?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:56:28 GMT",
+          "read_at": "2026-10-22T04:56:28.698Z",
+          "sha256": "d3885e335888b5911bb9a6ccf0f2c5049c2cb5a548db525404831701e2204f3e"
+        },
+        {
+          "coingecko_id": "snek",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/snek?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:56:43 GMT",
+          "read_at": "2026-10-22T04:56:43.782Z",
+          "sha256": "3632634fed58b50499831806bd49efc0b0287dcb74ef9890f6f498b857d8e8ec"
+        },
+        {
+          "coingecko_id": "cicle-xreserve-bridged-usdc-cardano",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/cicle-xreserve-bridged-usdc-cardano?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:56:58 GMT",
+          "read_at": "2026-10-22T04:56:58.825Z",
+          "sha256": "4cd9930eafc921715cc3d222a262d175441bfded3ef9822e0477238bfb54db7f"
+        },
+        {
+          "coingecko_id": "rserg",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/rserg?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:57:13 GMT",
+          "read_at": "2026-10-22T04:57:13.794Z",
+          "sha256": "45f58e799b2f18244df603c4251daf54b7e1bfea16181665e086182563ab978b"
+        },
+        {
+          "coingecko_id": "world-mobile-token",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/world-mobile-token?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:57:28 GMT",
+          "read_at": "2026-10-22T04:57:28.792Z",
+          "sha256": "824328eeaad3fa17558157e9b458950571e167cfe67f5238572df92a26fbaaac"
+        },
+        {
+          "coingecko_id": "usdm-2",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/usdm-2?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:57:43 GMT",
+          "read_at": "2026-10-22T04:57:43.817Z",
+          "sha256": "eed0c630113cd17d190609841ccf4b5e836bb65777926457b7bf2608ebbe02b3"
+        },
+        {
+          "coingecko_id": "iagon",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/iagon?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:57:58 GMT",
+          "read_at": "2026-10-22T04:57:58.837Z",
+          "sha256": "fadaf3a4055780aadb01c49544c3d117f3e84ed9f94a2f1b7c68aedec6df8a0e"
+        },
+        {
+          "coingecko_id": "iusd",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/iusd?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:58:13 GMT",
+          "read_at": "2026-10-22T04:58:13.832Z",
+          "sha256": "722161f9ef40295b9616fc03aaa2ba0732e8199caa4aeb61cabfae7136507273"
+        },
+        {
+          "coingecko_id": "strike-2",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/strike-2?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:58:28 GMT",
+          "read_at": "2026-10-22T04:58:28.801Z",
+          "sha256": "0a9cb33d1d1e9d8f531c00c42317f6fc95de491bcd971ca7c5a45968324140ff"
+        },
+        {
+          "coingecko_id": "anzens-usda",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/anzens-usda?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:58:43 GMT",
+          "read_at": "2026-10-22T04:58:43.832Z",
+          "sha256": "5bf8909196e81073024ca672d508a0542ef5293474cbf34afcc74ec7ac4f8380"
+        },
+        {
+          "coingecko_id": "minswap",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/minswap?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:58:58 GMT",
+          "read_at": "2026-10-22T04:58:58.752Z",
+          "sha256": "c771e6735a5dc5faac5b2614359d3ec21d40e6c09fc0384254a497e5f1a11cbf"
+        },
+        {
+          "coingecko_id": "liqwid-finance",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/liqwid-finance?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:59:13 GMT",
+          "read_at": "2026-10-22T04:59:13.902Z",
+          "sha256": "bcee15a117995614ee49059292ed0079442fe3f58ac66dc7728741435c1517ee"
+        },
+        {
+          "coingecko_id": "hosky",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/hosky?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:59:28 GMT",
+          "read_at": "2026-10-22T04:59:28.834Z",
+          "sha256": "271f79f7a003c9e4243985d11206572d2f6ee9657f6764f8d8ec8ea39238c4c5"
+        },
+        {
+          "coingecko_id": "infinity-rising",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/infinity-rising?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:59:43 GMT",
+          "read_at": "2026-10-22T04:59:43.831Z",
+          "sha256": "ada6370546f70bab909e949869c9c0089edc39000d1098f4d93b6332cbd73bcd"
+        },
+        {
+          "coingecko_id": "djed",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/djed?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 04:59:58 GMT",
+          "read_at": "2026-10-22T04:59:58.838Z",
+          "sha256": "68df0dbf3a37f84bdb963a1864261a9f12ce1253c1f9967115531b8a14bd74ea"
+        },
+        {
+          "coingecko_id": "ascend-3",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/ascend-3?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:00:13 GMT",
+          "read_at": "2026-10-22T05:00:14.053Z",
+          "sha256": "6a1b748e17cad812e9dfd3bb72edb5dcc66f868fc2076feb4ee26b4bba41fcf9"
+        },
+        {
+          "coingecko_id": "wanchain-bridged-usdc-cardano",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/wanchain-bridged-usdc-cardano?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:00:28 GMT",
+          "read_at": "2026-10-22T05:00:28.859Z",
+          "sha256": "0aab1e96c8488eecaf62cb9a6f3c8d48d01236dabb4f47791696cd7a53aebab5"
+        },
+        {
+          "coingecko_id": "indigo-dao-governance-token",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/indigo-dao-governance-token?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:00:43 GMT",
+          "read_at": "2026-10-22T05:00:43.813Z",
+          "sha256": "edfba574d27e416bb292c84fc7acb503ac7c1dd8a7c33a6bfedf10b0b24153e6"
+        },
+        {
+          "coingecko_id": "nuvola-digital",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/nuvola-digital?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:00:58 GMT",
+          "read_at": "2026-10-22T05:00:58.900Z",
+          "sha256": "84ee9727972096ac3f8b6683ab062ebc0d46b0d0b31b6e6e53df323e4f2b0475"
+        },
+        {
+          "coingecko_id": "cornucopias",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/cornucopias?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:01:13 GMT",
+          "read_at": "2026-10-22T05:01:13.923Z",
+          "sha256": "a3f9182a9949da3b48ac889b018420d24307b7d667f1a23e79ae3ad2e8657126"
+        },
+        {
+          "coingecko_id": "flow-lending",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/flow-lending?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:01:28 GMT",
+          "read_at": "2026-10-22T05:01:28.921Z",
+          "sha256": "69347ade79dbc5e4acb8599e286437614eaed8802023340eb0b3806b92914606"
+        },
+        {
+          "coingecko_id": "cockcardano",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/cockcardano?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:01:43 GMT",
+          "read_at": "2026-10-22T05:01:43.914Z",
+          "sha256": "d8a772bb70369f5660a5f9989ebc9f638367a25477801ea431ec465903fa420d"
+        },
+        {
+          "coingecko_id": "book-2",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/book-2?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:01:58 GMT",
+          "read_at": "2026-10-22T05:01:58.898Z",
+          "sha256": "3880de68483af6b96b735e1cb807b149762ba7c69897005278e52f6555e42a6e"
+        },
+        {
+          "coingecko_id": "l4va",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/l4va?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:02:13 GMT",
+          "read_at": "2026-10-22T05:02:13.927Z",
+          "sha256": "16200c7e021bf181bd68777d9a3678007cd2cc88341763270d3ba422c642cf9a"
+        },
+        {
+          "coingecko_id": "palm-economy",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/palm-economy?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:02:28 GMT",
+          "read_at": "2026-10-22T05:02:28.979Z",
+          "sha256": "4a4153ed26bbd0017c5e666fbf270d2216a3204957c2a361d48e2f795ceb1c28"
+        },
+        {
+          "coingecko_id": "babysnek",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/babysnek?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:02:43 GMT",
+          "read_at": "2026-10-22T05:02:43.949Z",
+          "sha256": "6c0820fd628dff02367994ff7633c7e3b7d9aef87c81a63af3903b5afc4f8895"
+        },
+        {
+          "coingecko_id": "optim-finance",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/optim-finance?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:02:58 GMT",
+          "read_at": "2026-10-22T05:02:58.975Z",
+          "sha256": "0ac42b1359087b0acf676a2aa727faa966b0477c8b2e339c1144217b3565a996"
+        },
+        {
+          "coingecko_id": "xerberus",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/xerberus?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:03:13 GMT",
+          "read_at": "2026-10-22T05:03:14.093Z",
+          "sha256": "a0ea848e37f6dae6933998850835a07d4159527e6097af49434b5cc22fb70cdf"
+        },
+        {
+          "coingecko_id": "wingriders",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/wingriders?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:03:28 GMT",
+          "read_at": "2026-10-22T05:03:29.011Z",
+          "sha256": "255bcdde1981ddcbb45ef6a90e277c231094244ecdd64a29064935e94b71b69f"
+        },
+        {
+          "coingecko_id": "nikepig",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/nikepig?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:03:43 GMT",
+          "read_at": "2026-10-22T05:03:44.022Z",
+          "sha256": "b0529a7ea99402c7ec240c2e982d589f0a8b4b0ab612c322d63f598c0b72f1b0"
+        },
+        {
+          "coingecko_id": "revuto",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/revuto?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:03:58 GMT",
+          "read_at": "2026-10-22T05:03:59.033Z",
+          "sha256": "b63d7e0ceb9d39b30c8b7fd6c9d9652ad4129cef37b14fe97c22a06ac5de5c9a"
+        },
+        {
+          "coingecko_id": "titan-3",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/titan-3?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:04:13 GMT",
+          "read_at": "2026-10-22T05:04:14.041Z",
+          "sha256": "7a0946476b3722e5d10dc534af7852eddd9a4786a52b647661fd164ec5927dea"
+        },
+        {
+          "coingecko_id": "atlas-2",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/atlas-2?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:04:29 GMT",
+          "read_at": "2026-10-22T05:04:29.195Z",
+          "sha256": "0b0c328aafb726baa0eae8dbadbcd1f116816edb44015ccfd1ec26837ce63a56"
+        },
+        {
+          "coingecko_id": "charli3",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/charli3?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:04:43 GMT",
+          "read_at": "2026-10-22T05:04:44.026Z",
+          "sha256": "3741dc8047f360aa99161c4330ccffa942c5ca0f56770ffd520b6b1733545432"
+        },
+        {
+          "coingecko_id": "surge-3",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/surge-3?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:04:58 GMT",
+          "read_at": "2026-10-22T05:04:59.035Z",
+          "sha256": "870275479ea607d94fd50729b4b7b4d127bca1d8defa3a586a184863f5fa3fa6"
+        },
+        {
+          "coingecko_id": "gold-fgld-finest-tokenized-gold",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/gold-fgld-finest-tokenized-gold?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:05:13 GMT",
+          "read_at": "2026-10-22T05:05:14.073Z",
+          "sha256": "40874ad1c7cfe27041fd978b309e369b0942407ea65528415b62fcb5d75c2f9f"
+        },
+        {
+          "coingecko_id": "talos",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/talos?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:05:29 GMT",
+          "read_at": "2026-10-22T05:05:29.139Z",
+          "sha256": "afc7e04ced04cde4f8085fcfaefc7e8f3a2e511f00facbec4cb5eb3816e200a9"
+        },
+        {
+          "coingecko_id": "nft-maker",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/nft-maker?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:05:43 GMT",
+          "read_at": "2026-10-22T05:05:44.086Z",
+          "sha256": "51ee98264679bf8db1a8ba813683d1e425cea9e6f92542b4c9e87acd552adf88"
+        },
+        {
+          "coingecko_id": "bodega",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/bodega?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:05:58 GMT",
+          "read_at": "2026-10-22T05:05:59.113Z",
+          "sha256": "472f4b56d18a097ba8768e9441faa55853b70ae5428cdf00377da4643a21842d"
+        },
+        {
+          "coingecko_id": "charles-the-chad",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/charles-the-chad?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:06:14 GMT",
+          "read_at": "2026-10-22T05:06:14.122Z",
+          "sha256": "7b394b2cb4e93df328fc7c44818d7c1b34d197f06287a540d54eee2b672f42a7"
+        },
+        {
+          "coingecko_id": "crawju",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/crawju?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:06:28 GMT",
+          "read_at": "2026-10-22T05:06:29.112Z",
+          "sha256": "f82536cc93ead2662e9468d6f60c7e92db97b1a36364a6aabc3489a06c3c0c35"
+        },
+        {
+          "coingecko_id": "ada-peepos",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/ada-peepos?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:06:44 GMT",
+          "read_at": "2026-10-22T05:06:44.282Z",
+          "sha256": "fe2fab3288678536d949178fc278916eebd2c649ff4c05ff0bddfdaa1972b43e"
+        },
+        {
+          "coingecko_id": "viper-2",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/viper-2?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:06:58 GMT",
+          "read_at": "2026-10-22T05:06:59.125Z",
+          "sha256": "35297c5e83f39706994245537afb806695b3064612419863093d969e6a0cadb6"
+        },
+        {
+          "coingecko_id": "danzo",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/danzo?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:07:14 GMT",
+          "read_at": "2026-10-22T05:07:14.135Z",
+          "sha256": "13244e8a4a51752717d5dbe017887af1e90b502ca88c7c2bf516753cda1b9e86"
+        },
+        {
+          "coingecko_id": "sugar-bush",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/sugar-bush?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:07:28 GMT",
+          "read_at": "2026-10-22T05:07:29.156Z",
+          "sha256": "2b1436dedb62597b52466480de28e5a7791b7230f4ed89b1bb5c0e440655566b"
+        },
+        {
+          "coingecko_id": "mithrandir-token",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/mithrandir-token?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:07:44 GMT",
+          "read_at": "2026-10-22T05:07:44.173Z",
+          "sha256": "4a9f65a88d83cc5f6323c74f92b90e7ac1227bf712252f93b61271d2008750e6"
+        },
+        {
+          "coingecko_id": "lobster",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/lobster?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:07:59 GMT",
+          "read_at": "2026-10-22T05:07:59.190Z",
+          "sha256": "dcab0d622e161dc6340c52e815801dee729fc6e1e4d0a402262599c4860a2ec1"
+        },
+        {
+          "coingecko_id": "orcfax",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/orcfax?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:08:14 GMT",
+          "read_at": "2026-10-22T05:08:14.193Z",
+          "sha256": "b2c9f63bb3ba646292384e7efb82d413590d68114555b03b68b128b8a822f861"
+        },
+        {
+          "coingecko_id": "blue-bull",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/blue-bull?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:08:29 GMT",
+          "read_at": "2026-10-22T05:08:29.202Z",
+          "sha256": "26214148ecd911222da5d2b9e6f203f8291e4327002a1753ef55f263689a8163"
+        },
+        {
+          "coingecko_id": "metera",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/metera?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:08:44 GMT",
+          "read_at": "2026-10-22T05:08:44.220Z",
+          "sha256": "d58140e2f7fe0d4ad89e23aa18aebffcda3eb51e9e5d07bd3d3457c1c571cfca"
+        },
+        {
+          "coingecko_id": "tokeo",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/tokeo?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:08:59 GMT",
+          "read_at": "2026-10-22T05:08:59.344Z",
+          "sha256": "08ccfdd7079ac9721d8eed42b3a36066379f84fef6d7fac3c293b78ee10519a7"
+        },
+        {
+          "coingecko_id": "gerowallet",
+          "endpoint": "https://api.coingecko.com/api/v3/coins/gerowallet?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false",
+          "response_date": "Thu, 22 Oct 2026 05:09:14 GMT",
+          "read_at": "2026-10-22T05:09:14.208Z",
+          "sha256": "0874d908cbad5b2a820d170703f74ef6594a0b0fe566479a4f4f22347da7aa69"
+        }
+      ],
+      "rate_spacing_ms": 15000
+    },
+    "registry": {
+      "repository": "github.com/cardano-foundation/cardano-token-registry",
+      "commit": "a7f2aed87c594ccaa42776ce6cff1faaec7ca86d",
+      "tree_sha256": "7e7b2808de1d474f039a9b6597de83c44f93f2182fca820fe3b7f87d2f6cd268",
+      "subjects": 7982
+    },
+    "rulings": {
+      "note": "Rulings on the CoinGecko candidates of part 2 of the strata rule, read by capture-strata. An exclusion removes a coin whatever CoinGecko's data say; a Cardano-first ruling keeps a coin whose CoinGecko asset_platform_id is another chain, because its Cardano token is the original issuance.",
+      "exclusions": [
+        {
+          "coingecko_id": "fetch-ai",
+          "reason": "bridged: the Cardano FET token is a bridge copy of a token first issued on Ethereum",
+          "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/fetch-ai gives asset_platform_id ethereum"
+        },
+        {
+          "coingecko_id": "singularitynet",
+          "reason": "bridged: the Cardano AGIX token is a bridge copy of a token first issued on Ethereum",
+          "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/singularitynet gives asset_platform_id ethereum"
+        },
+        {
+          "coingecko_id": "nunet",
+          "reason": "bridged: the Cardano NTX token is a bridge copy of a token first issued on Ethereum",
+          "source": "ruling by Adam K. Dean, 2026-10-21; CoinGecko /coins/nunet gives asset_platform_id ethereum"
+        },
+        {
+          "coingecko_id": "rejuve-ai",
+          "reason": "bridged: the Cardano RJV token is a bridge copy of a token first issued on another chain",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "cogito-protocol",
+          "reason": "bridged: the Cardano CGV token is a bridge copy of a token first issued on another chain",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "paribus",
+          "reason": "bridged: the Cardano PBX token is a bridge copy of a token first issued on another chain",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "occamfi",
+          "reason": "bridged: the Cardano OCC token is a bridge copy of a token first issued on another chain",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "kinka",
+          "reason": "bridged: the Cardano XNK token is a bridge copy of a token first issued on another chain",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        }
+      ],
+      "cardano_first": [
+        {
+          "coingecko_id": "world-mobile-token",
+          "reason": "WMTX was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "infinity-rising",
+          "reason": "RISE was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "cornucopias",
+          "reason": "COPI was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        },
+        {
+          "coingecko_id": "l4va",
+          "reason": "L4VA was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
+          "source": "ruling by Adam K. Dean, 2026-10-21"
+        }
+      ]
+    },
+    "confirmed_by_adam": [
+      {
+        "project": "HOSKY",
+        "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235",
+        "asset_name": "484f534b59",
+        "date": "2026-10-21",
+        "note": "policy id confirmed by Adam K. Dean from his own knowledge; also matches the Cardano Foundation token registry"
+      },
+      {
+        "project": "SNEK",
+        "policy": "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f",
+        "asset_name": "534e454b",
+        "date": "2026-10-21",
+        "note": "policy id confirmed by Adam K. Dean from his own knowledge; also matches the Cardano Foundation token registry"
+      },
+      {
+        "project": "World Mobile Token X (WMTX)",
+        "policy": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a",
+        "asset_name": "576f726c644d6f62696c65546f6b656e58",
+        "date": "2026-10-21",
+        "note": "policy id confirmed by Adam K. Dean from his own knowledge; also matches the Cardano Foundation token registry"
+      },
+      {
+        "project": "Nuvola Digital (NVL)",
+        "policy": "5b26e685cc5c9ad630bde3e3cd48c694436671f3d25df53777ca60ef",
+        "asset_name": "4e564c",
+        "date": "2026-10-21",
+        "note": "policy id confirmed by Adam K. Dean from his own knowledge; also matches the Cardano Foundation token registry"
+      }
+    ]
+  }
+}
