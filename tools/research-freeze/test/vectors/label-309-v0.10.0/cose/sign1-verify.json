@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "primitive": "cose-sign1-verify",
+  "source": "RFC 9052 sig-01 + production Label 309 record-level; error codes from the error-code registry",
+  "vectors": [
+    {
+      "name": "happy-rfc-9052-sig-01-embedded",
+      "message_hex": "8443a10127a10442313154546869732069732074686520636f6e74656e742e58400ef0ab97968c4ef30295debce65153723054929c45ace0165513b84bc3cdae210368904524e2cf64e9aeee07f22d20b1288ce18df8410dcdb92fe86e4787cc00",
+      "expected_signer_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "external_aad_hex": "",
+      "expected_result": {
+        "ok": true,
+        "signer_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "alg": -8
+      }
+    },
+    {
+      "name": "happy-kid-in-protected-header",
+      "message_hex": "845826a201270458203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660ca054546869732069732074686520636f6e74656e742e5840e22b8551925271eb763d3891bc39dc1927b479a6af930b5b71d170f6ce44d1da5c4978aedd57652ce8de99d1980be6b3dc936c37741a27a3461fee4a92fa5005",
+      "external_aad_hex": "",
+      "expected_result": {
+        "ok": true,
+        "signer_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "alg": -8
+      }
+    },
+    {
+      "name": "signature-flipped",
+      "message_hex": "8443a10127a10442313154546869732069732074686520636f6e74656e742e58400ef0ab97968c4ef30295debce65153723054929c45ace0165513b84bc3cdae210368904524e2cf64e9aeee07f22d20b1288ce18df8410dcdb92fe86e4787cc01",
+      "expected_signer_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "external_aad_hex": "",
+      "expected_result": {
+        "ok": false,
+        "error_code": "SIGNATURE_INVALID"
+      }
+    },
+    {
+      "name": "unsupported-alg",
+      "message_hex": "8443a10126a10442313154546869732069732074686520636f6e74656e742e5840e7c1e60593eee53969626467163168abbb7e5cc52c515936ffb44a15e0838c8db4827b43c74430aaad2dd83b0ff8b18b942877aa9dd4014d35ffb6744e262f0e",
+      "expected_signer_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "external_aad_hex": "",
+      "expected_result": {
+        "ok": false,
+        "error_code": "SIGNATURE_UNSUPPORTED",
+        "severity": "info",
+        "note": "An unregistered protected alg (-7) is tagged, never verified; at the record level the entry does not fail the record."
+      }
+    },
+    {
+      "name": "malformed-wire-2-element-array",
+      "message_hex": "820102",
+      "external_aad_hex": "",
+      "expected_result": {
+        "ok": false,
+        "error_code": "MALFORMED_SIG_COSE_SIGN1"
+      }
+    }
+  ],
+  "cardano_poe_vectors": [
+    {
+      "name": "happy-cardano-poe-a2-record-detached",
+      "source": "Label 309 record-level path-1 happy-path reference vector",
+      "message_hex": "845826a201270458203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660ca0f6584047486fbf0da9c9074f278fc3c50e9a9485cd6332b362297002dbf7db3b7cab01e47f7c327f4d6b9d44a1bd22a670dfc6dc5d5ecae1e80ca906e455aa057feb00",
+      "detached_record_body_cbor_hex": "a2617601656974656d7381a2647572697381783061723a2f2f3263594e457a467333506647764b43456b78317059426c4146632d4642365a4a704776527751456e476d3066686173686573a268736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee6b626c616b6532622d32353658202d3b9520f17f6be4e26361b18afc8d7bbdbc2cd4209319a77f014f2fd0d409a4",
+      "expected_result": {
+        "ok": true,
+        "signer_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "alg": -8
+      }
+    },
+    {
+      "name": "cardano-poe-attached-payload-zero-length-rejected",
+      "source": "Label 309 detached-payload-only mandate (attached payload rejected)",
+      "message_hex": "845826a201270458203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660ca040584047486fbf0da9c9074f278fc3c50e9a9485cd6332b362297002dbf7db3b7cab01e47f7c327f4d6b9d44a1bd22a670dfc6dc5d5ecae1e80ca906e455aa057feb00",
+      "detached_record_body_cbor_hex": "a2617601656974656d7381a2647572697381783061723a2f2f3263594e457a467333506647764b43456b78317059426c4146632d4642365a4a704776527751456e476d3066686173686573a268736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee6b626c616b6532622d32353658202d3b9520f17f6be4e26361b18afc8d7bbdbc2cd4209319a77f014f2fd0d409a4",
+      "expected_result": {
+        "ok": false,
+        "error_code": "MALFORMED_SIG_COSE_SIGN1"
+      }
+    },
+    {
+      "name": "cardano-poe-flipped-signature-rejected",
+      "message_hex": "845826a201270458203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660ca0f6584047486fbf0da9c9074f278fc3c50e9a9485cd6332b362297002dbf7db3b7cab01e47f7c327f4d6b9d44a1bd22a670dfc6dc5d5ecae1e80ca906e455aa057feb07",
+      "detached_record_body_cbor_hex": "a2617601656974656d7381a2647572697381783061723a2f2f3263594e457a467333506647764b43456b78317059426c4146632d4642365a4a704776527751456e476d3066686173686573a268736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee6b626c616b6532622d32353658202d3b9520f17f6be4e26361b18afc8d7bbdbc2cd4209319a77f014f2fd0d409a4",
+      "expected_result": {
+        "ok": false,
+        "error_code": "SIGNATURE_INVALID"
+      }
+    },
+    {
+      "name": "cardano-poe-body-mutated-rejected",
+      "message_hex": "845826a201270458203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660ca0f6584047486fbf0da9c9074f278fc3c50e9a9485cd6332b362297002dbf7db3b7cab01e47f7c327f4d6b9d44a1bd22a670dfc6dc5d5ecae1e80ca906e455aa057feb00",
+      "detached_record_body_cbor_hex": "a2617601656974656d7381a2647572697381783061723a2f2f3263594e457a467333506647764b43456b78317059426c4146632d4642365a4a704776527751456e476d3066686173686573a268736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee6b626c616b6532622d32353658202d3b9520f17f6be4e26361b18afc8d7bbdbc2cd4209319a77f014f2fd0d409a5",
+      "expected_result": {
+        "ok": false,
+        "error_code": "SIGNATURE_INVALID"
+      }
+    },
+    {
+      "name": "cardano-poe-non-32-byte-kid-no-cose-key-unresolved",
+      "source": "Label 309 signer-key resolution \u2014 no resolution path",
+      "message_hex": "845823a2012704581de15ae193abe694a607531e20f85d8358ade9a474a4f45ac4e15e962da1a0f65840b57fe750c88317d693cfb81b2e107ad82fda86b739b6899151e4200147b6b9130e0e4c907122123155f4634b7114809a4d19f05688e07da8544a2c9799aa2f0b",
+      "detached_record_body_cbor_hex": "a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "expected_result": {
+        "ok": false,
+        "error_code": "SIGNER_KEY_UNRESOLVED"
+      },
+      "note": "The protected-header kid is 29 bytes (a stake-address-shaped value, not a raw Ed25519 public key) and the entry carries no inline cose_key, so neither resolution path yields a signer key. The signature bytes are honestly produced; resolution, not verification, is what fails."
+    }
+  ]
+}

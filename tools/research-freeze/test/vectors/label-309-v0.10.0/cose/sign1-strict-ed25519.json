@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "primitive": "cose-sign1-strict-ed25519",
+  "source": "Strict-Ed25519 differentiating fixture — C2SP/CCTV ed25519vectors vector 3 (low_order_A)",
+  "vectors": [
+    {
+      "name": "low-order-pubkey-d5",
+      "message_hex": "845826a201270458200000000000000000000000000000000000000000000000000000000000000000a05065643235353139766563746f72732033584036684ea91032ba5b1dbab2d02f4debc74c3327f2b3802e2e4d371aa42b12b56b05ba9a796274d80437afa36f1236563f2f3b0aa84cecddc3d20914615ba4fe02",
+      "external_aad_hex": "",
+      "expected_result": {
+        "ok": false,
+        "error_code": "SIGNATURE_INVALID"
+      }
+    }
+  ]
+}
