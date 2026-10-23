@@ -102,6 +102,9 @@ export async function build({ store, koios, bf = null, cli, manifestPath, networ
   let hypotheses = null;
   if (stage === 'final') {
     hypotheses = await checkCitedHypotheses({ store, koios, bf, network, cited: doc.cited, hypothesesHash, hypothesesDocument, address: pub.addresses[network], log, ...keys });
+    if (hypotheses.chain_first_carrier && hypotheses.chain_first_carrier !== hypotheses.tx_hash) {
+      log(`the hypotheses record's first carrier on chain is ${hypotheses.chain_first_carrier}, a copy that landed before ${hypotheses.tx_hash}; the document cites ${hypotheses.tx_hash}, which carries the same record, and the study's chain-order rule accepts it`);
+    }
     targets.push(hypotheses);
   }
 

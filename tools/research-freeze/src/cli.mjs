@@ -37,9 +37,11 @@ const USAGE = `research-freeze: build, sign, submit and verify the study's CIP-1
   check <run>                                re-run the offline checks on a run directory
   submit <run>                               submit the run's exact signed bytes (mainnet: interactive confirmation)
   wait <run>                                 wait for 15 confirmations and record the block facts
-                                             (a final-stage freeze: also E, the cutoff slot and N)
+                                             (a final-stage freeze: also E, the cutoff slot and N, once Koios and
+                                             Blockfrost show no earlier carrier of its record)
   verify <run | tx-hash> --network <n> [--identity <name>]
                                              verify on chain (this tool, the SDK, the cardanowall CLI) and cross-check with Blockfrost
+                                             (a staged freeze: also scan for other carriers of its record)
   drawkey <run>                              once epoch N has started, read its nonce from Koios and Blockfrost and record both
   abandon --network <n> [--identity <name>]  drop a journaled transaction whose TTL has passed and which never landed
                                              (never, on mainnet, a hypotheses or final freeze that may have been sent)
@@ -226,6 +228,8 @@ async function main() {
         const d = facts.draw;
         say(`final-stage freeze in epoch E = ${d.block_epoch} at slot ${d.block_slot}; cutoff slot ${d.cutoff_slot} (window ${d.stabilisation_window} slots): the draw key is the nonce of epoch N = ${d.nonce_epoch}, which starts at slot ${d.nonce_epoch_first_slot}`);
         say('These facts come from Koios alone; "verify" and "drawkey" read them again from Koios and Blockfrost.');
+        if (d.carrier_scan?.ran) say(`No other transaction carries the record with its 674 line before this one (Koios and Blockfrost, blocks after ${d.carrier_scan.anchor ? d.carrier_scan.anchor.block_height : 0} up to ${d.carrier_scan.block.height}).`);
+        else if (d.carrier_scan) say(`Other carriers of the record were not scanned (${d.carrier_scan.reason}); "verify" with a project id scans for them.`);
       }
       return;
     }
@@ -246,6 +250,12 @@ async function main() {
         say(`  Blockfrost cross-check: ${r.crosscheck.ok ? 'agrees' : 'DISAGREES'} (transaction CBOR, block hash, height, slot, epoch, epoch slot, time); depth ${r.crosscheck.depth.koios} on Koios, ${r.crosscheck.depth.blockfrost} on Blockfrost`);
       } else say(`  Blockfrost cross-check: not run (${r.crosscheck.reason})`);
       if (r.draw) say(`  draw plan: E = ${r.draw.block_epoch}, slot ${r.draw.block_slot}, cutoff ${r.draw.cutoff_slot}, N = ${r.draw.nonce_epoch} (${r.draw.sources.join(' and ')})`);
+      if (r.carriers && !r.carriers.ran) say(`  other carriers: not scanned (${r.carriers.reason})`);
+      else if (r.carriers?.decided) {
+        const c = r.carriers;
+        const first = c.first_carrier === r.txHash ? 'this transaction' : `${c.first_carrier}, which comes before this transaction`;
+        say(`  other carriers: ${c.carriers.length} in blocks ${c.anchor ? c.anchor.block_height + 1 : 0} to ${c.block.height} (Koios and Blockfrost list the same ${c.listed} label-309 transactions there); the first carrier${r.stage === 'final' ? ' with the document line' : ''} under the study's chain-order rule is ${first}`);
+      } else if (r.carriers) say(`  other carriers: undecided after ${r.carriers.attempts} attempt(s)`);
       for (const i of r.issues) say(`  ISSUE ${i}`);
       for (const e of r.explorers) say(`  ${e}`);
       if (r.verdict !== 'valid') process.exitCode = 1;

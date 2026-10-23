@@ -12,7 +12,9 @@ import { Blockfrost } from '../src/blockfrost.mjs';
 import { deriveIdentity, mnemonicFromEntropy, publicFacts } from '../src/keys.mjs';
 import { prepareRun, runReport, runFiles, loadRun, prepareRebuild, rebuildReport } from '../src/build.mjs';
 import { journal, journalEntry } from '../src/journal.mjs';
-import { toHex } from '../src/util.mjs';
+import { boundMetadata } from '../src/carriers.mjs';
+import { decodeItem, Tagged } from '../src/cbor.mjs';
+import { concat, fromHex, toHex } from '../src/util.mjs';
 
 export const seededMnemonic = (label) => mnemonicFromEntropy(crypto.createHash('sha256').update(label).digest());
 
@@ -29,6 +31,35 @@ export function testIdentity(store, name = 'rehearsal', label = name) {
 
 export function res(status, body, headers = {}) {
   return { status, ok: status >= 200 && status < 300, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) };
+}
+
+// The metadata entries of a served transaction: [{ label, bytes }].
+function metadataEntries(hash, cbor) {
+  try {
+    const bytes = fromHex(cbor);
+    const m = boundMetadata(bytes, hash);
+    return m.bound ? m.entries.map((e) => ({ label: e.label, bytes: bytes.slice(e.value[0], e.value[1]) })) : [];
+  } catch {
+    return [];
+  }
+}
+
+// db-sync's JSON for a metadata value: a byte string as "0x" and its hex.
+function dbSyncJson(v) {
+  if (v instanceof Uint8Array) return `0x${toHex(v)}`;
+  if (typeof v === 'bigint') return Number(v);
+  if (Array.isArray(v)) return v.map(dbSyncJson);
+  if (v instanceof Map) return Object.fromEntries([...v].map(([k, x]) => [k instanceof Uint8Array ? `0x${toHex(k)}` : String(k), dbSyncJson(x)]));
+  if (v instanceof Tagged) return dbSyncJson(v.value);
+  return v;
+}
+
+// A served transaction's label-309 listing row facts, or null when it carries
+// no label 309 or has no block.
+function labelled(hash, t) {
+  if (!t || !t.block || !t.cbor) return null;
+  const e = metadataEntries(hash, t.cbor).find((x) => x.label === 309n);
+  return e ? e : null;
 }
 
 export const PARAMS_ROW = { epoch_no: 320, protocol_major: 11, protocol_minor: 0, min_fee_a: 44, min_fee_b: 155381, max_tx_size: 16384, coins_per_utxo_size: '4310', nonce: null };
@@ -62,12 +93,41 @@ export function fakeChain(network, { utxos = [], txs = {}, tip = {}, genesis = {
     }
     const tx = (h) => chain.txs[h];
     if (path === '/tx_status') return res(200, body._tx_hashes.map((h) => ({ tx_hash: h, num_confirmations: tx(h) ? tx(h).confirmations : null })));
-    if (path === '/tx_cbor') return res(200, body._tx_hashes.filter(tx).map((h) => ({ tx_hash: h, cbor: tx(h).cbor })));
+    // `servedCbor` replaces the bytes served (null: none), not those listed.
+    const served = (h) => (tx(h).servedCbor !== undefined ? tx(h).servedCbor : tx(h).cbor);
+    if (path === '/tx_cbor') return res(200, body._tx_hashes.filter((h) => tx(h) && served(h) !== null).map((h) => ({ tx_hash: h, cbor: served(h) })));
     if (path === '/tx_info') {
       if (body._inputs) return res(200, body._tx_hashes.filter((h) => tx(h) && tx(h).inputs).map((h) => ({ tx_hash: h, inputs: tx(h).inputs.map((i) => ({ tx_hash: i.txHash, tx_index: i.index })) })));
       return res(
         200,
-        body._tx_hashes.filter((h) => tx(h) && tx(h).block).map((h) => ({ tx_hash: h, ...tx(h).block }))
+        body._tx_hashes.filter((h) => tx(h) && tx(h).block).map((h) => ({ tx_hash: h, tx_block_index: tx(h).index ?? 0, ...tx(h).block }))
+      );
+    }
+    // Label-309 transactions by block height, as Koios's PostgREST serves
+    // them: `_after_block_height` inclusive, `block_height=lte.`, `order`
+    // and `limit`. A transaction with `listed: false` is not (yet) listed.
+    if (path.startsWith('/tx_by_metalabel')) {
+      const q = new URLSearchParams(path.split('?')[1]);
+      if (q.get('_label') !== '309') throw new Error(`fake Koios: label ${q.get('_label')}`);
+      const after = Number(q.get('_after_block_height'));
+      const lte = Number(/^lte\.(\d+)$/.exec(q.get('block_height'))[1]);
+      const desc = /desc/.test(q.get('order') || '');
+      let rows = Object.entries(chain.txs)
+        .filter(([h, t]) => t.listed !== false && labelled(h, t))
+        .map(([h, t]) => ({ tx_hash: h, block_hash: t.block.block_hash, block_height: t.block.block_height, epoch_no: t.block.epoch_no, absolute_slot: t.block.absolute_slot, tx_timestamp: t.block.tx_timestamp }))
+        .filter((r) => r.block_height >= after && r.block_height <= lte);
+      rows.sort((a, b) => a.block_height - b.block_height || (a.tx_hash < b.tx_hash ? -1 : 1));
+      if (desc) rows.reverse();
+      rows = rows.slice(0, Number(q.get('limit') || 1000));
+      return res(200, rows);
+    }
+    if (path === '/tx_metadata') {
+      return res(
+        200,
+        body._tx_hashes.filter(tx).map((h) => ({
+          tx_hash: h,
+          metadata: tx(h).koiosMetadata !== undefined ? tx(h).koiosMetadata : Object.fromEntries(metadataEntries(h, tx(h).cbor).map((e) => [String(e.label), dbSyncJson(decodeItem(e.bytes, 0)[0])]))
+        }))
       );
     }
     throw new Error(`fake Koios: unexpected ${path}`);
@@ -155,11 +215,37 @@ export function fakeBlockfrost(network, { txs = {}, tip = {}, genesis = {}, epoc
     if ((m = /^\/addresses\/([a-z0-9_]+)\/transactions\?page=(\d+)/.exec(p))) {
       return res(200, m[2] === '1' ? state.history.map((h, i) => ({ tx_hash: h, tx_index: 0, block_height: 1 + i, block_time: 1 })) : []);
     }
-    if ((m = /^\/txs\/([0-9a-f]{64})\/cbor$/.exec(p))) return state.txs[m[1]] ? res(200, { cbor: state.txs[m[1]].cbor }) : res(404, { status_code: 404 });
+    if ((m = /^\/txs\/([0-9a-f]{64})\/cbor$/.exec(p))) {
+      // `servedCbor` replaces the bytes served (null: none), not those listed.
+      const t = state.txs[m[1]];
+      const served = t && t.servedCbor !== undefined ? t.servedCbor : t?.cbor;
+      return served ? res(200, { cbor: served }) : res(404, { status_code: 404 });
+    }
     if ((m = /^\/txs\/([0-9a-f]{64})$/.exec(p))) {
       const t = state.txs[m[1]];
       if (!t || !t.block) return res(404, { status_code: 404 });
-      return res(200, { hash: m[1], block: t.block.hash, block_height: t.block.height, block_time: t.block.time, slot: t.block.slot, index: 0 });
+      return res(200, { hash: m[1], block: t.block.hash, block_height: t.block.height, block_time: t.block.time, slot: t.block.slot, index: t.index ?? 0 });
+    }
+    // The label-309 listing, newest first (block height, then index in the
+    // block), 100 per page, with db-sync's single-label metadata CBOR. A
+    // transaction with `listed: false` is not (yet) listed; `listingMetadata`
+    // replaces what the listing shows of it.
+    if ((m = /^\/metadata\/txs\/labels\/309\/cbor\?count=100&page=(\d+)&order=desc$/.exec(p))) {
+      const rows = Object.entries(state.txs)
+        .map(([h, t]) => ({ h, t, e: t.listed !== false && labelled(h, t) }))
+        .filter((x) => x.e)
+        .sort((a, b) => b.t.block.height - a.t.block.height || (b.t.index ?? 0) - (a.t.index ?? 0))
+        .map((x) => ({ tx_hash: x.h, cbor_metadata: null, metadata: x.t.listingMetadata !== undefined ? x.t.listingMetadata : toHex(concat(Uint8Array.of(0xa1, 0x19, 0x01, 0x35), x.e.bytes)) }));
+      const page = Number(m[1]);
+      return res(200, rows.slice((page - 1) * 100, page * 100));
+    }
+    if ((m = /^\/blocks\/([0-9a-f]{64})\/txs\?count=100&page=(\d+)&order=asc$/.exec(p))) {
+      const hashes = Object.entries(state.txs)
+        .filter(([, t]) => t.block && t.block.hash === m[1])
+        .sort((a, b) => (a[1].index ?? 0) - (b[1].index ?? 0))
+        .map(([h]) => h);
+      const page = Number(m[2]);
+      return hashes.length ? res(200, hashes.slice((page - 1) * 100, page * 100)) : res(404, { status_code: 404 });
     }
     if ((m = /^\/blocks\/([0-9a-f]{64})$/.exec(p))) {
       const t = Object.values(state.txs).find((x) => x.block && x.block.hash === m[1]);

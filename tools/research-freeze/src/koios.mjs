@@ -5,9 +5,13 @@
 // requests this tool makes: /genesis, /tip, /epoch_params, /address_utxos and
 // /address_txs for the identity's own payment address, /submittx, and
 // /tx_status, /tx_info and /tx_cbor for the tool's own transactions and for
-// the transactions /address_txs listed for that address. It refuses any other
-// address or transaction hash, because before the freeze block no study query
-// may run.
+// the transactions /address_txs listed for that address. For the scan for
+// other carriers of a record (carriers.mjs) it also lists label-309
+// transactions by block height (/tx_by_metalabel, label 309 only), reads the
+// metadata of those it listed (/tx_metadata), and reads /tx_cbor and /tx_info
+// of a listed one only once the scan marks it as possibly carrying a record of
+// this tool's. It refuses any other address or transaction hash, because
+// before the freeze block no study query may run.
 
 import { sleep as realSleep, UserError } from './util.mjs';
 
@@ -55,6 +59,10 @@ export class Koios {
     // Transactions of the identity's own payment address, as /address_txs
     // listed them.
     this.historyTxs = new Set();
+    // Label-309 transactions /tx_by_metalabel listed, and those of them the
+    // carrier scan may read in full.
+    this.labelTxs = new Set();
+    this.carrierTxs = new Set();
     this.spacingMs = spacingMs;
     this.last = 0;
     this.log = log || (() => {});
@@ -67,7 +75,7 @@ export class Koios {
   #ownTx(hashes) {
     for (const h of hashes) {
       if (!/^[0-9a-f]{64}$/.test(h)) throw new UserError(`not a transaction hash: ${h}`);
-      if (!this.txHashes.has(h) && !this.historyTxs.has(h)) throw new UserError(`refusing to query ${h}: it is not one of this tool's own transactions`);
+      if (!this.txHashes.has(h) && !this.historyTxs.has(h) && !this.carrierTxs.has(h)) throw new UserError(`refusing to query ${h}: it is not one of this tool's own transactions`);
     }
   }
 
@@ -223,5 +231,46 @@ export class Koios {
     const rows = await this.request('POST', '/tx_cbor', { json: { _tx_hashes: [hash] } });
     const row = rows.find((r) => r.tx_hash === hash);
     return row ? row.cbor : null;
+  }
+
+  // Transactions carrying label 309 (/tx_by_metalabel; Koios lists the
+  // transactions at or above `_after_block_height`), filtered to block
+  // heights at most `upTo` and ordered by height then hash (PostgREST
+  // horizontal filtering and ordering, as the Koios API documents them), at
+  // most `limit` rows. Label 309 only.
+  async label309Txs({ from, upTo, order, limit }) {
+    for (const [k, v] of Object.entries({ from, upTo, limit })) {
+      if (!Number.isSafeInteger(v) || v < 0) throw new UserError(`label-309 listing: ${k} is not a block height or a row count: ${v}`);
+    }
+    if (order !== 'asc' && order !== 'desc') throw new UserError(`label-309 listing: order must be asc or desc, not ${order}`);
+    const rows = await this.request('GET', `/tx_by_metalabel?_label=309&_after_block_height=${from}&block_height=lte.${upTo}&order=block_height.${order},tx_hash.${order}&limit=${limit}`);
+    const out = [];
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (!/^[0-9a-f]{64}$/.test(String(r.tx_hash))) throw new UserError('Koios /tx_by_metalabel returned a row without a transaction hash');
+      this.labelTxs.add(r.tx_hash);
+      out.push({ txHash: r.tx_hash, blockHeight: Number(r.block_height), blockHash: r.block_hash });
+    }
+    return out;
+  }
+
+  // The metadata (db-sync's JSON, by label) of label-309 transactions this
+  // client listed, ten hashes per request, since the public tier takes
+  // request bodies of up to 1 KB.
+  async txMetadata(hashes) {
+    for (const h of hashes) if (!this.labelTxs.has(h)) throw new UserError(`refusing to read the metadata of ${h}: no label-309 listing returned it`);
+    const out = new Map();
+    for (let i = 0; i < hashes.length; i += 10) {
+      const batch = hashes.slice(i, i + 10);
+      const rows = await this.request('POST', '/tx_metadata', { json: { _tx_hashes: batch } });
+      for (const r of Array.isArray(rows) ? rows : []) if (batch.includes(r.tx_hash)) out.set(r.tx_hash, r.metadata ?? null);
+    }
+    return out;
+  }
+
+  // A listed label-309 transaction that the carrier scan reads in full: its
+  // /tx_cbor and /tx_info.
+  allowCarrier(hash) {
+    if (!this.labelTxs.has(hash)) throw new UserError(`refusing to read ${hash}: no label-309 listing returned it`);
+    this.carrierTxs.add(hash);
   }
 }

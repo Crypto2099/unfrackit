@@ -317,6 +317,12 @@ export function majorAt(bytes, pos) {
   return walkHead(bytes, pos).major;
 }
 
+// The tag number at `pos`, or null when the item is not a tag.
+export function tagAt(bytes, pos) {
+  const h = walkHead(bytes, pos);
+  return h.major === 6 ? h.arg : null;
+}
+
 // The spans [start, end) of an array's elements, definite or indefinite.
 export function arraySpans(bytes, pos) {
   const h = walkHead(bytes, pos);
@@ -369,16 +375,32 @@ export function uintAt(bytes, pos) {
 
 // A byte string at `pos` (chunks of an indefinite one joined), or null.
 export function bytesAt(bytes, pos) {
+  return stringAt(bytes, pos, 2);
+}
+
+function stringAt(bytes, pos, major) {
   const h = walkHead(bytes, pos);
-  if (h.major !== 2) return null;
+  if (h.major !== major) return null;
   if (h.arg !== null) return bytes.slice(h.next, h.next + Number(h.arg));
   const parts = [];
   let p = h.next;
   while (bytes[p] !== 0xff) {
     const c = walkHead(bytes, p);
-    if (c.major !== 2 || c.arg === null) throw new Error('CBOR: bad byte-string chunk');
+    if (c.major !== major || c.arg === null) throw new Error(`CBOR: bad ${major === 2 ? 'byte' : 'text'}-string chunk`);
     parts.push(bytes.slice(c.next, c.next + Number(c.arg)));
     p = c.next + Number(c.arg);
   }
   return concat(...parts);
+}
+
+// A text string at `pos` (chunks of an indefinite one joined), or null when
+// the item is not a text string or is not valid UTF-8.
+export function textAt(bytes, pos) {
+  const raw = stringAt(bytes, pos, 3);
+  if (raw === null) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(raw);
+  } catch {
+    return null;
+  }
 }
