@@ -147,6 +147,15 @@ export async function checkTargets({ store, koios, bf = null, network, manifest,
 // document comes first and cites none.
 //
 // Other cited URIs are reported, not checked.
+//
+// A copy of the hypotheses record that someone else put on chain before this
+// home's transaction is the record's first carrier under the study's
+// chain-order rule (carriers.mjs). The document still cites this home's own
+// transaction: the rule accepts a citation of any carrier of the record's
+// signed content, this one precedes the final freeze because it is confirmed
+// before the final is signed, and only it carries this identity's payment
+// witness and passes the checks above. The first carrier the hypotheses run's
+// `verify` found is returned with the target, so `build` can report it.
 export async function checkCitedHypotheses({ store, koios, bf = null, network, cited, publicKeyHex, paymentKeyHash, hypothesesHash, hypothesesDocument, address, log = () => {} }) {
   let hash;
   let needDocument = false;
@@ -191,7 +200,8 @@ export async function checkCitedHypotheses({ store, koios, bf = null, network, c
     }
     documentCheck = { file: hypothesesDocument, sha256: digest, cites_own: [] };
   }
-  return { ...strip(t), other_cited: cited.filter((h) => h !== hash), document_check: documentCheck };
+  const firstCarrier = readReport(store, network, hash)?.verified?.carriers?.first_carrier ?? null;
+  return { ...strip(t), other_cited: cited.filter((h) => h !== hash), document_check: documentCheck, chain_first_carrier: firstCarrier };
 }
 
 // The transactions of the identity's payment address, from Koios and, when

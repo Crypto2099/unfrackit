@@ -3,11 +3,13 @@
 
 // Blockfrost (OpenAPI 0.1.93, github.com/blockfrost/openapi), the second,
 // independent provider of chain facts. It is used only to cross-check what
-// Koios reports, by `verify` and `drawkey`, and a disagreement fails the
-// command; it is never a fallback when Koios fails. Its requests are about
-// this tool's own transactions and their blocks, the transactions of the
-// identity's own payment address, the genesis parameters, the tip and epoch
-// parameters.
+// Koios reports, and a disagreement fails the command; it is never a
+// fallback when Koios fails. Its requests are about this tool's own
+// transactions and their blocks, the transactions of the identity's own
+// payment address, the genesis parameters, the tip and epoch parameters, and,
+// for the scan for other carriers of a record (carriers.mjs), the label-309
+// listing and the transactions in it that the scan marks as possibly
+// carrying a record of this tool's.
 //
 // The project id is read from secrets/blockfrost-<network>.token in the home
 // (0600) and sent only in the `project_id` header. It never appears in a
@@ -63,7 +65,10 @@ export class Blockfrost {
     this.txHashes = new Set(own.txHashes || []);
     this.addresses = new Set(own.addresses || []);
     this.historyTxs = new Set();
+    this.labelTxs = new Set();
+    this.carrierTxs = new Set();
     this.blocks = new Set();
+    this.anchorBlocks = new Set();
     this.calls = [];
   }
 
@@ -73,7 +78,7 @@ export class Blockfrost {
 
   #ownTx(hash) {
     if (!/^[0-9a-f]{64}$/.test(hash)) throw new UserError(`not a transaction hash: ${hash}`);
-    if (!this.txHashes.has(hash) && !this.historyTxs.has(hash)) throw new UserError(`refusing to query ${hash} on Blockfrost: it is not one of this tool's own transactions`);
+    if (!this.txHashes.has(hash) && !this.historyTxs.has(hash) && !this.carrierTxs.has(hash)) throw new UserError(`refusing to query ${hash} on Blockfrost: it is not one of this tool's own transactions`);
   }
 
   redact(text) {
@@ -143,10 +148,31 @@ export class Blockfrost {
     return r ? r.cbor : null;
   }
 
-  // Only the block of one of this tool's own transactions.
+  // Only the block of one of this tool's own transactions, or the block the
+  // carrier scan anchors its range at.
   async block(hash) {
-    if (!this.blocks.has(hash)) throw new UserError(`refusing to query block ${hash} on Blockfrost: it does not hold one of this tool's own transactions`);
+    if (!this.blocks.has(hash) && !this.anchorBlocks.has(hash)) throw new UserError(`refusing to query block ${hash} on Blockfrost: it does not hold one of this tool's own transactions`);
     return this.request(`/blocks/${hash}`);
+  }
+
+  // The hashes of the transactions in the block the carrier scan anchors its
+  // range at, in block order.
+  async blockTxs(hash) {
+    if (!this.anchorBlocks.has(hash)) throw new UserError(`refusing to list the transactions of block ${hash} on Blockfrost: it is not the carrier scan's anchor block`);
+    const out = [];
+    for (let page = 1; ; page++) {
+      const rows = await this.request(`/blocks/${hash}/txs?count=100&page=${page}&order=asc`);
+      if (!Array.isArray(rows)) return out;
+      out.push(...rows.map(String));
+      if (rows.length < 100) return out;
+    }
+  }
+
+  // The block holding the label-309 transaction the carrier scan anchors its
+  // range at, as Koios's listing names it.
+  allowAnchorBlock(hash) {
+    if (!/^[0-9a-f]{64}$/.test(String(hash))) throw new UserError(`not a block hash: ${hash}`);
+    this.anchorBlocks.add(hash);
   }
 
   // Every transaction of the identity's own payment address, oldest first.
@@ -171,6 +197,28 @@ export class Blockfrost {
   async epochParams(epochNo) {
     if (!Number.isSafeInteger(epochNo) || epochNo < 0) throw new UserError(`not an epoch number: ${epochNo}`);
     return this.request(`/epochs/${epochNo}/parameters`);
+  }
+
+  // One page of the transactions carrying label 309, newest first, 100 per
+  // page, each with the label's metadata as CBOR hex
+  // (/metadata/txs/labels/309/cbor). Label 309 only.
+  async label309Page(page) {
+    if (!Number.isSafeInteger(page) || page < 1) throw new UserError(`not a page number: ${page}`);
+    const rows = await this.request(`/metadata/txs/labels/309/cbor?count=100&page=${page}&order=desc`);
+    const out = [];
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (!/^[0-9a-f]{64}$/.test(String(r.tx_hash))) throw new BlockfrostError('Blockfrost /metadata/txs/labels/309/cbor returned a row without a transaction hash', 200);
+      this.labelTxs.add(r.tx_hash);
+      out.push({ txHash: r.tx_hash, metadata: typeof r.metadata === 'string' ? r.metadata : null });
+    }
+    return out;
+  }
+
+  // A listed label-309 transaction that the carrier scan reads in full: its
+  // /txs/<hash> and /txs/<hash>/cbor.
+  allowCarrier(hash) {
+    if (!this.labelTxs.has(hash)) throw new UserError(`refusing to read ${hash} on Blockfrost: no label-309 listing returned it`);
+    this.carrierTxs.add(hash);
   }
 }
 

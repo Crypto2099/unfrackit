@@ -13,10 +13,11 @@ import { loadRun, assertIdentityNetwork, defaultIdentity } from './build.mjs';
 import { verifyAll, crossCheck, verifyDrawPlan } from './verify.mjs';
 import { blockfrostFor, tokenFileName } from './blockfrost.mjs';
 import { koiosBlockFacts, blockfrostBlockFacts, differences, describeDifferences, genesisDifferences, planFrom, BLOCK_FIELDS, PLAN_FIELDS } from './draw.mjs';
+import { scanCarriers, earlierFinalIssue, undecidedIssue, signedContentOf } from './carriers.mjs';
 import { confirmMainnet } from './tty.mjs';
 import { deriveIdentity } from './keys.mjs';
 import { TTL_SLOTS, feeFor, assertTransaction, assertSweep } from './tx.mjs';
-import { stringify, tada, toHex, UserError } from './util.mjs';
+import { equalBytes, stringify, tada, toHex, UserError } from './util.mjs';
 
 export function koiosFor(store, network, { addresses = [], log } = {}) {
   return new Koios(network, { own: { addresses, txHashes: store.knownTxHashes(network) }, log });
@@ -121,15 +122,54 @@ export async function submitRun({ store, dir, log = console.error, streams, koio
   return r;
 }
 
+// The block height at or below which no carrier of a run's record can sit:
+// k blocks under the tip height when the record was signed. A rollback
+// reaches at most k blocks back, so every block of the chain at that height
+// or below was made before the record existed. A rebuilt run carries the
+// record of the run it replaces, so the chain of replaced runs is followed to
+// the run that signed it.
+export function carrierLowerBound(store, network, report, securityParam) {
+  const heights = [];
+  const seen = new Set([report.tx_hash]);
+  for (let r = report; ; ) {
+    const h = Number(r.tip_at_build?.height);
+    if (!Number.isSafeInteger(h) || h < 0) throw new UserError(`the run of ${r.tx_hash} records no tip height at build, so the scan for other carriers of its record has no lower bound`);
+    heights.push(h);
+    if (!r.replaces) break;
+    if (seen.has(r.replaces)) throw new UserError(`the runs replacing one another loop at ${r.replaces}`);
+    seen.add(r.replaces);
+    const f = path.join(store.runDir(network, r.replaces), 'report.json');
+    if (!fs.existsSync(f)) throw new UserError(`the run directory of ${r.replaces}, whose record ${r.tx_hash} carries, is missing; it records when the record was signed`);
+    r = JSON.parse(fs.readFileSync(f, 'utf8'));
+  }
+  return Math.max(0, Math.min(...heights) - securityParam);
+}
+
+// What the scan for other carriers needs from a staged run directory.
+function scanSubject(store, run, securityParam) {
+  const r = run.report;
+  const signed = signedContentOf(run.body);
+  if (!equalBytes(signed, run.bodyNoSigs)) throw new UserError(`the run directory of ${run.txHash} disagrees with itself: the body without sigs differs from body-without-sigs.cbor`);
+  if (r.stage === 'final' && (!Array.isArray(r.message) || r.message.length !== 1)) throw new UserError(`the final-stage run ${run.txHash} does not carry exactly one label-674 line`);
+  return { txHash: run.txHash, signed, key: r.signing_public_key, line: r.stage === 'final' ? r.message[0] : undefined, stage: r.stage, lowerHeight: carrierLowerBound(store, r.network, r, securityParam) };
+}
+
 // Works for record runs and sweep runs alike: it needs only the report and
 // the transaction hash. For a final-stage freeze it also records the draw
 // plan (E, the freeze block's slot, the cutoff slot and N) as Koios reports
 // the facts it rests on; `verify` and `drawkey` read them again from Koios and
-// Blockfrost and fail on any difference.
-export async function waitRun({ store, dir, log = console.error, koios: givenKoios, waitOptions = {} }) {
+// Blockfrost and fail on any difference. The plan is recorded only once the
+// scan for other carriers of the record, from Koios and Blockfrost, is
+// decided and finds none before this transaction (on mainnet Blockfrost is
+// required; elsewhere the scan runs when a project id is present).
+export async function waitRun({ store, dir, log = console.error, koios: givenKoios, blockfrost: givenBlockfrost, waitOptions = {} }) {
   const report = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
   const txHash = fs.readFileSync(path.join(dir, 'tx.hash'), 'utf8').trim();
   const network = report.network;
+  const bf = report.stage === 'final' ? (givenBlockfrost !== undefined ? givenBlockfrost : blockfrostFor(store, network)) : null;
+  if (report.stage === 'final' && network === 'mainnet' && !bf) {
+    throw new UserError(`wait records the draw plan of a mainnet final freeze only after Koios and Blockfrost list no earlier carrier of its record; save the mainnet project id as secrets/${tokenFileName('mainnet')} (mode 0600) in the home`);
+  }
   const koios = givenKoios || koiosFor(store, network, { addresses: [report.payment_address] });
   koios.allowTx(txHash);
   await koios.guard();
@@ -158,8 +198,17 @@ export async function waitRun({ store, dir, log = console.error, koios: givenKoi
     if (draw) {
       const d = differences(plan, draw, PLAN_FIELDS);
       if (d.length) throw new UserError(`wait already recorded another draw plan for ${txHash}: ${describeDifferences(d, 'now', 'recorded')}; not replacing it`);
-    } else {
-      draw = plan;
+    }
+    let scan = { ran: false, reason: `no Blockfrost project id for ${network} (secrets/${tokenFileName(network)})` };
+    if (bf) {
+      await bf.guard();
+      scan = await scanCarriers({ koios, bf, ...scanSubject(store, loadRun(dir), genesis.securityParam), attempts: waitOptions.scanAttempts ?? 30, pollMs: waitOptions.pollMs ?? 20000, sleep: waitOptions.sleep, log });
+      if (!scan.decided) throw new UserError(`wait: the draw plan is not recorded: ${undecidedIssue(scan)}`);
+      const refusal = earlierFinalIssue(scan, txHash);
+      if (refusal) throw new UserError(`wait: the draw plan is not recorded: ${refusal}`);
+    }
+    if (!draw) {
+      draw = { ...plan, carrier_scan: scan };
       store.updateRunFile(dir, 'report.json', stringify({ ...current, draw }, 2) + '\n');
     }
   }
@@ -178,7 +227,7 @@ function blockfrostForVerify(store, network, given) {
   return bf;
 }
 
-export async function verifyRun({ store, cli, arg, network, identityName, log = console.error, koios: givenKoios, blockfrost: givenBlockfrost, sdkImpl }) {
+export async function verifyRun({ store, cli, arg, network, identityName, log = console.error, koios: givenKoios, blockfrost: givenBlockfrost, sdkImpl, scanOptions = {} }) {
   let dir = null;
   let txHash = arg;
   if (!/^[0-9a-f]{64}$/.test(arg)) {
@@ -226,6 +275,21 @@ export async function verifyRun({ store, cli, arg, network, identityName, log = 
     result.draw = await verifyDrawPlan({ koios, bf, facts: now, bfFacts: result.crosscheck.blockfrost, recorded: report.draw });
     issues.push(...result.draw.issues);
   }
+  // Another transaction carrying this record before this one takes its place
+  // under the study's chain-order rule: for a final freeze it would key the
+  // draw, for the hypotheses record its block would be the hypotheses block.
+  if (report?.stage === 'final' || report?.stage === 'hypotheses') {
+    if (!bf) result.carriers = { ran: false, reason: `no Blockfrost project id for ${network} (secrets/${tokenFileName(network)})` };
+    else {
+      const g = await koios.genesis();
+      result.carriers = await scanCarriers({ koios, bf, ...scanSubject(store, loadRun(dir), g.securityParam), ...scanOptions, log });
+      if (!result.carriers.decided) issues.push(undecidedIssue(result.carriers));
+      else if (report.stage === 'final') {
+        const refusal = earlierFinalIssue(result.carriers, txHash);
+        if (refusal) issues.push(refusal);
+      }
+    }
+  }
   result.issues = issues;
   const verifiers = [result.own.verdict, result.sdk.verdict, result.cli.verdict];
   result.verdict = verifiers.every((v) => v === 'valid') && issues.length === 0 ? 'valid' : verifiers.includes('failed') || issues.length ? 'failed' : 'not valid';
@@ -244,7 +308,7 @@ export async function verifyRun({ store, cli, arg, network, identityName, log = 
 // deep on both. Any disagreement or absence fails. Both readings, with their
 // times, go into the run directory's drawkey.json, which is never
 // overwritten.
-export async function drawKey({ store, dir, log = console.error, koios: givenKoios, blockfrost: givenBlockfrost, now = () => new Date() }) {
+export async function drawKey({ store, dir, log = console.error, koios: givenKoios, blockfrost: givenBlockfrost, now = () => new Date(), scanOptions = {} }) {
   const run = loadRun(dir);
   const r = run.report;
   if (r.stage !== 'final') throw new UserError(`drawkey runs on the final-stage freeze only; ${run.txHash} is ${r.stage ? `stage ${r.stage}` : 'not a staged freeze'}`);
@@ -292,6 +356,12 @@ export async function drawKey({ store, dir, log = console.error, koios: givenKoi
   if (tK.epoch < N || Number(tB.epoch) < N) {
     fail(`epoch ${N} has not started (Koios is at epoch ${tK.epoch}, Blockfrost at ${tB.epoch}); it starts at slot ${plan.nonce_epoch_first_slot}`);
   }
+  // The draw is keyed to the first transaction carrying the final record
+  // with its 674 line, which must be this run's.
+  const scan = await scanCarriers({ koios, bf, ...scanSubject(store, run, gK.securityParam), ...scanOptions, log });
+  if (!scan.decided) fail(undecidedIssue(scan));
+  const refusal = earlierFinalIssue(scan, run.txHash);
+  if (refusal) fail(refusal);
 
   const atK = now().toISOString();
   const nK = await koios.epochParams(N);
@@ -315,6 +385,7 @@ export async function drawKey({ store, dir, log = console.error, koios: givenKoi
     plan: { ...plan, sources: ['koios', 'blockfrost'] },
     block: fK,
     depth,
+    carrier_scan: scan,
     readings: [
       { source: 'koios', request: `GET ${koios.base}/epoch_params?_epoch_no=${N}`, at: atK, epoch: Number(nK.epoch_no), nonce: nonceK, tip: tK },
       { source: 'blockfrost', request: `GET ${bf.base}/epochs/${N}/parameters`, at: atB, epoch: Number(nB.epoch), nonce: nonceB, tip: { height: Number(tB.height), slot: Number(tB.slot), epoch: Number(tB.epoch), hash: tB.hash } }
