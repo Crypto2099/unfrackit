@@ -6,7 +6,8 @@
 --
 -- The list has four parts, processed in this order:
 --   1. the named projects (Clay Nation and SpaceBudz, NFT; NIGHT, IAG, HOSKY
---      and SNEK, fungible), always included and exempt from the floor;
+--      and SNEK, fungible), always included and exempt from the floor, unless
+--      the scam screen lists an asset of their policy;
 --   2. ten fungible tokens taken from the CoinGecko candidates captured on the
 --      date of the hypotheses record (data/strata-mainnet.json, in
 --      market-capitalization order, after ADA, bridged or wrapped assets and
