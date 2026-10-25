@@ -7,7 +7,7 @@ The tool implements the sampling and UTxO-reconstruction rules of the study's pr
 ## Where it may run
 
 - **Preprod**: anything, at any time. All development and every test of this tool runs there.
-- **Mainnet, before the final freeze**: live-fire checks only (see "Live-fire checks" below), after the hypotheses freeze: runs that confirm the code works on real data, with a stated test value of the draw key, that print, log and write no row count or population statistic, and that each leave entries in the check log.
+- **Mainnet, before the final freeze**: plain `EXPLAIN` plans with `explain` (see "Plans before a run"), before or after the hypotheses freeze; and live-fire checks (see "Live-fire checks" below), after the hypotheses freeze: runs that confirm the code works on real data, with a stated test value of the draw key, that print, log and write no row count or population statistic. Each leaves entries in the check log.
 - **Mainnet, after the final freeze**: the study's run, once. The driver checks the final freeze record, the code and the check log, and takes the snapshot the rule fixes, before it reads a wallet (see "The final freeze and the draw key" and "The snapshot").
 
 On mainnet nothing given at run time may change the sample: `--set` is refused unless every value equals its hashed default, `--strata` unless the file's bytes are the hashed `data/strata-mainnet.json`, `--scam-list` unless they are the hashed `data/scam-list.json` (and `--scam-clone` must be given), `--snapshot` for the study's run in any form but `rule` (for a live-fire run, any but `tip`), and `--study-key` unless it is the key pinned in `src/params.mjs` (see "The final freeze and the draw key"). The code manifest and the check log are bound to the final freeze record, and a second study run is refused once one is recorded for the final freeze. Node must be the pinned major, 24. Plan capture under `EXPLAIN ANALYZE`, a stand-in for the freeze, and any HMAC key other than the study's own are refused. Every command that queries mainnet (`run`, `a1`, `verify-freeze`, `confirm-snapshot`, `scam-recheck`, `explain`, `health`) adds a start entry and an end entry to the check log; the end entry carries the outcome and the run time only. The one exception is `own-drawn`, which reads the finished study run's sample and credential tables, not the chain, and leaves no trace (see "Adam K. Dean's own wallets").
@@ -89,13 +89,15 @@ Data never enters the repository. Everything is written under `${XDG_DATA_HOME:-
 
 ```
 secret/hmac.key                 the study's HMAC key (init-secret)
-check-log/<network>.jsonl       the check log of live-fire runs, cleanups and fixes
+check-log/<network>.jsonl       the check log of mainnet queries, live-fire runs, explain, cleanups and fixes
 runs/<network>/<run-id>/
   params.json                   snapshot, freeze records and the draw key, windows and tx-id bounds, settings, case-wallet counts, code version
-  report.json                   every count: flow tables, draw, strata and the fungible floor, split, flags, the reconstruction check, profiles, era report
+  report.json                   every count: flow tables, draw, strata, the fungible and part 4 floors and the scam screen, split, flags, the reconstruction check, profiles, era report
   timings.json                  wall time and rows of every step and statement, with plans when captured
   manifest.json                 the corpus manifest
   raw/sample.csv                the samples with stake addresses, without published identifiers
+  scam-recheck-<commit>.json    scam-recheck's strata flagged and kept by a later scam list
+explain/<network>/<time>.json   explain's plans, reduced to their shape, and the statements not planned
 ```
 
 A live-fire run's directory holds only `live-fire.json` (its end entry), with `--explain` `plans.json`, and with `--sim-wallets` `sim/wallets.json` until `cleanup` deletes it.
