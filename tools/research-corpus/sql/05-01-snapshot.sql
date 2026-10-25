@@ -129,6 +129,14 @@ SELECT EXISTS (SELECT 1 FROM public.epoch_param WHERE nonce = {{h}}) AS nonce,
 -- @query t_of_block
 SELECT study.t_of_block({{block_id}}) AS t;
 
+-- T(B) as study.t_of_block computes it, written over db-sync's tables alone,
+-- for the explain command, which runs before the study schema may exist.
+-- @query t_of_block_plain
+SELECT coalesce(
+  (SELECT max(t.id) FROM public.tx t
+    WHERE t.block_id = (SELECT max(t2.block_id) FROM public.tx t2 WHERE t2.block_id <= {{block_id}})),
+  0) AS t;
+
 -- @query first_tx_from_block
 SELECT study.first_tx_from_block({{block_id}}) AS t;
 

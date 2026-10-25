@@ -9,6 +9,7 @@ import { performance } from 'node:perf_hooks';
 import { initSecret } from './hmac.mjs';
 import { runPipeline, cleanupRun, ownDrawn, scamRecheck, DEFAULT_STRATA, DEFAULT_RULINGS, DEFAULT_SCAM_LIST } from './pipeline.mjs';
 import { captureScamList } from './scam-list.mjs';
+import { explainCommand } from './explain.mjs';
 import { readStakeList } from './guards.mjs';
 import { formatHashList, hashList, codeVersion, TOOL_DIR } from './hash.mjs';
 import { loadAll } from './sqlfile.mjs';
@@ -101,6 +102,10 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
      [--keep-for-debug], or the final freeze options of run
                                   compare UTxO sets with Koios and the node at the database tip; --from-run
                                   takes the first credentials of a run's recent-frame draw order
+  explain --expect-network <name> --purpose <text> [--snapshot tip|<block hash>]
+                                  plain EXPLAIN of every statement whose inputs are db-sync tables only, with a
+                                  stand-in snapshot and the default settings, in a read-only transaction; lists
+                                  the statements it cannot plan; plans go under the tool's home; logged
   health                          the table sizes of health.sql, as JSON (allowed on any network)
   project --timings <file> --preprod-rows <file> --mainnet-rows <file>
                                   scale a preprod run's step times by mainnet row counts
@@ -517,6 +522,11 @@ async function main() {
     case 'a1':
       await a1Command(a, command);
       return;
+    case 'explain': {
+      const r = await explainCommand(a, command);
+      console.log(JSON.stringify({ file: r.file, planned: r.planned.map((x) => ({ name: x.name, seq_scan: x.seq_scan, error: x.error })), not_planned: r.not_planned }, null, 2));
+      return;
+    }
     case 'health': {
       const c = await connect(dbOpts(a));
       try {
