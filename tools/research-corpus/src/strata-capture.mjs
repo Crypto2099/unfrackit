@@ -29,7 +29,11 @@
 //    one of its categories names gold, silver or a commodity ("commodity" or
 //    "commodities" as a word), or when the rulings file classes it so
 //    (commodities: coin id, reason, source). Stablecoins and tokenized
-//    commodities form part 4; every other coin is a part 2 candidate.
+//    commodities form part 4; every other coin is a part 2 candidate, except
+//    a coin with another "tokenized" category (such as a tokenized metal or
+//    fuel by name), which may name a commodity: the rule does not say which
+//    words do, so the coin is listed under `unsettled` until the rulings file
+//    classes it as a commodity or rules it is not (not_commodities).
 // 4. Mapping: CoinGecko's Cardano contract is the policy id followed by the
 //    asset name in hex, or the policy id alone, or a CIP-14 fingerprint. A
 //    policy alone is resolved to the one registry subject under that policy,
@@ -77,12 +81,16 @@ export const fingerprint = (subject) => bech32encode('asset', blake2b(Buffer.fro
 
 // The class CoinGecko's own data gives a coin: { excluded: reason } for ADA
 // and a bridged or wrapped asset (out of both parts), { part: 4, kind, basis }
-// for a stablecoin or a tokenized commodity, or { part: 2 }. Bridged and
-// wrapped are read before stablecoin, so a bridge copy of a stablecoin stays
-// out. `commodities` is the rulings file's map of coin ids it classes as
-// tokenized commodities.
+// for a stablecoin or a tokenized commodity, { unsettled: question } for a
+// coin with a "tokenized" category that names neither gold, silver nor a
+// commodity in those words (it may name another commodity, and the rule does
+// not say which words do), or { part: 2 }. Bridged and wrapped are read
+// before stablecoin, so a bridge copy of a stablecoin stays out.
+// `commodities` and `notCommodities` are the rulings file's maps of coin ids
+// it classes as tokenized commodities, or rules are not.
 const COMMODITY = /\b(gold|silver|commodity|commodities)\b/i;
-export function classifyCoin(coin, categories, commodities = new Map()) {
+const TOKENIZED = /\btokeni[sz]ed\b/i;
+export function classifyCoin(coin, categories, commodities = new Map(), notCommodities = new Map()) {
   if (coin.id === 'cardano') return { excluded: 'ADA itself' };
   const cats = categories || [];
   for (const c of cats) {
@@ -96,6 +104,9 @@ export function classifyCoin(coin, categories, commodities = new Map()) {
   if (commodities.has(coin.id)) return { part: 4, kind: 'tokenized commodity', basis: `rulings file: ${commodities.get(coin.id).reason}` };
   const commodity = cats.find((c) => COMMODITY.test(c));
   if (commodity) return { part: 4, kind: 'tokenized commodity', basis: `CoinGecko category "${commodity}"` };
+  if (notCommodities.has(coin.id)) return { part: 2 };
+  const tokenized = cats.find((c) => TOKENIZED.test(c));
+  if (tokenized) return { unsettled: `CoinGecko category "${tokenized}" may name a commodity other than gold or silver, and the rule does not say which words do; a commodity or not-commodity ruling settles it` };
   return { part: 2 };
 }
 
@@ -125,6 +136,7 @@ export async function captureStrata({ named, rulings = {}, ownSources = {}, maxC
   const exclusions = rulings.exclusions || [];
   const cardanoFirst = new Map((rulings.cardano_first || []).map((r) => [r.coingecko_id, r]));
   const commodities = new Map((rulings.commodities || []).map((r) => [r.coingecko_id, r]));
+  const notCommodities = new Map((rulings.not_commodities || []).map((r) => [r.coingecko_id, r]));
   if (!Array.isArray(named) || !named.length) throw new Error('capture-strata needs the named rows of part 1');
   let last = 0;
   const get = async (url, { spaced = false } = {}) => {
@@ -212,12 +224,15 @@ export async function captureStrata({ named, rulings = {}, ownSources = {}, maxC
     details.push({ coingecko_id: coin.id, endpoint: url, response_date: d.date, read_at: d.read_at, sha256: d.sha256 });
     const detail = JSON.parse(d.text);
     const categories = Array.isArray(detail.categories) ? detail.categories.filter((c) => typeof c === 'string') : [];
-    const cls = classifyCoin(coin, categories, commodities);
+    const cls = classifyCoin(coin, categories, commodities, notCommodities);
     if (cls.excluded) {
       excluded.push({ ...base, categories, reason: cls.excluded });
       continue;
     }
-    const isPart4 = cls.part === 4;
+    // A coin whose class is unsettled may be a part 4 coin, so it is read
+    // like one, past the part 2 bound too, and listed as unsettled unless an
+    // exclusion of both parts applies to it.
+    const isPart4 = cls.part === 4 || !!cls.unsettled;
     if (!isPart4 && candidates.length >= maxCandidates) {
       beyondBound.push(coin.id);
       continue;
@@ -225,7 +240,7 @@ export async function captureStrata({ named, rulings = {}, ownSources = {}, maxC
     const platform = detail.asset_platform_id ?? null;
     base.asset_platform_id = platform;
     base.categories = categories;
-    const part = isPart4 ? { part: 4, kind: cls.kind, basis: cls.basis } : { part: 2 };
+    const part = cls.unsettled ? { part: 'unsettled' } : isPart4 ? { part: 4, kind: cls.kind, basis: cls.basis } : { part: 2 };
     if (platform !== 'cardano' && !cardanoFirst.has(coin.id)) {
       excluded.push({ ...base, ...part, reason: `bridged: CoinGecko asset_platform_id ${platform === null ? 'is empty' : `is ${platform}`}, so the Cardano token is not the original issuance` });
       continue;
@@ -259,6 +274,10 @@ export async function captureStrata({ named, rulings = {}, ownSources = {}, maxC
     const match = !m ? 'absent' : same(ticker, coin.symbol) ? 'ticker' : same(regName, coin.name) ? 'name' : 'differs';
     const registry = { subject: res.subject, ticker, name: regName, decimals: m?.decimals?.value ?? null, match };
     const registryReason = `token registry: ${match === 'absent' ? 'no mapping for the subject' : `ticker ${ticker} and name ${regName} differ from CoinGecko's`}`;
+    if (cls.unsettled) {
+      unsettled.push({ ...base, ...part, policy, asset_name: assetName, contract, resolved_by: res.resolved_by, registry, question: cls.unsettled });
+      continue;
+    }
     if (match === 'absent' || match === 'differs') {
       if (isPart4) {
         unsettled.push({ ...base, ...part, policy, asset_name: assetName, contract, resolved_by: res.resolved_by, registry, question: `${registryReason}; the part 4 rule names no registry cross-check, so whether this coin is a part 4 candidate is not decided` });

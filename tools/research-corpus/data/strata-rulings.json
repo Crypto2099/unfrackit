@@ -1,5 +1,5 @@
 {
-  "note": "Rulings on the CoinGecko coins of parts 2 and 4 of the strata rule, read by capture-strata. An exclusion removes a coin whatever CoinGecko's data say; a Cardano-first ruling keeps a coin whose CoinGecko asset_platform_id is another chain, because its Cardano token is the original issuance; a commodity ruling classes a coin as a tokenized commodity, so it belongs to part 4.",
+  "note": "Rulings on the CoinGecko coins of parts 2 and 4 of the strata rule, read by capture-strata. An exclusion removes a coin whatever CoinGecko's data say; a Cardano-first ruling keeps a coin whose CoinGecko asset_platform_id is another chain, because its Cardano token is the original issuance; a commodity ruling classes a coin as a tokenized commodity, so it belongs to part 4; a not-commodity ruling (key not_commodities) settles a coin whose tokenized category names neither gold, silver nor a commodity, which the capture otherwise lists as unsettled.",
   "exclusions": [
     {
       "coingecko_id": "fetch-ai",

@@ -7,11 +7,12 @@
 // named tokens), part 4 (stablecoins by category, tokenized commodities by
 // category or by a commodity ruling, a bridge copy of a stablecoin kept out,
 // every coin of the ranking read however far past the part 2 bound, a part 4
-// coin without a registry match left unsettled), the three forms of
+// coin without a registry match left unsettled, and a coin whose tokenized
+// category may name another commodity left unsettled), the three forms of
 // CoinGecko's Cardano contract (policy and name, policy alone, CIP-14
 // fingerprint), the registry cross-check, and the provenance (endpoint, Date
-// header, SHA-256 of the raw ranking). Registry file names in upper-case hex and tickers with stray
-// spaces still match. BLAKE2b against Node's 64-byte BLAKE2b and the CIP-14
+// header, SHA-256 of the raw ranking). Registry file names in upper-case hex
+// and tickers with stray spaces still match. BLAKE2b against Node's 64-byte BLAKE2b and the CIP-14
 // test vectors (cardano-foundation/CIPs@befcdb75, CIP-0014, "Test Vectors").
 
 import { test } from 'node:test';
@@ -56,6 +57,11 @@ test('classing by CoinGecko categories, names and the commodity rulings', () => 
   assert.equal(classifyCoin({ id: 'gold-ruled', name: 'R' }, ['Cardano Ecosystem'], ruled).basis, 'rulings file: a commodity ruling');
   // Words that only contain the commodity names do not count.
   assert.deepEqual(classifyCoin({ id: 'm', name: 'M' }, ['Goldfinch Ecosystem', 'Silverback Memes']), { part: 2 });
+  // Another tokenized category may name a commodity: unsettled until a ruling
+  // says either way.
+  assert.match(classifyCoin({ id: 'o', name: 'O' }, ['Tokenized Oil']).unsettled, /may name a commodity other than gold or silver/);
+  assert.equal(classifyCoin({ id: 'o', name: 'O' }, ['Tokenized Oil'], new Map([['o', { reason: 'oil' }]])).kind, 'tokenized commodity');
+  assert.deepEqual(classifyCoin({ id: 'o', name: 'O' }, ['Tokenized Stock'], new Map(), new Map([['o', { reason: 'a share' }]])), { part: 2 });
   assert.deepEqual(classifyCoin({ id: 'snek', name: 'Snek' }, ['Meme', 'Cardano Ecosystem']), { part: 2 });
 });
 
@@ -96,7 +102,8 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     coin('ruled-gold', 'rgd', 'Ruled Gold', P('cb') + '01', ['Cardano Ecosystem']),
     coin('eth-stable', 'eus', 'Eth Stable', P('cc') + '01', ['Stablecoins'], 'ethereum'),
     coin('bridged-stable', 'bus', 'Bridged Stable', P('cd') + '01', ['Stablecoins', 'Bridged USDT']),
-    coin('stable-unmapped', 'sun', 'Stable Unmapped', P('ce') + '01', ['Stablecoins'])
+    coin('stable-unmapped', 'sun', 'Stable Unmapped', P('ce') + '01', ['Stablecoins']),
+    coin('oil-token', 'oil', 'Oil Token', P('cf') + '01', ['Cardano Ecosystem', 'Tokenized Oil'])
   ];
   const registry = new Map([
     [P('a1') + '414c50', { ticker: 'ALP', name: 'Alpha' }],
@@ -111,6 +118,7 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     [P('ca') + '474c44', { ticker: 'GLD', name: 'Gold Token' }],
     [P('cb') + '01', { ticker: 'RGD', name: 'Ruled Gold' }],
     [P('cd') + '01', { ticker: 'BUS', name: 'Bridged Stable' }],
+    [P('cf') + '01', { ticker: 'OIL', name: 'Oil Token' }],
     [HOSKY.policy + HOSKY.asset_name, { ticker: 'HOSKY', name: 'HOSKY Token' }]
   ]);
   const marketsText = JSON.stringify(coins.map((c, i) => ({ id: c.id, symbol: c.symbol, name: c.name, market_cap: 1000 - i, market_cap_rank: i + 1 })));
@@ -147,8 +155,9 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     [3, 'ruled-gold', 'tokenized commodity']
   ]);
   assert.equal(doc.part4[2].basis, 'rulings file: a tokenized commodity');
-  assert.deepEqual(doc.unsettled.map((u) => [u.coingecko_id, u.registry.match]), [['stable-unmapped', 'absent']]);
+  assert.deepEqual(doc.unsettled.map((u) => [u.coingecko_id, u.registry.match]), [['stable-unmapped', 'absent'], ['oil-token', 'ticker']]);
   assert.match(doc.unsettled[0].question, /no registry cross-check/);
+  assert.match(doc.unsettled[1].question, /"Tokenized Oil" may name a commodity/);
   assert.deepEqual(doc.provenance.coingecko.beyond_candidate_bound, ['late']);
   assert.equal(doc.provenance.coingecko.coins_in_ranking, coins.length);
   assert.deepEqual(doc.candidates.map((c) => [c.rank, c.coingecko_id, c.resolved_by, c.registry.match]), [
