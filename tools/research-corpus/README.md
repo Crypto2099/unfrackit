@@ -119,7 +119,7 @@ Each step runs in one transaction with its row in `study.step` (run ID, name, st
 | `check_61_table` | `06-01-check.sql` | the three-way check of every sampled wallet at the snapshot; `excluded_6_1` on every sample row |
 | `unfrackit_tx`, `prior_flags` | `05-06-prior-treated.sql` | label-674 UnFrack.It messages; UnFrack.It and Evolution flags per wallet |
 | `franken` | `05-05-franken.sql` | franken flags per payment credential |
-| `script_tx`, `profile` | `05-09-profile-inputs.sql` | spends, market interactions (DEX, marketplace, other), holdings, and the descriptive profile and flags |
+| `script_tx`, `profile` | `05-09-profile-inputs.sql` | the eight features of the profile procedure: spend events (f1), DEX, marketplace and other market interactions (f2 to f4), receipts that consume none of the wallet's outputs (f5), distinct NFTs and fungible assets held (f6, f7) and UTxOs at the window's end (f8); and the descriptive cut-point profile and flags |
 
 Every count over the sample after `check_61_table` leaves out the wallets the check excluded, and the split counts report them beside the rest.
 
@@ -238,7 +238,7 @@ Readings with no setting, because no alternative changes the code: the guard cou
 
 The peak window may begin in Mary-era epochs (protocol major 4), before Alonzo. Their transactions have no redeemers, collateral, datums or reference scripts in db-sync and are valid, so every step reads them without special cases; the era report shows the Mary minimum-UTxO parameter (`min_utxo_value`) for those epochs and `coins_per_utxo_size` from Alonzo on, and no step compares an output with an era minimum.
 
-The profiles are descriptive only. The pre-registration defines them by a clustering procedure fitted on the exploration split, which this tool does not implement. The fixed cut points above, the `profile` column and its three flags are a descriptive field, not the profile definition.
+The profiles are descriptive only. The pre-registration defines them by a clustering procedure fitted on the exploration split, which this tool does not run; it computes the procedure's eight features per sampled wallet over its frame's window, in `study.profile`. f5 counts the window's receipts that consume none of the wallet's outputs, at a key or a script payment credential, so the change of the wallet's own spend and a DEX fill that consumes an order the wallet placed at a script address are not counted; f8 counts the UTxOs at the window's end with held UTxOs included. The fixed cut points above, the `profile` column and its three flags are a descriptive field, not the profile definition.
 
 ## Hashing
 

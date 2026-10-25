@@ -14,6 +14,13 @@
 --   n_spends_any  transactions consuming any wallet output
 --   n_tx_key      transactions that are a receipt or a key spend (the default)
 --   n_tx_any      transactions that are a receipt or any spend
+--   n_receipts    receipts
+--   n_receipts_no_input
+--                 receipts that consume none of the wallet's outputs, at a key
+--                 or a script payment credential (profile feature f5): a
+--                 payment or an airdrop received, never the change of the
+--                 wallet's own spend, nor a DEX fill that consumes an order
+--                 the wallet placed at a script address
 -- and n_tx and n_spends are the pair the setting x2_any selects.
 --
 -- Window bounds are transaction ids: [first id with block_id >= B1, T(B2)].
@@ -47,7 +54,8 @@ agg AS (
          count(*) AS n_tx_any,
          count(*) FILTER (WHERE s = 1) AS n_spends_key,
          count(*) FILTER (WHERE s = 1 OR x = 1) AS n_spends_any,
-         count(*) FILTER (WHERE r = 1) AS n_receipts
+         count(*) FILTER (WHERE r = 1) AS n_receipts,
+         count(*) FILTER (WHERE r = 1 AND s = 0 AND x = 0) AS n_receipts_no_input
     FROM per_tx GROUP BY win, sa_id
 )
 SELECT agg.*,

@@ -5,24 +5,34 @@
 -- per sampled wallet and its frame's window. Profiles decide nothing; they are
 -- inputs to later artifacts.
 --
--- Descriptive only. On 2026-10-21 the profiles became data-driven: a
--- clustering procedure that research revision v0.3 specifies, fitted on the
--- exploration split. The fixed cut points below are not the profile
--- definition; the profile column and the three flags are kept as a
--- descriptive legacy field until v0.3 names the features and the procedure.
+-- The profiles are found by a clustering procedure fitted after the final
+-- freeze on the exploration split, which this code does not run. It computes
+-- the procedure's eight features, per sampled wallet over its frame's window
+-- (the recent window for the recent frame, the peak window for the peak
+-- frame):
 --
---   spends per month               spend events in the window divided by 12;
---                                  a spend event is a transaction with a wallet
---                                  input (as in 05-04-activity.sql)
---   market interactions per month  spends that execute a script or send value to
---                                  a script address, divided by 12, split into DEX
---                                  (the wallet's net movement in the transaction
---                                  includes a fungible asset), marketplace (it
---                                  includes an NFT) and other
---   holdings                       the larger of the counts at the window's start
---                                  and end of distinct NFTs and of distinct
---                                  fungible assets held, each classed by the
---                                  rule of section 6.2 at that block
+--   f1  n_spends              spend events in the window (05-04-activity.sql)
+--   f2  n_dex                 DEX interactions in the window
+--   f3  n_marketplace         marketplace interactions in the window
+--   f4  n_market_other        other market interactions in the window
+--   f5  n_receipts_no_input   receipts in the window that consume none of the
+--                             wallet's outputs (study.activity)
+--   f6  hold_nft              distinct NFTs held, the larger of the counts at
+--                             the window's start and end
+--   f7  hold_ft               distinct fungible assets held, the larger of
+--                             those two counts
+--   f8  n_utxo_end            UTxOs held at the window's end, held UTxOs
+--                             included
+--
+-- A market interaction is a spend that executes a script or sends value to a
+-- script address; it is a DEX interaction if the wallet's net movement in the
+-- transaction includes a fungible asset, otherwise a marketplace interaction
+-- if it includes an NFT, otherwise other. Holdings at the window's start and
+-- end are classed by the rule of section 6.2 at that block.
+--
+-- The fixed cut points below (spends and market interactions per month) and
+-- the profile column they give are a descriptive field kept beside the
+-- clusters, not the profile definition; the three flags are descriptive too.
 --
 -- Read as: "executes a script" is a Plutus redeemer for the transaction, or a
 -- phase-2-invalid transaction (x17_invalid_is_script; db-sync stores no
@@ -137,6 +147,12 @@ hold AS (
     FROM study.prof_hold h JOIN study.asset s ON s.ident = h.ident
    GROUP BY h.frame, h.sa_id
 ),
+utxo_end AS (
+  SELECT f.frame, f.sa_id, count(*) AS n_utxo_end
+    FROM study.sample_frame f
+    JOIN study.txo t ON t.sa_id = f.sa_id AND t.created_tx <= f.t_end AND (t.consumed_tx IS NULL OR t.consumed_tx > f.t_end)
+   GROUP BY f.frame, f.sa_id
+),
 base AS (
   SELECT f.frame, f.sa_id,
          coalesce(spa.n_spends, 0) AS n_spends,
@@ -144,11 +160,15 @@ base AS (
          coalesce(spa.n_dex, 0) AS n_dex,
          coalesce(spa.n_marketplace, 0) AS n_marketplace,
          coalesce(spa.n_market_other, 0) AS n_market_other,
+         coalesce(a.n_receipts_no_input, 0) AS n_receipts_no_input,
          greatest(coalesce(hold.nft_start, 0), coalesce(hold.nft_end, 0)) AS hold_nft,
-         greatest(coalesce(hold.ft_start, 0), coalesce(hold.ft_end, 0)) AS hold_ft
+         greatest(coalesce(hold.ft_start, 0), coalesce(hold.ft_end, 0)) AS hold_ft,
+         coalesce(ue.n_utxo_end, 0) AS n_utxo_end
     FROM study.sample_frame f
     LEFT JOIN spa ON spa.frame = f.frame AND spa.sa_id = f.sa_id
     LEFT JOIN hold ON hold.frame = f.frame AND hold.sa_id = f.sa_id
+    LEFT JOIN study.activity a ON a.win = f.frame AND a.sa_id = f.sa_id
+    LEFT JOIN utxo_end ue ON ue.frame = f.frame AND ue.sa_id = f.sa_id
 )
 SELECT b.*,
        b.n_spends / {{months}}::numeric AS spends_pm,
@@ -165,11 +185,18 @@ SELECT b.*,
   FROM base b;
 ALTER TABLE study.profile ADD PRIMARY KEY (frame, sa_id);
 
--- The spend count here and the frame's n_spends must agree.
+-- The spend count here and the frame's n_spends must agree; f5 counts a
+-- subset of the window's receipts; with held UTxOs counted (x9_count_held),
+-- f8 is the frame's UTxO count at its reference block, which is the window's
+-- end.
 -- @query profile_check
 SELECT count(*) AS n,
-       count(*) FILTER (WHERE p.n_spends <> f.n_spends) AS spend_count_mismatch
-  FROM study.profile p JOIN study.frame f ON f.frame = p.frame AND f.sa_id = p.sa_id;
+       count(*) FILTER (WHERE p.n_spends <> f.n_spends) AS spend_count_mismatch,
+       count(*) FILTER (WHERE p.n_receipts_no_input > coalesce(a.n_receipts, 0)) AS receipt_count_mismatch,
+       count(*) FILTER (WHERE {{x9_count_held}} AND p.n_utxo_end <> f.n_utxo) AS utxo_count_mismatch
+  FROM study.profile p
+  JOIN study.frame f ON f.frame = p.frame AND f.sa_id = p.sa_id
+  LEFT JOIN study.activity a ON a.win = p.frame AND a.sa_id = p.sa_id;
 
 -- @query profile_counts
 SELECT p.frame, p.profile, count(*) AS n,

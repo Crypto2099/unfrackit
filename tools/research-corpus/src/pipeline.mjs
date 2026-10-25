@@ -103,7 +103,11 @@ function functionalChecks(report) {
   if (report.cred_checks) c.credential_checks = true;
   if (report.peak_vs_frozen) c.peak_rule_reproduces_frozen = report.peak_vs_frozen.agrees;
   if (report.check_61) c.check_6_1_all_agree = report.check_61.n_excluded === 0;
-  if (report.profile_check) c.profile_spends_match_frame = report.profile_check.spend_count_mismatch === 0;
+  if (report.profile_check) {
+    c.profile_spends_match_frame = report.profile_check.spend_count_mismatch === 0;
+    c.profile_receipts_within_frame = report.profile_check.receipt_count_mismatch === 0;
+    c.profile_utxos_match_frame = report.profile_check.utxo_count_mismatch === 0;
+  }
   return c;
 }
 
@@ -450,10 +454,11 @@ export async function runPipeline(opts) {
     await runner.run('franken');
     report.franken = numRow((await q(client, blocks, 'franken_counts'))[0]);
 
-    // Profile inputs (descriptive until v0.3 specifies the data-driven profiles).
+    // Profile inputs: the eight features of the clustering procedure, and the
+    // descriptive cut-point profiles and flags.
     await runner.run('script_tx');
     await runner.run('profile');
-    report.profile_check = numRow((await q(client, blocks, 'profile_check'))[0]);
+    report.profile_check = numRow((await q(client, blocks, 'profile_check', runner.params))[0]);
     report.profiles = (await q(client, blocks, 'profile_counts')).map((r) => ({ ...r, n: num(r.n), nft_heavy: num(r.nft_heavy), ft_heavy: num(r.ft_heavy), dex_active: num(r.dex_active) }));
 
     if (live) {

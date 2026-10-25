@@ -11,7 +11,8 @@
 // samples without writing anything; S1 is never token-holding;
 // S3 and M2 are token-holding, M2 with at least 100 assets, and both are in
 // the sample (the strata of their policies); S3 has one spend event (the
-// sweep), M2 and S1 none; no franken flags on the shapes; the fungible floor
+// sweep), M2 and S1 none; no franken flags on the shapes; the profile
+// features agree with the frame; the fungible floor
 // and the split follow their rules; the run repeated gives identical tables.
 // T12. The first run captures EXPLAIN (ANALYZE, BUFFERS), wall time and rows
 // of every step into its run directory.
@@ -196,6 +197,14 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(b.report.check_61.direct_valid, true);
     assert.equal(b.report.check_61.n_excluded, 0);
     assert.equal(b.report.check_61.n_case_disagree, 0);
+
+    // The profile features: f1 agrees with the frame's spend count, f5 is a
+    // subset of the window's receipts, and f8 is the frame's UTxO count at
+    // the window's end.
+    assert.deepEqual([b.report.profile_check.spend_count_mismatch, b.report.profile_check.receipt_count_mismatch, b.report.profile_check.utxo_count_mismatch], [0, 0, 0]);
+    const m2prof = (await c.query(`SELECT n_receipts_no_input, n_utxo_end FROM study.profile WHERE frame = 'recent' AND sa_id = $1`, [sa.M2])).rows[0];
+    assert.ok(m2prof, 'M2 has a profile row');
+    assert.equal(Number(m2prof.n_utxo_end), Number(m2.n_utxo), 'f8 of M2 is its UTxO count at the snapshot');
 
     // T12: every step of run A has a wall time and rows; explainable
     // statements carry their plan.
