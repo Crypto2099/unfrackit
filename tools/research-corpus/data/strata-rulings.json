@@ -1,5 +1,5 @@
 {
-  "note": "Rulings on the CoinGecko candidates of part 2 of the strata rule, read by capture-strata. An exclusion removes a coin whatever CoinGecko's data say; a Cardano-first ruling keeps a coin whose CoinGecko asset_platform_id is another chain, because its Cardano token is the original issuance.",
+  "note": "Rulings on the CoinGecko coins of parts 2 and 4 of the strata rule, read by capture-strata. An exclusion removes a coin whatever CoinGecko's data say; a Cardano-first ruling keeps a coin whose CoinGecko asset_platform_id is another chain, because its Cardano token is the original issuance; a commodity ruling classes a coin as a tokenized commodity, so it belongs to part 4.",
   "exclusions": [
     {
       "coingecko_id": "fetch-ai",
@@ -62,6 +62,13 @@
       "coingecko_id": "l4va",
       "reason": "L4VA was first issued on Cardano and bridged out to other networks; the 1,000-holder floor guards against its market capitalization overstating its Cardano holding",
       "source": "ruling by Adam K. Dean, 2026-10-21"
+    }
+  ],
+  "commodities": [
+    {
+      "coingecko_id": "gold-fgld-finest-tokenized-gold",
+      "reason": "fGLD is a tokenized commodity (gold)",
+      "source": "ruling by Adam K. Dean, 2026-10-23"
     }
   ]
 }

@@ -1,20 +1,23 @@
 {
-  "format": "research-corpus-strata-v2",
-  "note": "Preprod test list. Named: an S3 policy and the M2 policy of the seeded wallets (NFT rows, marked so the NFT top ten drops them) and the preprod NIGHT token. Candidates, in an order chosen to exercise the floor: the mainnet HOSKY row (no holders on preprod), preprod tokens above and below 1,000 holders, and the named NIGHT token again (skipped as named).",
+  "format": "research-corpus-strata-v3",
+  "note": "Preprod test list. Named: an S3 policy and the M2 policy of the seeded wallets (NFT rows, marked so the NFT top ten drops them) and the preprod NIGHT token. Candidates, in an order chosen to exercise the floor: the mainnet HOSKY row (no holders on preprod), preprod tokens above and below 1,000 holders, and the named NIGHT token again (skipped as named). Part 4: two preprod test stablecoins, one above and one below 1,000 holders.",
   "named": [
-    { "project": "Seeded S3", "stratum": "S3 policy", "class": "NFT", "policy": "0a3ead9936b1a36a0d2dc81278a18a69f33e71d17d1fe0a63e551743", "nft_top_exclude": true },
-    { "project": "Seeded M2", "stratum": "M2 policy", "class": "NFT", "policy": "0b437e11d46c0bfa15edf92a774d505fac461c74d17661d0ffbec202", "nft_top_exclude": true },
-    { "project": "NIGHT (preprod)", "stratum": "NIGHT preprod", "class": "FT", "policy": "387c0fb50b54d3e1edca3eb80c7efafd72c1e1a9f3362e7d88f8ccf8", "asset_name": "4e49474854", "nft_top_exclude": false }
+    {"project": "Seeded S3", "stratum": "S3 policy", "class": "NFT", "policy": "0a3ead9936b1a36a0d2dc81278a18a69f33e71d17d1fe0a63e551743", "nft_top_exclude": true},
+    {"project": "Seeded M2", "stratum": "M2 policy", "class": "NFT", "policy": "0b437e11d46c0bfa15edf92a774d505fac461c74d17661d0ffbec202", "nft_top_exclude": true},
+    {"project": "NIGHT (preprod)", "stratum": "NIGHT preprod", "class": "FT", "policy": "387c0fb50b54d3e1edca3eb80c7efafd72c1e1a9f3362e7d88f8ccf8", "asset_name": "4e49474854", "nft_top_exclude": false}
   ],
   "candidates": [
-    { "rank": 1, "project": "HOSKY (mainnet policy)", "stratum": "HOSKY", "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235", "asset_name": "484f534b59" },
-    { "rank": 2, "project": "USDr (preprod)", "stratum": "USDr preprod", "policy": "0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b", "asset_name": "55534472" },
-    { "rank": 3, "project": "NIGHT (preprod), also named", "stratum": "NIGHT preprod again", "policy": "387c0fb50b54d3e1edca3eb80c7efafd72c1e1a9f3362e7d88f8ccf8", "asset_name": "4e49474854" },
-    { "rank": 4, "project": "USDCx (preprod)", "stratum": "USDCx preprod", "policy": "d8906ca5c7ba124a0407a32dab37b2c82b13b3dcd9111e42940dcea4", "asset_name": "5553444378" },
-    { "rank": 5, "project": "NIGHT look-alike (preprod)", "stratum": "NIGHT look-alike preprod", "policy": "2f32d29e8c3d1344b216286aa1ae7413eae26196e4e2dfab47fb6d5a", "asset_name": "4e49474854" },
-    { "rank": 6, "project": "tUSDM (preprod)", "stratum": "tUSDM preprod", "policy": "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde", "asset_name": "0014df10745553444d" },
-    { "rank": 7, "project": "sUSDr (preprod)", "stratum": "sUSDr preprod", "policy": "0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b", "asset_name": "7355534472" },
-    { "rank": 8, "project": "RIGEL (preprod)", "stratum": "RIGEL preprod", "policy": "59e35b701247154f645388c5e17a098fced0e5098543dd58a797c04a", "asset_name": "524947454c" },
-    { "rank": 9, "project": "MIN (preprod)", "stratum": "MIN preprod", "policy": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72", "asset_name": "4d494e" }
-  ]
+    {"rank": 1, "project": "HOSKY (mainnet policy)", "stratum": "HOSKY", "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235", "asset_name": "484f534b59"},
+    {"rank": 2, "project": "USDr (preprod)", "stratum": "USDr preprod", "policy": "0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b", "asset_name": "55534472"},
+    {"rank": 3, "project": "NIGHT (preprod), also named", "stratum": "NIGHT preprod again", "policy": "387c0fb50b54d3e1edca3eb80c7efafd72c1e1a9f3362e7d88f8ccf8", "asset_name": "4e49474854"},
+    {"rank": 4, "project": "NIGHT look-alike (preprod)", "stratum": "NIGHT look-alike preprod", "policy": "2f32d29e8c3d1344b216286aa1ae7413eae26196e4e2dfab47fb6d5a", "asset_name": "4e49474854"},
+    {"rank": 5, "project": "sUSDr (preprod)", "stratum": "sUSDr preprod", "policy": "0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b", "asset_name": "7355534472"},
+    {"rank": 6, "project": "RIGEL (preprod)", "stratum": "RIGEL preprod", "policy": "59e35b701247154f645388c5e17a098fced0e5098543dd58a797c04a", "asset_name": "524947454c"},
+    {"rank": 7, "project": "MIN (preprod)", "stratum": "MIN preprod", "policy": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72", "asset_name": "4d494e"}
+  ],
+  "part4": [
+    {"rank": 1, "kind": "stablecoin", "project": "USDCx (preprod)", "stratum": "USDCx preprod", "policy": "d8906ca5c7ba124a0407a32dab37b2c82b13b3dcd9111e42940dcea4", "asset_name": "5553444378"},
+    {"rank": 2, "kind": "stablecoin", "project": "tUSDM (preprod)", "stratum": "tUSDM preprod", "policy": "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde", "asset_name": "0014df10745553444d"}
+  ],
+  "unsettled": []
 }

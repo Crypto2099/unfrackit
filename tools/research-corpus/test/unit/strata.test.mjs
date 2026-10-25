@@ -6,9 +6,9 @@
 // bound, an unheld asset once in two units, the tie-break by policy bytes),
 // the holder floor of the fungible
 // part (named tokens skipped, the floor, the count of ten, eligible holders at
-// the snapshot only, held UTxOs counted), and the fill of every stratum
-// (matching rules, skip order, start or end of the peak window, no holders
-// giving no stratum).
+// the snapshot only, held UTxOs counted), the floor of part 4 (no count limit),
+// and the fill of every stratum (matching rules, skip order, part 4 after
+// part 3, start or end of the peak window, no holders giving no stratum).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -180,6 +180,40 @@ test('fungible floor: named skipped, floor, ten taken in rank order, eligible ho
   assert.deepEqual((await rows(`SELECT rank FROM study.ft_floor WHERE taken ORDER BY rank`)).map((r) => Number(r.rank)), [1, 4, 5]);
 });
 
+test('part 4 floor: every listed coin at or above the floor taken, eligible holders at the snapshot, held UTxOs counted', async () => {
+  const { db, runBlock, rows } = await freshDb();
+  const f = await tables(db);
+  await f.eligible([1, 2, 3, 4, 5]);
+  await f.eligible([20], false);
+  for (const [ident, policy] of [[1, P('c1')], [2, P('c2')], [3, P('c3')]]) {
+    await f.asset(ident, policy, '01');
+    await f.mint(ident, 1000000, 1);
+  }
+  for (const w of [1, 2]) await f.hold(w, 1, 10);
+  await f.hold(3, 1, 10, { script: true }); // held UTxO
+  await f.hold(20, 1, 10); // ineligible
+  for (const w of [1, 2]) await f.hold(w, 2, 10);
+  await f.hold(3, 2, 10, { consumed: 50 }); // spent before the snapshot
+  for (const w of [1, 2, 3, 4]) await f.hold(w, 3, 10);
+  await runBlock('strata_list_table');
+  const { loadAll } = await import('../../src/sqlfile.mjs');
+  await db.query(loadAll().get('strata_sc_load').statements[0], [JSON.stringify([
+    { rank: 1, stratum: 's1', project: 's1', kind: 'stablecoin', policy: P('c1'), asset_name: '01' },
+    { rank: 2, stratum: 's2', project: 's2', kind: 'tokenized commodity', policy: P('c2'), asset_name: '01' },
+    { rank: 3, stratum: 's3', project: 's3', kind: 'stablecoin', policy: P('c3'), asset_name: '01' }
+  ])]);
+  await runBlock('sc_floor', params({ sc_floor: 3 }));
+  const got = (await rows(`SELECT rank, kind, n_holders, qualifies, taken FROM study.sc_floor ORDER BY rank`)).map((r) => [Number(r.rank), r.kind, Number(r.n_holders), r.qualifies, r.taken]);
+  assert.deepEqual(got, [
+    [1, 'stablecoin', 3, true, true],
+    [2, 'tokenized commodity', 2, false, false],
+    [3, 'stablecoin', 4, true, true]
+  ]);
+  // No count limit: with the floor at 1, all three are taken.
+  await runBlock('sc_floor', params({ sc_floor: 1 }));
+  assert.deepEqual((await rows(`SELECT rank FROM study.sc_floor WHERE taken ORDER BY rank`)).map((r) => Number(r.rank)), [1, 2, 3]);
+});
+
 // An independent statement of the fill rule, to compare the SQL with.
 function expectedFill({ strata, holdings, order, random, n, skipRandomOnly, points }) {
   const out = [];
@@ -234,7 +268,11 @@ test('strata fill: matching rules, skip order, start or end of the peak window, 
       { ord: 2, stratum: 'Named NFT', project: 'n', class: 'NFT', policy: P('bb'), asset_name: null, nft_top_exclude: true }
     ]);
     await db.exec(`CREATE TABLE study.ft_floor (rank integer, stratum text, project text, policy bytea, asset_name bytea, named boolean, n_holders bigint, qualifies boolean, taken boolean);
-                   CREATE TABLE study.nft_top (policy bytea, n_holders bigint, rank bigint);`);
+                   CREATE TABLE study.nft_top (policy bytea, n_holders bigint, rank bigint);
+                   CREATE TABLE study.sc_floor (rank integer, stratum text, project text, kind text, policy bytea, asset_name bytea, n_holders bigint, qualifies boolean, taken boolean);`);
+    // Part 4: a stablecoin taken, one under the floor.
+    await db.query(`INSERT INTO study.sc_floor VALUES (1, 'Stable A', 's', 'stablecoin', decode($1, 'hex'), decode('01', 'hex'), 2, true, true),
+                                                       (2, 'Stable B', 's', 'stablecoin', decode($2, 'hex'), decode('01', 'hex'), 0, false, false)`, [P('bb'), P('ab')]);
     await db.query(`INSERT INTO study.ft_floor VALUES (1, 'Cand A', 'a', decode($1, 'hex'), decode('02', 'hex'), false, 2, true, true),
                                                        (2, 'Cand B', 'b', decode($2, 'hex'), decode('03', 'hex'), false, 1, false, false)`, [P('cc'), P('dd')]);
     await db.query(`INSERT INTO study.nft_top VALUES (decode($1, 'hex'), 3, 1)`, [P('ee')]);
@@ -243,7 +281,8 @@ test('strata fill: matching rules, skip order, start or end of the peak window, 
       { name: 'Named FT', match: (h) => h.policy === P('aa') && h.name === '01' },
       { name: 'Named NFT', match: (h) => h.policy === P('bb') },
       { name: 'Cand A', match: (h) => h.policy === P('cc') && h.name === '02' },
-      { name: 'nft-top-01', match: (h) => h.policy === P('ee') && !/^(0014df1|001bc28)/.test(h.name) }
+      { name: 'nft-top-01', match: (h) => h.policy === P('ee') && !/^(0014df1|001bc28)/.test(h.name) },
+      { name: 'Stable A', match: (h) => h.policy === P('bb') && h.name === '01' }
     ];
     for (const [frame, points] of [['recent', [SNAP]], ['peak', [50, 60]]]) {
       const want = expectedFill({ strata, holdings, order, random: [3], n: 2, skipRandomOnly, points });
@@ -252,8 +291,42 @@ test('strata fill: matching rules, skip order, start or end of the peak window, 
       assert.deepEqual(got, want, `${frame}, skip random only ${skipRandomOnly}`);
       assert.ok(!got.some((x) => x.stratum === 'Cand B'), 'a candidate not taken gives no stratum');
       assert.ok(!got.some((x) => x.sa === 9), 'a label-333 holder is not in an nft-top stratum');
+      assert.ok(!got.some((x) => x.stratum === 'Stable B'), 'a part 4 coin under the floor gives no stratum');
     }
     const parts = (await rows(`SELECT stratum, part, ord FROM study.strata_all ORDER BY ord`)).map((r) => [r.stratum, r.part]);
-    assert.deepEqual(parts, [['Named FT', 'named'], ['Named NFT', 'named'], ['Cand A', 'coingecko'], ['nft-top-01', 'nft-top']]);
+    assert.deepEqual(parts, [['Named FT', 'named'], ['Named NFT', 'named'], ['Cand A', 'coingecko'], ['nft-top-01', 'nft-top'], ['Stable A', 'stable-commodity']]);
+  }
+});
+
+// The strata file: the part 4 list and its kinds, a coin no decided rule
+// settles refused, a stratum name used twice refused; the hashed mainnet file,
+// converted by hand from a capture that predates part 4, is refused until the
+// strata are captured again, and the preprod test list loads.
+test('the strata file: part 4, unsettled coins refused, the hashed file until it is captured again', async () => {
+  const { loadStrataList, DEFAULT_STRATA } = await import('../../src/pipeline.mjs');
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const settings = defaultSettings();
+  const dir = mkdtempSync(join(tmpdir(), 'rc-strata-'));
+  try {
+    const fixture = JSON.parse(readFileSync(new URL('../fixtures/strata-preprod.json', import.meta.url), 'utf8'));
+    const write = (doc) => {
+      const p = join(dir, 'strata.json');
+      writeFileSync(p, JSON.stringify(doc));
+      return p;
+    };
+    const ok = loadStrataList(write(fixture), settings);
+    assert.deepEqual(ok.part4.map((r) => [r.rank, r.kind, r.stratum]), [[1, 'stablecoin', 'USDCx preprod'], [2, 'stablecoin', 'tUSDM preprod']]);
+    assert.throws(() => loadStrataList(write({ ...fixture, unsettled: [{ coingecko_id: 'x', question: 'q' }] }), settings), /no decided rule settles \(x\)/);
+    assert.throws(() => loadStrataList(write({ ...fixture, part4: [{ ...fixture.part4[0], kind: 'meme' }] }), settings), /kind must be stablecoin or tokenized commodity/);
+    assert.throws(() => loadStrataList(write({ ...fixture, part4: [{ ...fixture.part4[0], stratum: 'MIN preprod' }] }), settings), /used twice/);
+    assert.throws(() => loadStrataList(write({ ...fixture, format: 'research-corpus-strata-v2' }), settings), /expected format research-corpus-strata-v3/);
+    const mainnet = JSON.parse(readFileSync(DEFAULT_STRATA, 'utf8'));
+    assert.deepEqual(mainnet.part4.map((r) => r.coingecko_id), ['gold-fgld-finest-tokenized-gold']);
+    assert.ok(!mainnet.candidates.some((r) => r.coingecko_id === 'gold-fgld-finest-tokenized-gold'));
+    assert.throws(() => loadStrataList(DEFAULT_STRATA, settings), /usdm-2, iusd, anzens-usda, djed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

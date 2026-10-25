@@ -73,6 +73,8 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     // Holder counts are published for candidates at or above the floor only;
     // the rule needs no more, and a thin candidate's count can be a handful.
     strata_fungible_floor: report.ft_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.ft_floor ? r.n_holders : null, below_floor: !r.named && r.n_holders < run.settings.ft_floor })),
+    // Part 4 the same way: holder counts at or above its floor only.
+    strata_stable_commodity_floor: report.sc_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.sc_floor ? r.n_holders : null, below_floor: r.n_holders < run.settings.sc_floor })),
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
     // The case-wallet counts stay in report.json: case wallets can be drawn,

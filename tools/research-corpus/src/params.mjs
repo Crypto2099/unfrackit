@@ -25,6 +25,7 @@ export const FIXED = {
   nft_top_n: 10, // section 5.4, part 3 of the strata rule
   ft_n: 10, // section 5.4, part 2 of the strata rule: ten CoinGecko tokens that pass the floor
   ft_floor: 1000, // part 2: a candidate held by fewer stake credentials of the recent frame at the snapshot is skipped
+  sc_floor: 1000, // part 4: a stablecoin or tokenized commodity held by fewer, counted as in part 2, gives no stratum
   utxo_cap: 20000, // section 5.5: more than 20,000 UTxOs is excluded
   pay_cred_cap: 200, // section 5.5: more than 200 distinct payment credentials
   script_share: '0.5', // section 5.5: more than half of the value

@@ -1,6 +1,6 @@
 {
-  "format": "research-corpus-strata-v2",
-  "note": "Part 1 (named) is always included; part 2 takes these candidates in rank order, skipping any held by fewer than 1,000 stake credentials of the recent frame at the snapshot, until ten qualify; part 3 is computed by the run.",
+  "format": "research-corpus-strata-v3",
+  "note": "Part 1 (named) is always included; part 2 takes the candidates in rank order, skipping any held by fewer than 1,000 stake credentials of the recent frame at the snapshot, until ten qualify; part 3 is computed by the run; part 4 takes every stablecoin and tokenized commodity listed that is held by at least 1,000 of them. A file that lists any unsettled coin is refused by the run.",
   "named": [
     {
       "project": "Clay Nation",
@@ -664,30 +664,6 @@
     },
     {
       "rank": 25,
-      "market_position": 41,
-      "coingecko_id": "gold-fgld-finest-tokenized-gold",
-      "symbol": "fgld",
-      "name": "Gold fGLD (finest Tokenized Gold)",
-      "market_cap": 197264,
-      "market_cap_rank": null,
-      "asset_platform_id": "cardano",
-      "project": "Gold fGLD (finest Tokenized Gold) (FGLD)",
-      "stratum": "Gold fGLD (finest Tokenized Gold) (FGLD)",
-      "policy": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e8",
-      "asset_name": "66474c44",
-      "contract": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e866474c44",
-      "resolved_by": "coingecko contract",
-      "registry": {
-        "subject": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e866474c44",
-        "ticker": "fGLD",
-        "name": "fGLD",
-        "decimals": null,
-        "match": "ticker"
-      },
-      "own_source": "not verified"
-    },
-    {
-      "rank": 26,
       "market_position": 43,
       "coingecko_id": "talos",
       "symbol": "agent",
@@ -711,7 +687,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 27,
+      "rank": 26,
       "market_position": 44,
       "coingecko_id": "nft-maker",
       "symbol": "$nmkr",
@@ -735,7 +711,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 28,
+      "rank": 27,
       "market_position": 45,
       "coingecko_id": "bodega",
       "symbol": "bodega",
@@ -759,7 +735,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 29,
+      "rank": 28,
       "market_position": 47,
       "coingecko_id": "charles-the-chad",
       "symbol": "chad",
@@ -783,7 +759,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 30,
+      "rank": 29,
       "market_position": 48,
       "coingecko_id": "crawju",
       "symbol": "crawju",
@@ -807,7 +783,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 31,
+      "rank": 30,
       "market_position": 49,
       "coingecko_id": "ada-peepos",
       "symbol": "fren",
@@ -831,7 +807,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 32,
+      "rank": 31,
       "market_position": 51,
       "coingecko_id": "viper-2",
       "symbol": "viper",
@@ -855,7 +831,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 33,
+      "rank": 32,
       "market_position": 52,
       "coingecko_id": "danzo",
       "symbol": "danzo",
@@ -879,7 +855,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 34,
+      "rank": 33,
       "market_position": 53,
       "coingecko_id": "sugar-bush",
       "symbol": "sugr",
@@ -903,7 +879,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 35,
+      "rank": 34,
       "market_position": 54,
       "coingecko_id": "mithrandir-token",
       "symbol": "mithr",
@@ -927,7 +903,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 36,
+      "rank": 35,
       "market_position": 55,
       "coingecko_id": "lobster",
       "symbol": "$lobster",
@@ -951,7 +927,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 37,
+      "rank": 36,
       "market_position": 56,
       "coingecko_id": "orcfax",
       "symbol": "fact",
@@ -975,7 +951,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 38,
+      "rank": 37,
       "market_position": 58,
       "coingecko_id": "metera",
       "symbol": "metera",
@@ -999,7 +975,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 39,
+      "rank": 38,
       "market_position": 59,
       "coingecko_id": "tokeo",
       "symbol": "toke",
@@ -1023,7 +999,7 @@
       "own_source": "not verified"
     },
     {
-      "rank": 40,
+      "rank": 39,
       "market_position": 61,
       "coingecko_id": "gerowallet",
       "symbol": "gero",
@@ -1042,6 +1018,34 @@
         "ticker": "GERO",
         "name": "GERO",
         "decimals": 6,
+        "match": "ticker"
+      },
+      "own_source": "not verified"
+    }
+  ],
+  "part4": [
+    {
+      "rank": 1,
+      "kind": "tokenized commodity",
+      "basis": "rulings file: fGLD is a tokenized commodity (gold)",
+      "market_position": 41,
+      "coingecko_id": "gold-fgld-finest-tokenized-gold",
+      "symbol": "fgld",
+      "name": "Gold fGLD (finest Tokenized Gold)",
+      "market_cap": 197264,
+      "market_cap_rank": null,
+      "asset_platform_id": "cardano",
+      "project": "Gold fGLD (finest Tokenized Gold) (FGLD)",
+      "stratum": "Gold fGLD (finest Tokenized Gold) (FGLD)",
+      "policy": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e8",
+      "asset_name": "66474c44",
+      "contract": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e866474c44",
+      "resolved_by": "coingecko contract",
+      "registry": {
+        "subject": "ee8e065fe8d4f77d1f454709a535f284e902365ac0a1ff08ad19f9e866474c44",
+        "ticker": "fGLD",
+        "name": "fGLD",
+        "decimals": null,
         "match": "ticker"
       },
       "own_source": "not verified"
@@ -1110,15 +1114,6 @@
       "reason": "wrapped (CoinGecko category \"Wrapped-Tokens\")"
     },
     {
-      "market_position": 8,
-      "coingecko_id": "usdm-2",
-      "symbol": "usdm",
-      "name": "USDM",
-      "market_cap": 13084743,
-      "market_cap_rank": 1073,
-      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
-    },
-    {
       "market_position": 9,
       "coingecko_id": "iagon",
       "symbol": "iag",
@@ -1131,24 +1126,6 @@
       "reason": "named in part 1"
     },
     {
-      "market_position": 10,
-      "coingecko_id": "iusd",
-      "symbol": "iusd",
-      "name": "Indigo Protocol iUSD",
-      "market_cap": 9342942,
-      "market_cap_rank": 1259,
-      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
-    },
-    {
-      "market_position": 12,
-      "coingecko_id": "anzens-usda",
-      "symbol": "usda",
-      "name": "Anzens USDA",
-      "market_cap": 6776592,
-      "market_cap_rank": 1462,
-      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
-    },
-    {
       "market_position": 15,
       "coingecko_id": "hosky",
       "symbol": "hosky",
@@ -1159,15 +1136,6 @@
       "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235",
       "asset_name": "484f534b59",
       "reason": "named in part 1"
-    },
-    {
-      "market_position": 17,
-      "coingecko_id": "djed",
-      "symbol": "djed",
-      "name": "Djed",
-      "market_cap": 3995090,
-      "market_cap_rank": 1819,
-      "reason": "stablecoin (CoinGecko category \"Stablecoins\")"
     },
     {
       "market_position": 19,
@@ -1258,6 +1226,56 @@
       "market_cap_rank": null,
       "reason": "bridged: the Cardano PBX token is a bridge copy of a token first issued on another chain",
       "source": "ruling by Adam K. Dean, 2026-10-21"
+    }
+  ],
+  "unsettled": [
+    {
+      "market_position": 8,
+      "coingecko_id": "usdm-2",
+      "symbol": "usdm",
+      "name": "USDM",
+      "market_cap": 13084743,
+      "market_cap_rank": 1073,
+      "part": 4,
+      "kind": "stablecoin",
+      "basis": "CoinGecko category \"Stablecoins\"",
+      "question": "captured before part 4 existed: the coin was excluded as a stablecoin before its Cardano contract, its asset_platform_id and its registry mapping were read, so whether it is a part 4 candidate is not known until the strata are captured again"
+    },
+    {
+      "market_position": 10,
+      "coingecko_id": "iusd",
+      "symbol": "iusd",
+      "name": "Indigo Protocol iUSD",
+      "market_cap": 9342942,
+      "market_cap_rank": 1259,
+      "part": 4,
+      "kind": "stablecoin",
+      "basis": "CoinGecko category \"Stablecoins\"",
+      "question": "captured before part 4 existed: the coin was excluded as a stablecoin before its Cardano contract, its asset_platform_id and its registry mapping were read, so whether it is a part 4 candidate is not known until the strata are captured again"
+    },
+    {
+      "market_position": 12,
+      "coingecko_id": "anzens-usda",
+      "symbol": "usda",
+      "name": "Anzens USDA",
+      "market_cap": 6776592,
+      "market_cap_rank": 1462,
+      "part": 4,
+      "kind": "stablecoin",
+      "basis": "CoinGecko category \"Stablecoins\"",
+      "question": "captured before part 4 existed: the coin was excluded as a stablecoin before its Cardano contract, its asset_platform_id and its registry mapping were read, so whether it is a part 4 candidate is not known until the strata are captured again"
+    },
+    {
+      "market_position": 17,
+      "coingecko_id": "djed",
+      "symbol": "djed",
+      "name": "Djed",
+      "market_cap": 3995090,
+      "market_cap_rank": 1819,
+      "part": 4,
+      "kind": "stablecoin",
+      "basis": "CoinGecko category \"Stablecoins\"",
+      "question": "captured before part 4 existed: the coin was excluded as a stablecoin before its Cardano contract, its asset_platform_id and its registry mapping were read, so whether it is a part 4 candidate is not known until the strata are captured again"
     }
   ],
   "provenance": {
@@ -1743,6 +1761,11 @@
         "date": "2026-10-21",
         "note": "policy id confirmed by Adam K. Dean from his own knowledge; also matches the Cardano Foundation token registry"
       }
-    ]
+    ],
+    "converted": {
+      "date": "2026-10-25",
+      "from_format": "research-corpus-strata-v2",
+      "note": "Converted by hand from the 2026-10-22 capture, which predates part 4; no coin was read again. fGLD moved from the part 2 candidates to part 4 under the rulings file commodity ruling, and the part 2 ranks after it moved up by one. The four coins that capture excluded as stablecoins are listed as unsettled, because their Cardano contracts and registry mappings were never read. That capture also read coin details only as far as market position 61 of the ranking, so part 4 may be incomplete. The strata are captured again on the date of the hypotheses record."
+    }
   }
 }

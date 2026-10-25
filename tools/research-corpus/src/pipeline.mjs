@@ -38,14 +38,20 @@ import { Koios } from './koios.mjs';
 const HEX32 = /^[0-9a-f]{64}$/;
 export const DEFAULT_STRATA = join(TOOL_DIR, 'data', 'strata-mainnet.json');
 export const DEFAULT_RULINGS = join(TOOL_DIR, 'data', 'strata-rulings.json');
-const STRATA_FORMAT = 'research-corpus-strata-v2';
+const STRATA_FORMAT = 'research-corpus-strata-v3';
 
-// The strata file: the named rows of part 1 and the CoinGecko candidates of
-// part 2 in rank order (see sql/05-04-strata.sql).
+// The strata file: the named rows of part 1, the CoinGecko candidates of part
+// 2 and the stablecoins and tokenized commodities of part 4, each in rank
+// order (see sql/05-04-strata.sql). A file that lists a coin no decided rule
+// settles (its `unsettled` list) is refused until the case is decided.
 export function loadStrataList(path, settings) {
   const doc = JSON.parse(readFileSync(path, 'utf8'));
   if (doc.format !== STRATA_FORMAT) throw new Error(`${path}: expected format ${STRATA_FORMAT}`);
-  if (!Array.isArray(doc.named) || !Array.isArray(doc.candidates)) throw new Error(`${path}: expected named and candidates arrays`);
+  if (!Array.isArray(doc.named) || !Array.isArray(doc.candidates) || !Array.isArray(doc.part4)) throw new Error(`${path}: expected named, candidates and part4 arrays`);
+  if (doc.unsettled !== undefined && !Array.isArray(doc.unsettled)) throw new Error(`${path}: unsettled must be an array`);
+  if (doc.unsettled && doc.unsettled.length) {
+    throw refuse(`refusing: ${path} lists ${doc.unsettled.length === 1 ? 'a coin' : 'coins'} no decided rule settles (${doc.unsettled.map((u) => u.coingecko_id).join(', ')}); decide each case and capture the strata again`);
+  }
   const named = doc.named.map((r, i) => {
     if (!/^[0-9a-f]{56}$/.test(r.policy)) throw new Error(`${path} named row ${i + 1}: policy must be 56 hex characters`);
     if (r.class !== 'NFT' && r.class !== 'FT') throw new Error(`${path} named row ${i + 1}: class must be NFT or FT`);
@@ -54,13 +60,23 @@ export function loadStrataList(path, settings) {
     if (settings.x10_spacebudz_one && r.group) stratum = r.group;
     return { ord: i + 1, stratum, project: r.project, class: r.class, policy: r.policy, asset_name: r.class === 'FT' ? r.asset_name : null, nft_top_exclude: !!r.nft_top_exclude };
   });
-  const candidates = doc.candidates.map((r, i) => {
-    if (r.rank !== i + 1) throw new Error(`${path} candidate ${i + 1}: ranks must run 1, 2, 3 in file order`);
-    if (!/^[0-9a-f]{56}$/.test(r.policy) || !/^([0-9a-f]{2}){0,32}$/.test(r.asset_name ?? '')) throw new Error(`${path} candidate ${i + 1}: policy and asset_name hex`);
-    return { rank: r.rank, stratum: r.stratum || r.project, project: r.project, policy: r.policy, asset_name: r.asset_name };
+  const ranked = (rows, what) =>
+    rows.map((r, i) => {
+      if (r.rank !== i + 1) throw new Error(`${path} ${what} ${i + 1}: ranks must run 1, 2, 3 in file order`);
+      if (!/^[0-9a-f]{56}$/.test(r.policy) || !/^([0-9a-f]{2}){0,32}$/.test(r.asset_name ?? '')) throw new Error(`${path} ${what} ${i + 1}: policy and asset_name hex`);
+      return { rank: r.rank, stratum: r.stratum || r.project, project: r.project, policy: r.policy, asset_name: r.asset_name };
+    });
+  const candidates = ranked(doc.candidates, 'candidate');
+  const part4 = ranked(doc.part4, 'part 4 row').map((r, i) => {
+    const kind = doc.part4[i].kind;
+    if (kind !== 'stablecoin' && kind !== 'tokenized commodity') throw new Error(`${path} part 4 row ${i + 1}: kind must be stablecoin or tokenized commodity`);
+    return { ...r, kind };
   });
   if (named.length >= 100) throw new Error(`${path}: too many named rows`);
-  return { provenance: doc.provenance || null, named, candidates };
+  const strata = [...named.map((r) => r.stratum), ...candidates.map((r) => r.stratum), ...part4.map((r) => r.stratum)];
+  const dup = strata.find((x, i) => strata.indexOf(x) !== i && !named.some((r) => r.stratum === x && settings.x10_spacebudz_one));
+  if (dup !== undefined) throw new Error(`${path}: stratum name ${JSON.stringify(dup)} is used twice`);
+  return { provenance: doc.provenance || null, named, candidates, part4 };
 }
 
 async function storeParam(client, runId, key, value) {
@@ -115,7 +131,7 @@ function functionalChecks(report) {
 // population one query away. The wallet-level tables stay for debugging the
 // failing step; their outputs, steps and anything after them are recomputed
 // on a resumed run.
-const LIVE_FIRE_AGGREGATES = ['study.flow', 'study.draw_summary', 'study.ft_floor', 'study.nft_top', 'study.unfrackit_tx'];
+const LIVE_FIRE_AGGREGATES = ['study.flow', 'study.draw_summary', 'study.ft_floor', 'study.sc_floor', 'study.nft_top', 'study.unfrackit_tx'];
 
 // A session-level advisory lock held by a run or a cleanup for its whole
 // connection: steps drop and rebuild shared study tables, so two runs at once
@@ -323,6 +339,10 @@ export async function runPipeline(opts) {
     report.snapshot = snapshot;
     if (!live && !(snapshot.block_no >= freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is before the freeze block ${freeze.block_no}`);
 
+    // The run's input files, read before any step: a strata file that lists
+    // an unsettled coin is refused here, not after the heavy steps.
+    const strata = loadStrataList(opts.strataList || DEFAULT_STRATA, settings);
+
     const run = { network, runId, settings, snapshot, h, windows: stored.windows || null };
     runner = new Runner({ client, blocks, runId, params: sqlParams(run), capture: !!opts.capture && !mainnet && !live, explain: !!opts.explain, quiet: !!live, log: live ? (s) => say(s.replace(/, \d+ rows$/, '')) : log, redo: new Set(opts.redo || []) });
     const setParams = () => {
@@ -419,16 +439,18 @@ export async function runPipeline(opts) {
     // The draw and the samples.
     await runner.run('draw');
     report.draw = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'guard_reached']));
-    const strata = loadStrataList(opts.strataList || DEFAULT_STRATA, settings);
     await runner.run('strata_list_table', {}, async (c) => {
       await qBound(c, blocks, 'strata_list_load', [JSON.stringify(strata.named)]);
       await qBound(c, blocks, 'strata_candidate_load', [JSON.stringify(strata.candidates)]);
+      await qBound(c, blocks, 'strata_sc_load', [JSON.stringify(strata.part4)]);
     });
     if (!live) await storeParam(client, runId, 'strata_list', strata);
     await runner.run('ft_floor');
+    await runner.run('sc_floor');
     await runner.run('nft_top');
     await runner.run('strata');
     report.ft_floor = (await q(client, blocks, 'ft_floor_report')).map((r) => ({ ...r, rank: num(r.rank), n_holders: num(r.n_holders) }));
+    report.sc_floor = (await q(client, blocks, 'sc_floor_report')).map((r) => ({ ...r, rank: num(r.rank), n_holders: num(r.n_holders) }));
     report.strata = (await q(client, blocks, 'strata_report')).map((r) => ({ ...r, ord: num(r.ord), nft_top_holders: num(r.nft_top_holders), n_recent: num(r.n_recent), n_peak: num(r.n_peak) }));
     await runner.run('split', {}, (c) => qBound(c, blocks, 'case_wallet_load', [caseViews]));
     await runner.run('sample_wallets');

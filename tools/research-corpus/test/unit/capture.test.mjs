@@ -2,19 +2,22 @@
 // Copyright 2026 Adam K. Dean
 
 // capture-strata against a fake CoinGecko and a fake token registry: the
-// exclusions (ADA, stablecoins, bridged or wrapped by category or by an
-// asset_platform_id other than cardano, rulings, Cardano-first rulings, no
-// Cardano asset, the named tokens), the three forms of CoinGecko's Cardano
-// contract (policy and name, policy alone, CIP-14 fingerprint), the registry
-// cross-check, and the provenance (endpoint, Date header, SHA-256 of the raw
-// ranking). Registry file names in upper-case hex and tickers with stray
+// exclusions (ADA, bridged or wrapped by category or by an asset_platform_id
+// other than cardano, rulings, Cardano-first rulings, no Cardano asset, the
+// named tokens), part 4 (stablecoins by category, tokenized commodities by
+// category or by a commodity ruling, a bridge copy of a stablecoin kept out,
+// every coin of the ranking read however far past the part 2 bound, a part 4
+// coin without a registry match left unsettled), the three forms of
+// CoinGecko's Cardano contract (policy and name, policy alone, CIP-14
+// fingerprint), the registry cross-check, and the provenance (endpoint, Date
+// header, SHA-256 of the raw ranking). Registry file names in upper-case hex and tickers with stray
 // spaces still match. BLAKE2b against Node's 64-byte BLAKE2b and the CIP-14
 // test vectors (cardano-foundation/CIPs@befcdb75, CIP-0014, "Test Vectors").
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { captureStrata, fingerprint, resolveSubject, categoryExclusion, CONFIRMED } from '../../src/strata-capture.mjs';
+import { captureStrata, fingerprint, resolveSubject, classifyCoin, CONFIRMED } from '../../src/strata-capture.mjs';
 import { blake2b } from '../../src/blake2b.mjs';
 
 const P = (b) => b.repeat(28);
@@ -37,13 +40,23 @@ test('BLAKE2b and CIP-14 fingerprints', () => {
   for (const [p, n, f] of vectors) assert.equal(fingerprint(p + n), f);
 });
 
-test('exclusion by CoinGecko categories and names', () => {
-  assert.equal(categoryExclusion({ id: 'cardano', name: 'Cardano' }, []), 'ADA itself');
-  assert.match(categoryExclusion({ id: 'x', name: 'X' }, ['Cardano Ecosystem', 'USD Stablecoin']), /stablecoin/);
-  assert.match(categoryExclusion({ id: 'x', name: 'X' }, ['Bridged-Tokens']), /bridged/);
-  assert.match(categoryExclusion({ id: 'x', name: 'X' }, ['Wrapped-Tokens']), /wrapped/);
-  assert.match(categoryExclusion({ id: 'wanchain-bridged-usdc-cardano', name: 'Wanchain Bridged USDC (Cardano)' }, []), /bridged/);
-  assert.equal(categoryExclusion({ id: 'snek', name: 'Snek' }, ['Meme', 'Cardano Ecosystem']), null);
+test('classing by CoinGecko categories, names and the commodity rulings', () => {
+  const ruled = new Map([['gold-ruled', { reason: 'a commodity ruling' }]]);
+  assert.deepEqual(classifyCoin({ id: 'cardano', name: 'Cardano' }, []), { excluded: 'ADA itself' });
+  assert.deepEqual(classifyCoin({ id: 'x', name: 'X' }, ['Cardano Ecosystem', 'USD Stablecoin']), { part: 4, kind: 'stablecoin', basis: 'CoinGecko category "USD Stablecoin"' });
+  assert.match(classifyCoin({ id: 'x', name: 'X' }, ['Bridged-Tokens']).excluded, /bridged/);
+  assert.match(classifyCoin({ id: 'x', name: 'X' }, ['Wrapped-Tokens']).excluded, /wrapped/);
+  // A bridge copy of a stablecoin is out of both parts, whatever the order of
+  // its categories.
+  assert.match(classifyCoin({ id: 'x', name: 'X' }, ['Stablecoins', 'Bridged USDC']).excluded, /bridged/);
+  assert.match(classifyCoin({ id: 'wanchain-bridged-usdc-cardano', name: 'Wanchain Bridged USDC (Cardano)' }, ['Stablecoins']).excluded, /bridged/);
+  assert.deepEqual(classifyCoin({ id: 'g', name: 'G' }, ['Tokenized Gold']), { part: 4, kind: 'tokenized commodity', basis: 'CoinGecko category "Tokenized Gold"' });
+  assert.equal(classifyCoin({ id: 's', name: 'S' }, ['Tokenized Silver']).kind, 'tokenized commodity');
+  assert.equal(classifyCoin({ id: 'c', name: 'C' }, ['Tokenized Commodities']).kind, 'tokenized commodity');
+  assert.equal(classifyCoin({ id: 'gold-ruled', name: 'R' }, ['Cardano Ecosystem'], ruled).basis, 'rulings file: a commodity ruling');
+  // Words that only contain the commodity names do not count.
+  assert.deepEqual(classifyCoin({ id: 'm', name: 'M' }, ['Goldfinch Ecosystem', 'Silverback Memes']), { part: 2 });
+  assert.deepEqual(classifyCoin({ id: 'snek', name: 'Snek' }, ['Meme', 'Cardano Ecosystem']), { part: 2 });
 });
 
 test('resolving a contract to a registry subject', () => {
@@ -75,7 +88,15 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     coin('eta', 'eta', 'Eta', P('e2') + '01'),
     coin('theta', 'the', 'Theta', P('e3') + '4142'),
     coin('bridgy', 'brg', 'Bridgy', P('b9') + '01', ['Cardano Ecosystem'], 'ethereum'),
-    coin('cardfirst', 'cf', 'Cardano First', P('c9') + '01', ['Cardano Ecosystem'], 'base')
+    coin('cardfirst', 'cf', 'Cardano First', P('c9') + '01', ['Cardano Ecosystem'], 'base'),
+    // Past the part 2 bound of 6 candidates: a part 2 coin listed by id
+    // only, and part 4 coins still read.
+    coin('late', 'lat', 'Late', P('d9') + '01'),
+    coin('gold-token', 'gld', 'Gold Token', P('ca') + '474c44', ['Cardano Ecosystem', 'Tokenized Gold']),
+    coin('ruled-gold', 'rgd', 'Ruled Gold', P('cb') + '01', ['Cardano Ecosystem']),
+    coin('eth-stable', 'eus', 'Eth Stable', P('cc') + '01', ['Stablecoins'], 'ethereum'),
+    coin('bridged-stable', 'bus', 'Bridged Stable', P('cd') + '01', ['Stablecoins', 'Bridged USDT']),
+    coin('stable-unmapped', 'sun', 'Stable Unmapped', P('ce') + '01', ['Stablecoins'])
   ];
   const registry = new Map([
     [P('a1') + '414c50', { ticker: 'ALP', name: 'Alpha' }],
@@ -86,6 +107,10 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     [P('e3') + '4142', { ticker: 'THE ', name: 'Theta', file: P('E3') + '4142' }],
     [P('b9') + '01', { ticker: 'BRG', name: 'Bridgy' }],
     [P('c9') + '01', { ticker: 'CF', name: 'Cardano First' }],
+    [P('a2') + '01', { ticker: 'SUSD', name: 'Stable USD' }],
+    [P('ca') + '474c44', { ticker: 'GLD', name: 'Gold Token' }],
+    [P('cb') + '01', { ticker: 'RGD', name: 'Ruled Gold' }],
+    [P('cd') + '01', { ticker: 'BUS', name: 'Bridged Stable' }],
     [HOSKY.policy + HOSKY.asset_name, { ticker: 'HOSKY', name: 'HOSKY Token' }]
   ]);
   const marketsText = JSON.stringify(coins.map((c, i) => ({ id: c.id, symbol: c.symbol, name: c.name, market_cap: 1000 - i, market_cap_rank: i + 1 })));
@@ -106,9 +131,26 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
     return reply(JSON.stringify({ id, asset_platform_id: c.platform, categories: c.categories, detail_platforms: c.contract ? { cardano: { contract_address: c.contract } } : {} }));
   };
   const named = [{ project: 'HOSKY', stratum: 'HOSKY', class: 'FT', policy: HOSKY.policy, asset_name: HOSKY.asset_name, nft_top_exclude: false }];
-  const rulings = { exclusions: [{ coingecko_id: 'ruled', reason: 'bridged: its Cardano token is a bridge copy', source: 'a ruling' }], cardano_first: [{ coingecko_id: 'cardfirst', reason: 'first issued on Cardano', source: 'a ruling' }] };
-  const doc = await captureStrata({ named, rulings, maxCandidates: 40, spacingMs: 0, fetchImpl, now: () => new Date('2026-10-21T20:00:00Z') });
-  assert.equal(doc.format, 'research-corpus-strata-v2');
+  const rulings = {
+    exclusions: [{ coingecko_id: 'ruled', reason: 'bridged: its Cardano token is a bridge copy', source: 'a ruling' }],
+    cardano_first: [{ coingecko_id: 'cardfirst', reason: 'first issued on Cardano', source: 'a ruling' }],
+    commodities: [{ coingecko_id: 'ruled-gold', reason: 'a tokenized commodity', source: 'a ruling' }]
+  };
+  const doc = await captureStrata({ named, rulings, maxCandidates: 6, spacingMs: 0, fetchImpl, now: () => new Date('2026-10-21T20:00:00Z') });
+  assert.equal(doc.format, 'research-corpus-strata-v3');
+  // Part 4, in ranking order, every coin read however far past the part 2
+  // bound; a bridge copy of a stablecoin stays out; a part 4 coin without a
+  // registry match is neither taken nor excluded.
+  assert.deepEqual(doc.part4.map((c) => [c.rank, c.coingecko_id, c.kind]), [
+    [1, 'stable-usd', 'stablecoin'],
+    [2, 'gold-token', 'tokenized commodity'],
+    [3, 'ruled-gold', 'tokenized commodity']
+  ]);
+  assert.equal(doc.part4[2].basis, 'rulings file: a tokenized commodity');
+  assert.deepEqual(doc.unsettled.map((u) => [u.coingecko_id, u.registry.match]), [['stable-unmapped', 'absent']]);
+  assert.match(doc.unsettled[0].question, /no registry cross-check/);
+  assert.deepEqual(doc.provenance.coingecko.beyond_candidate_bound, ['late']);
+  assert.equal(doc.provenance.coingecko.coins_in_ranking, coins.length);
   assert.deepEqual(doc.candidates.map((c) => [c.rank, c.coingecko_id, c.resolved_by, c.registry.match]), [
     [1, 'alpha', 'coingecko contract', 'ticker'],
     [2, 'beta', 'registry: the only subject under the policy', 'ticker'],
@@ -122,8 +164,11 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
   assert.equal(doc.candidates[1].asset_name, '424554');
   const reasons = Object.fromEntries(doc.excluded.map((e) => [e.coingecko_id, e.reason]));
   assert.equal(reasons.cardano, 'ADA itself');
-  assert.match(reasons['stable-usd'], /stablecoin/);
+  assert.equal(reasons['stable-usd'], undefined, 'a Cardano-issued stablecoin is a part 4 coin, not an exclusion');
   assert.match(reasons['some-bridged-usdc-cardano'], /bridged/);
+  assert.match(reasons['eth-stable'], /asset_platform_id is ethereum/);
+  assert.equal(doc.excluded.find((e) => e.coingecko_id === 'eth-stable').part, 4);
+  assert.match(reasons['bridged-stable'], /bridged \(CoinGecko category "Bridged USDT"\)/);
   assert.equal(reasons.hosky, 'named in part 1');
   assert.equal(reasons.gamma, 'no Cardano native asset listed');
   assert.match(reasons.eps, /token registry: ticker OTHER/);

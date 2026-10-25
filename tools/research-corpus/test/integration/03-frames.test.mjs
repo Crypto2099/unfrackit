@@ -148,6 +148,14 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     }
     assert.ok(b.report.ft_floor.find((r) => r.stratum === 'NIGHT preprod again').named);
     assert.deepEqual(b.report.strata.filter((s) => s.part === 'coingecko').map((s) => s.stratum), b.report.ft_floor.filter((r) => r.taken).map((r) => r.stratum));
+    // Part 4: every listed coin at or above the floor, one stratum each, in
+    // rank order after part 3.
+    assert.equal(b.report.sc_floor.length, 2);
+    for (const r of b.report.sc_floor) assert.equal(r.taken, r.n_holders >= 1000, `${r.stratum}: part 4 floor`);
+    const part4 = b.report.strata.filter((s) => s.part === 'stable-commodity');
+    assert.deepEqual(part4.map((s) => s.stratum), b.report.sc_floor.filter((r) => r.taken).map((r) => r.stratum));
+    const lastPart3 = Math.max(...b.report.strata.filter((s) => s.part === 'nft-top').map((s) => s.ord));
+    assert.ok(part4.every((s) => s.ord > lastPart3), 'part 4 is filled after part 3');
 
     // The split: one label per credential, the first fifth of all sampled
     // credentials by split key.

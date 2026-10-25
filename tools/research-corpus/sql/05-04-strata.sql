@@ -4,18 +4,25 @@
 -- Section 5.4 of the pre-registration: the purposive strata, including the
 -- frozen NFT query and the frozen holder floor of the fungible part.
 --
--- The list has three parts, processed in this order:
+-- The list has four parts, processed in this order:
 --   1. the named projects (Clay Nation and SpaceBudz, NFT; NIGHT, IAG, HOSKY
 --      and SNEK, fungible), always included and exempt from the floor;
 --   2. ten fungible tokens taken from the CoinGecko candidates captured on the
---      freeze date (data/strata-mainnet.json, in market-capitalization order,
---      after ADA, bridged or wrapped assets and stablecoins were excluded):
---      candidates are taken in order, skipping any held by fewer than 1,000
---      stake credentials (ft_floor) of the recent frame at the snapshot, until
---      ten (ft_n) qualify; a candidate that is also a named token is skipped;
+--      date of the hypotheses record (data/strata-mainnet.json, in
+--      market-capitalization order, after ADA, bridged or wrapped assets and
+--      stablecoins and tokenized commodities were excluded): candidates are
+--      taken in order, skipping any held by fewer than 1,000 stake credentials
+--      (ft_floor) of the recent frame at the snapshot, until ten (ft_n)
+--      qualify; a candidate that is also a named token is skipped;
 --   3. the ten NFT policies of rule 3, computed once on the recent frame at
---      the snapshot and used for both frames.
--- Both computed parts are frozen for both frames.
+--      the snapshot and used for both frames;
+--   4. the stablecoins and tokenized commodities of the same capture (the
+--      strata file's part4 list, in market-capitalization order), every one
+--      held by at least 1,000 stake credentials (sc_floor) of the recent frame
+--      at the snapshot, counted as in part 2, one stratum each. Part 4 is
+--      filled after part 3, so adding it leaves the strata of parts 1 to 3 as
+--      they would otherwise be.
+-- The computed parts are frozen for both frames.
 --
 -- Read as: "held by a stake credential in the frame" counts the eligible
 -- wallets of the recent frame at the snapshot, held UTxOs included (x9), as
@@ -46,7 +53,7 @@
 -- policy is one unit, so the per-wallet class reduces to the label).
 
 -- @step strata_list_table
--- @outputs study.strata_list study.strata_candidate
+-- @outputs study.strata_list study.strata_candidate study.strata_sc
 DROP TABLE IF EXISTS study.strata_list;
 CREATE TABLE study.strata_list (
   ord integer PRIMARY KEY,
@@ -66,6 +73,15 @@ CREATE TABLE study.strata_candidate (
   policy bytea NOT NULL CHECK (length(policy) = 28),
   asset_name bytea NOT NULL CHECK (length(asset_name) <= 32)
 );
+DROP TABLE IF EXISTS study.strata_sc;
+CREATE TABLE study.strata_sc (
+  rank integer PRIMARY KEY CHECK (rank BETWEEN 1 AND 899),
+  stratum text NOT NULL,
+  project text NOT NULL,
+  kind text NOT NULL CHECK (kind IN ('stablecoin', 'tokenized commodity')),
+  policy bytea NOT NULL CHECK (length(policy) = 28),
+  asset_name bytea NOT NULL CHECK (length(asset_name) <= 32)
+);
 
 -- The driver binds the named rows and the candidates as JSON.
 -- @query strata_list_load
@@ -78,6 +94,11 @@ SELECT x.ord, x.stratum, x.project, x.class, decode(x.policy, 'hex'),
 INSERT INTO study.strata_candidate (rank, stratum, project, policy, asset_name)
 SELECT x.rank, x.stratum, x.project, decode(x.policy, 'hex'), decode(x.asset_name, 'hex')
   FROM json_to_recordset($1::json) AS x(rank integer, stratum text, project text, policy text, asset_name text);
+
+-- @query strata_sc_load
+INSERT INTO study.strata_sc (rank, stratum, project, kind, policy, asset_name)
+SELECT x.rank, x.stratum, x.project, x.kind, decode(x.policy, 'hex'), decode(x.asset_name, 'hex')
+  FROM json_to_recordset($1::json) AS x(rank integer, stratum text, project text, kind text, policy text, asset_name text);
 
 -- @step ft_floor
 -- @outputs study.ft_floor
@@ -109,6 +130,29 @@ q AS (
 SELECT q.*,
        (q.qualifies AND count(*) FILTER (WHERE q.qualifies) OVER (ORDER BY q.rank ROWS UNBOUNDED PRECEDING) <= {{ft_n}}) AS taken
   FROM q;
+
+-- Part 4: every listed stablecoin and tokenized commodity held by at least
+-- sc_floor eligible wallets of the recent frame at the snapshot, held UTxOs
+-- included, as part 2 counts them; no count limit.
+-- @step sc_floor
+-- @outputs study.sc_floor
+DROP TABLE IF EXISTS study.sc_floor;
+CREATE TABLE study.sc_floor AS
+WITH h AS (
+  SELECT c.rank, count(DISTINCT t.sa_id) AS n_holders
+    FROM study.strata_sc c
+    JOIN study.asset s ON s.policy = c.policy AND s.name = c.asset_name
+    JOIN study.txo_asset a ON a.ident = s.ident
+    JOIN study.txo t ON t.tx_out_id = a.tx_out_id
+    JOIN study.frame f ON f.frame = 'recent' AND f.sa_id = t.sa_id AND f.eligible
+   WHERE t.created_tx <= {{snap_tx}} AND (t.consumed_tx IS NULL OR t.consumed_tx > {{snap_tx}})
+   GROUP BY c.rank
+)
+SELECT c.rank, c.stratum, c.project, c.kind, c.policy, c.asset_name,
+       coalesce(h.n_holders, 0) AS n_holders,
+       coalesce(h.n_holders, 0) >= {{sc_floor}} AS qualifies,
+       coalesce(h.n_holders, 0) >= {{sc_floor}} AS taken
+  FROM study.strata_sc c LEFT JOIN h ON h.rank = c.rank;
 
 -- @step nft_top
 -- @outputs study.nft_top
@@ -189,7 +233,9 @@ SELECT ord, stratum, class, policy, asset_name, false AS nft_only, 'named'::text
 UNION ALL
 SELECT 100 + rank, stratum, 'FT', policy, asset_name, false, 'coingecko' FROM study.ft_floor WHERE taken
 UNION ALL
-SELECT 1000 + rank::integer, 'nft-top-' || lpad(rank::text, 2, '0'), 'NFT', policy, NULL::bytea, true, 'nft-top' FROM study.nft_top;
+SELECT 1000 + rank::integer, 'nft-top-' || lpad(rank::text, 2, '0'), 'NFT', policy, NULL::bytea, true, 'nft-top' FROM study.nft_top
+UNION ALL
+SELECT 2000 + rank, stratum, 'FT', policy, asset_name, false, 'stable-commodity' FROM study.sc_floor WHERE taken;
 DELETE FROM study.sample WHERE kind = 'stratum';
 SELECT study.fill_strata('recent', {{snap_tx}}, {{snap_tx}}, {{strata_n}}, {{x10_skip_random_only}});
 SELECT study.fill_strata('peak', {{peak_t_start}}, {{peak_t_end}}, {{strata_n}}, {{x10_skip_random_only}});
@@ -200,6 +246,11 @@ SELECT a.ord, a.stratum, a.part, a.class, encode(a.policy, 'hex') AS policy, enc
        (SELECT count(*) FROM study.sample x WHERE x.kind = 'stratum' AND x.stratum = a.stratum AND x.frame = 'recent') AS n_recent,
        (SELECT count(*) FROM study.sample x WHERE x.kind = 'stratum' AND x.stratum = a.stratum AND x.frame = 'peak') AS n_peak
   FROM study.strata_all a ORDER BY a.ord;
+
+-- @query sc_floor_report
+SELECT rank, stratum, project, kind, encode(policy, 'hex') AS policy, encode(asset_name, 'hex') AS asset_name,
+       n_holders, qualifies, taken
+  FROM study.sc_floor ORDER BY rank;
 
 -- @query ft_floor_report
 SELECT rank, stratum, project, encode(policy, 'hex') AS policy, encode(asset_name, 'hex') AS asset_name,

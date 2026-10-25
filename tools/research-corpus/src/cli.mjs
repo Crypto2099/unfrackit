@@ -75,8 +75,9 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
                                   log a fix made after a live-fire finding
   capture-strata [--out <file>] [--named-from <file>] [--rulings <file>] [--own-sources <file>]
                  [--max-candidates 40] [--spacing-ms 15000]
-                                  read CoinGecko's Cardano Ecosystem ranking and the token registry; write the
-                                  strata file's candidate list (default: data/strata-mainnet.json)
+                                  read CoinGecko's Cardano Ecosystem ranking (every coin's detail) and the token
+                                  registry; write the strata file's part 2 and part 4 lists (default:
+                                  data/strata-mainnet.json)
   confirm-snapshot --run-id <id>  the snapshot is still on chain, ${FIXED.security_k} or more blocks deep in the database and
                                   in Koios; for a snapshot by rule, the rule still names it, with the first block
                                   of epoch N that deep
@@ -411,7 +412,8 @@ async function main() {
         log: (s) => process.stderr.write(s + '\n')
       });
       writeFileSync(out, JSON.stringify(doc, null, 2) + '\n');
-      console.log(`${out}: ${doc.candidates.length} candidates, ${doc.excluded.length} excluded`);
+      console.log(`${out}: ${doc.candidates.length} part 2 candidates, ${doc.part4.length} part 4 coins, ${doc.excluded.length} excluded, ${doc.unsettled.length} unsettled`);
+      if (doc.unsettled.length) process.stderr.write(`unsettled, and refused by run until decided: ${doc.unsettled.map((u) => `${u.coingecko_id} (${u.question})`).join('; ')}\n`);
       return;
     }
     case 'confirm-snapshot': {
