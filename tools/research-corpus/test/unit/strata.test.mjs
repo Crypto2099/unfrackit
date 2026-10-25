@@ -38,6 +38,7 @@ async function tables(db) {
     CREATE TABLE study.draw_order (frame text, sa_id bigint, k bigint);
     CREATE TABLE study.sample (frame text, kind text, stratum text, sa_id bigint, draw_rank bigint, prevalence_member boolean, split text, excluded_6_1 boolean,
                                PRIMARY KEY (frame, kind, stratum, sa_id));
+    CREATE TABLE study.scam_policy (policy bytea PRIMARY KEY);
   `);
   let out = 0;
   return {

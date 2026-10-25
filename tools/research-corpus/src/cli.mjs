@@ -4,12 +4,13 @@
 
 import { readFileSync, writeFileSync, realpathSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { initSecret } from './hmac.mjs';
-import { runPipeline, cleanupRun, ownDrawn, DEFAULT_STRATA, DEFAULT_RULINGS } from './pipeline.mjs';
+import { runPipeline, cleanupRun, ownDrawn, scamRecheck, DEFAULT_STRATA, DEFAULT_RULINGS, DEFAULT_SCAM_LIST } from './pipeline.mjs';
+import { captureScamList } from './scam-list.mjs';
 import { readStakeList } from './guards.mjs';
-import { formatHashList, hashList, codeVersion } from './hash.mjs';
+import { formatHashList, hashList, codeVersion, TOOL_DIR } from './hash.mjs';
 import { loadAll } from './sqlfile.mjs';
 import { connect, dbMeta, q } from './db.mjs';
 import { a1Compare } from './a1.mjs';
@@ -48,6 +49,9 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --keep-for-debug            keep a live-fire run's study tables (wallet-level output) after it ends
       --explain                   plan every statement with plain EXPLAIN before running it; numbers stripped
       --strata <file>             the strata list (default data/strata-mainnet.json; mainnet: that file only)
+      --scam-clone <dir>          a git clone of the scam list's repository, holding the record's commit;
+                                  required on mainnet, and on a test network the screen applies only with it
+      --scam-list <file>          the scam-list record (default data/scam-list.json; mainnet: that file only)
       --case <stake address>      a case wallet: the per-wallet steps also run for it
       --cases <file>              case wallets, one stake address per line
       --hmac-key <file>           test networks only: an HMAC key other than secret/hmac.key
@@ -78,6 +82,14 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
                                   read CoinGecko's Cardano Ecosystem ranking (every coin's detail) and the token
                                   registry; write the strata file's part 2 and part 4 lists (default:
                                   data/strata-mainnet.json)
+  capture-scam-list --clone <dir> [--commit <rev>] [--out <file>] [--extract-out <file>]
+                                  record the scam list at a commit of a clone of its repository (default HEAD):
+                                  the commit, the SHA-256 of the fixed extract, the counts and any license file
+                                  (default: data/scam-list.json); --extract-out writes the extract, outside this
+                                  tool's folder
+  scam-recheck --run <id> --scam-list <file> --scam-clone <dir>
+                                  on a finished run, the strata a later version of the scam list flags, for the
+                                  sensitivity analysis; writes scam-recheck-<commit>.json to the run directory
   confirm-snapshot --run-id <id>  the snapshot is still on chain, ${FIXED.security_k} or more blocks deep in the database and
                                   in Koios; for a snapshot by rule, the rule still names it, with the first block
                                   of epoch N that deep
@@ -315,6 +327,8 @@ export function runOptions(a, command) {
     explain: !!a.explain,
     strataList: a.strata || DEFAULT_STRATA,
     strataGiven: !!a.strata,
+    scamList: a.scamList,
+    scamClone: a.scamClone,
     hmacKey: a.hmacKey,
     caseWallets: a.case,
     casesFile: a.cases,
@@ -414,6 +428,35 @@ async function main() {
       writeFileSync(out, JSON.stringify(doc, null, 2) + '\n');
       console.log(`${out}: ${doc.candidates.length} part 2 candidates, ${doc.part4.length} part 4 coins, ${doc.excluded.length} excluded, ${doc.unsettled.length} unsettled`);
       if (doc.unsettled.length) process.stderr.write(`unsettled, and refused by run until decided: ${doc.unsettled.map((u) => `${u.coingecko_id} (${u.question})`).join('; ')}\n`);
+      return;
+    }
+    case 'capture-scam-list': {
+      if (!a.clone) throw new Error('capture-scam-list --clone <dir> [--commit <rev>] [--out <file>] [--extract-out <file>]');
+      const out = a.out || DEFAULT_SCAM_LIST;
+      const { record, extract } = captureScamList({ clone: a.clone, rev: a.commit || 'HEAD', tool: codeVersion().git_commit });
+      if (a.extractOut) {
+        // The extract is the list's content; it never lands in this tool's
+        // folder, so it cannot be committed with the code by mistake.
+        const rel = relative(TOOL_DIR, resolve(a.extractOut));
+        if (!rel.startsWith('..') && !isAbsolute(rel)) throw new Error('--extract-out must be outside the tool\'s folder');
+        writePrivate(resolve(a.extractOut), extract.text);
+      }
+      writeFileSync(out, JSON.stringify(record, null, 2) + '\n');
+      for (const x of extract.invalid) process.stderr.write(`not a fingerprint, left out: ${x.path}: ${JSON.stringify(x.value)} (${x.reason})\n`);
+      console.log(`${out}: commit ${record.source.commit}, ${record.extract.n_fingerprints} fingerprints, extract SHA-256 ${record.extract.sha256}, license file ${record.license.present ? record.license.files.map((f) => f.path).join(', ') : 'none'}`);
+      return;
+    }
+    case 'scam-recheck': {
+      if (!a.run || !a.scamList || !a.scamClone) throw new Error('scam-recheck --run <id> --scam-list <file> --scam-clone <dir>');
+      const c = await connect(dbOpts(a));
+      try {
+        const meta = await dbMeta(c, loadAll());
+        await loggedQuery(meta.network, 'scam-recheck', { run_id: a.run, command, code: codeFacts() }, async () => {
+          console.log(JSON.stringify(await scamRecheck({ client: c, runId: a.run, recordPath: a.scamList, clone: a.scamClone, network: meta.network }), null, 2));
+        });
+      } finally {
+        await c.end();
+      }
       return;
     }
     case 'confirm-snapshot': {

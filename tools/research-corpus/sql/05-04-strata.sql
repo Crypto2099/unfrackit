@@ -22,7 +22,11 @@
 --      at the snapshot, counted as in part 2, one stratum each. Part 4 is
 --      filled after part 3, so adding it leaves the strata of parts 1 to 3 as
 --      they would otherwise be.
--- The computed parts are frozen for both frames.
+-- The computed parts are frozen for both frames. The scam screen
+-- (05-04-scam-screen.sql) keeps every policy in study.scam_policy out of every
+-- part: a screened named row gives no stratum, a screened candidate of part 2
+-- or 4 is skipped so the next one is taken, and the NFT ranking of part 3
+-- leaves screened policies out before ranking.
 --
 -- Read as: "held by a stake credential in the frame" counts the eligible
 -- wallets of the recent frame at the snapshot, held UTxOs included (x9), as
@@ -107,7 +111,8 @@ CREATE TABLE study.ft_floor AS
 WITH c AS (
   SELECT c.*,
          EXISTS (SELECT 1 FROM study.strata_list n
-                  WHERE n.class = 'FT' AND n.policy = c.policy AND n.asset_name = c.asset_name) AS named
+                  WHERE n.class = 'FT' AND n.policy = c.policy AND n.asset_name = c.asset_name) AS named,
+         c.policy IN (SELECT policy FROM study.scam_policy) AS screened
     FROM study.strata_candidate c
 ),
 h AS (
@@ -122,9 +127,9 @@ h AS (
    GROUP BY c.rank
 ),
 q AS (
-  SELECT c.rank, c.stratum, c.project, c.policy, c.asset_name, c.named,
+  SELECT c.rank, c.stratum, c.project, c.policy, c.asset_name, c.named, c.screened,
          coalesce(h.n_holders, 0) AS n_holders,
-         (NOT c.named AND coalesce(h.n_holders, 0) >= {{ft_floor}}) AS qualifies
+         (NOT c.named AND NOT c.screened AND coalesce(h.n_holders, 0) >= {{ft_floor}}) AS qualifies
     FROM c LEFT JOIN h ON h.rank = c.rank
 )
 SELECT q.*,
@@ -149,9 +154,10 @@ WITH h AS (
    GROUP BY c.rank
 )
 SELECT c.rank, c.stratum, c.project, c.kind, c.policy, c.asset_name,
+       c.policy IN (SELECT policy FROM study.scam_policy) AS screened,
        coalesce(h.n_holders, 0) AS n_holders,
-       coalesce(h.n_holders, 0) >= {{sc_floor}} AS qualifies,
-       coalesce(h.n_holders, 0) >= {{sc_floor}} AS taken
+       (c.policy NOT IN (SELECT policy FROM study.scam_policy) AND coalesce(h.n_holders, 0) >= {{sc_floor}}) AS qualifies,
+       (c.policy NOT IN (SELECT policy FROM study.scam_policy) AND coalesce(h.n_holders, 0) >= {{sc_floor}}) AS taken
   FROM study.strata_sc c LEFT JOIN h ON h.rank = c.rank;
 
 -- @step nft_top
@@ -188,7 +194,8 @@ supply_over_one AS (
 SELECT n.policy, n.n_holders, row_number() OVER (ORDER BY n.n_holders DESC, n.policy ASC) AS rank
   FROM n
  WHERE n.policy NOT IN (SELECT policy FROM study.strata_list WHERE nft_top_exclude)
-   AND n.policy NOT IN (SELECT policy FROM supply_over_one);
+   AND n.policy NOT IN (SELECT policy FROM supply_over_one)
+   AND n.policy NOT IN (SELECT policy FROM study.scam_policy);
 DELETE FROM study.nft_top WHERE rank > {{nft_top_n}};
 
 -- @lib strata_fn
@@ -230,6 +237,7 @@ $$;
 DROP TABLE IF EXISTS study.strata_all;
 CREATE TABLE study.strata_all AS
 SELECT ord, stratum, class, policy, asset_name, false AS nft_only, 'named'::text AS part FROM study.strata_list
+ WHERE policy NOT IN (SELECT policy FROM study.scam_policy)
 UNION ALL
 SELECT 100 + rank, stratum, 'FT', policy, asset_name, false, 'coingecko' FROM study.ft_floor WHERE taken
 UNION ALL
@@ -249,10 +257,10 @@ SELECT a.ord, a.stratum, a.part, a.class, encode(a.policy, 'hex') AS policy, enc
 
 -- @query sc_floor_report
 SELECT rank, stratum, project, kind, encode(policy, 'hex') AS policy, encode(asset_name, 'hex') AS asset_name,
-       n_holders, qualifies, taken
+       screened, n_holders, qualifies, taken
   FROM study.sc_floor ORDER BY rank;
 
 -- @query ft_floor_report
 SELECT rank, stratum, project, encode(policy, 'hex') AS policy, encode(asset_name, 'hex') AS asset_name,
-       named, n_holders, qualifies, taken
+       named, screened, n_holders, qualifies, taken
   FROM study.ft_floor ORDER BY rank;

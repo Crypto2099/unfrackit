@@ -1,0 +1,24 @@
+{
+  "format": "research-corpus-scam-list-v1",
+  "note": "The scam screen of the strata: no policy that this list names an asset of becomes a stratum in any part. The list itself is not copied here; a run reads the extract again from a clone of the repository at the commit and refuses one whose SHA-256 differs.",
+  "source": {
+    "repository": "github.com/Tastenkunst/eternl-guard",
+    "folder": "src/entries",
+    "commit": "a7afe53e1583a8393de5bdae7f329d0f9d64b4ae",
+    "commit_time": "2026-09-23T12:28:28+02:00"
+  },
+  "extract": {
+    "form": "the distinct valid CIP-14 fingerprints of the related_assets arrays of the .json files directly in the folder, trimmed, in lowercase, sorted in ascending byte order, each followed by one LF, as ASCII",
+    "sha256": "3edd32cab585a536f71458d20c92a44f38c9a3690734669c05fd67e35c50bc4d",
+    "n_fingerprints": 364,
+    "n_entry_files": 170,
+    "n_mentions": 375,
+    "n_invalid": 1
+  },
+  "license": {
+    "present": false,
+    "files": []
+  },
+  "captured_at": "2026-10-25T19:06:19.420Z",
+  "tool": "research-corpus capture-scam-list at baf407f72cd0f74c95c6072e8ca7cbf2daacb890"
+}

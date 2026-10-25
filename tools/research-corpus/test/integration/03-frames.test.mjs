@@ -12,7 +12,9 @@
 // S3 and M2 are token-holding, M2 with at least 100 assets, and both are in
 // the sample (the strata of their policies); S3 has one spend event (the
 // sweep), M2 and S1 none; no franken flags on the shapes; the profile
-// features agree with the frame; the fungible floor
+// features agree with the frame; the scam screen keeps a test list's
+// policies out of every part, and the later list flags the M2 stratum; the
+// fungible floor, part 4
 // and the split follow their rules; the run repeated gives identical tables.
 // T12. The first run captures EXPLAIN (ANALYZE, BUFFERS), wall time and rows
 // of every step into its run directory.
@@ -21,12 +23,30 @@ import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { db, blocks, record, S1_SEEDING_TX, TAG, RUN_A, RUN_B, SHAPES, FUNDER, seederAddress, stakeOf, saIdOf } from './env.mjs';
 import { encode } from '../../src/bech32.mjs';
 import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
+import { fixtureRepo } from '../lib/gitfixture.mjs';
+import { captureScamList } from '../../src/scam-list.mjs';
+import { scamRecheck } from '../../src/pipeline.mjs';
+import { runDir, writePrivate } from '../../src/paths.mjs';
+
+// A test scam list in the registry's format, of preprod assets: sUSDr (whose
+// policy also holds USDr, a part 2 candidate unlisted here), RIGEL, one asset
+// of an NFT policy that ranks on preprod, the first CIP-14 test vector (not
+// on preprod), and the registry's own template placeholder. A later commit
+// adds an asset of the M2 policy, a named stratum, for the sensitivity
+// analysis.
+const SCAM_FIRST = {
+  'src/entries/test-stable.json': JSON.stringify({ domains: ['scam.example'], associated_addresses: [], related_assets: ['asset1vmllsc8gkach2vqh8tqlyj7sl4rk788htll9pq', 'asset1ln7lh783tvvsnutlf9ef5hempnqqkwrv3dpurk'], description: 'preprod test entry' }, null, 2) + '\n',
+  'src/entries/test-nft.json': JSON.stringify({ domains: [], associated_addresses: [], related_assets: ['asset1pt3jxy75eu9j2exeqstjka8yqxc2fla2hkkua8', 'asset1rjklcrnsdzqp65wjgrg55sy9723kw09mlgvlc3'], description: 'preprod test entry' }, null, 2) + '\n',
+  'src/entries/emptyjsonformat.abc.json': JSON.stringify({ domains: ['domain.extension'], associated_addresses: ['addr...'], related_assets: ['asset1....'], description: 'A description of the scam method (not required)' }, null, 2) + '\n'
+};
+const SCAM_LATER = { ...SCAM_FIRST, 'src/entries/test-m2.json': JSON.stringify({ related_assets: ['asset1d4468uzf2w63xumfwdlxjgkrew2fpkcwaw24dl'] }) + '\n' };
+const SCREENED = ['0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b', '59e35b701247154f645388c5e17a098fced0e5098543dd58a797c04a', '7e8bdaf2b2b919a3a4b94002cafb50086c0c845fe535d07a77ab7f77'];
 
 const STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 
@@ -63,6 +83,10 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     // vector's stake key is not a safe choice: it is in use on preprod.)
     const absent = encode('stake_test', Buffer.concat([Buffer.from([0xe0]), createHash('sha256').update(`absent ${TAG}`).digest().subarray(0, 28)]));
     assert.equal(await saIdOf(c, absent), null, 'the absent key is not on preprod');
+    const scamRepo = fixtureRepo();
+    const scamFirst = scamRepo.commit(SCAM_FIRST, 'test list');
+    const scamRecord = join(runDir('preprod', TAG), 'scam-list-first.json');
+    writePrivate(scamRecord, JSON.stringify(captureScamList({ clone: scamRepo.dir, rev: scamFirst }).record));
     const common = {
       expectNetwork: 'preprod',
       snapshot: 'tip',
@@ -71,6 +95,8 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       hmacKey: process.env.RESEARCH_CORPUS_TEST_HMAC_KEY,
       set: ['guard=1000'],
       caseWallets: [views.funder, views.S1],
+      scamList: scamRecord,
+      scamClone: scamRepo.dir,
       log: (s) => process.stderr.write(`  ${s}\n`)
     };
     const t0 = performance.now();
@@ -143,7 +169,8 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     // The fungible floor: named candidates skipped, the floor, ten taken in
     // rank order, and the strata of part 2 exactly the candidates taken.
     for (const r of b.report.ft_floor) {
-      assert.equal(r.qualifies, !r.named && r.n_holders >= 1000, `${r.stratum}: floor`);
+      assert.equal(r.screened, SCREENED.includes(r.policy), `${r.stratum}: screened`);
+      assert.equal(r.qualifies, !r.named && !r.screened && r.n_holders >= 1000, `${r.stratum}: floor`);
       assert.equal(r.taken, r.qualifies && b.report.ft_floor.filter((x) => x.qualifies && x.rank <= r.rank).length <= 10, `${r.stratum}: taken`);
     }
     assert.ok(b.report.ft_floor.find((r) => r.stratum === 'NIGHT preprod again').named);
@@ -232,6 +259,27 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     }
     assert.ok(plans > 30, 'plans captured');
 
+    // The scam screen: four fingerprints, three resolved to three policies,
+    // each recomputed; no stratum of any part under a screened policy; USDr,
+    // unlisted, makes its policy one of those reported with unlisted assets.
+    const sc = b.report.scam_screen;
+    assert.deepEqual([sc.applied, sc.n_fingerprints, sc.n_resolved, sc.n_unresolved, sc.n_policies, sc.fingerprints_agree], [true, 4, 3, 1, 3, true]);
+    assert.ok(!b.report.strata.some((x) => SCREENED.includes(x.policy)), 'no stratum under a screened policy');
+    assert.ok(b.report.ft_floor.filter((r) => r.screened).length >= 3, 'USDr, sUSDr and RIGEL screened');
+    const withUnlisted = sc.policies_with_unlisted_assets.map((x) => x.policy);
+    assert.ok(withUnlisted.includes(SCREENED[0]), 'the USDr policy holds an unlisted asset');
+    assert.equal(b.manifest.scam_screen.policies_with_unlisted_assets, undefined, 'the descriptive list stays in report.json');
+    // The sensitivity analysis on the finished run: the later list flags the
+    // M2 policy's named stratum and nothing else that is a stratum.
+    const scamLater = scamRepo.commit(SCAM_LATER, 'later list');
+    const laterRecord = join(runDir('preprod', TAG), 'scam-list-later.json');
+    writePrivate(laterRecord, JSON.stringify(captureScamList({ clone: scamRepo.dir, rev: scamLater }).record));
+    const recheck = await scamRecheck({ client: c, runId: RUN_B, recordPath: laterRecord, clone: scamRepo.dir, network: 'preprod' });
+    assert.deepEqual(recheck.strata_flagged, ['M2 policy']);
+    assert.equal(recheck.later_descends_from_frozen, true);
+    assert.equal(recheck.strata_kept.length, new Set(b.report.strata.map((x) => x.stratum)).size - 1);
+    rmSync(scamRepo.dir, { recursive: true, force: true });
+
     record('T10', {
       run_a: { dir: a.dir, ms: msA },
       run_b: { dir: b.dir, ms: msB },
@@ -243,6 +291,9 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       draw: b.report.draw,
       strata: b.report.strata,
       ft_floor: b.report.ft_floor,
+      sc_floor: b.report.sc_floor,
+      scam_screen: b.report.scam_screen,
+      scam_recheck: recheck,
       split: b.report.split,
       split_overall: b.report.split_overall,
       sample_bounds: b.report.sample_bounds,

@@ -19,7 +19,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { runPipeline, cleanupRun, DEFAULT_STRATA } from '../../src/pipeline.mjs';
+import { runPipeline, cleanupRun, DEFAULT_STRATA, DEFAULT_SCAM_LIST } from '../../src/pipeline.mjs';
 import { formatHashList, hashList } from '../../src/hash.mjs';
 import { codeManifestErrors, mainnetOptionErrors } from '../../src/guards.mjs';
 import { checkLogPath, verifyLog, appendEntry } from '../../src/checklog.mjs';
@@ -28,10 +28,23 @@ import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 import { STUDY_KEY } from '../../src/params.mjs';
 import { verifyFreezeCommand, a1Command, parseArgs, runOptions } from '../../src/cli.mjs';
 import { freezeOf } from '../../src/manifest.mjs';
+import { fixtureRepo } from '../lib/gitfixture.mjs';
+import { captureScamList } from '../../src/scam-list.mjs';
+import { fingerprint } from '../../src/strata-capture.mjs';
 
 const FIXTURE_STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 const STAKE_A = 'stake1uyehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gh6ffgw';
 const TEST_H = 'ab'.repeat(32);
+
+// A clone of a scam list made here, and its record, which the unit tests
+// stand in for the hashed one (scamListPin) as they do for the pinned key.
+function scamFixture(home) {
+  const repo = fixtureRepo();
+  repo.commit({ 'src/entries/one.json': JSON.stringify({ related_assets: [fingerprint('aa'.repeat(28) + '01')] }) });
+  const record = join(home, 'scam-list.json');
+  writeFileSync(record, JSON.stringify(captureScamList({ clone: repo.dir }).record));
+  return { clone: repo.dir, record, done: () => rmSync(repo.dir, { recursive: true, force: true }) };
+}
 
 // A mainnet "database": meta and the probes answered here, everything else by
 // PGlite, which holds a study run with its tables. With `withChain`, PGlite
@@ -84,7 +97,7 @@ function withHome(fn) {
 
 test('mainnet refusals through runPipeline; a refused live-fire run leaves the study run intact and a closed log entry', withHome(async (home) => {
   const m = await mainnetDb();
-  const run = (opts) => runPipeline({ client: m.client, runId: 'guard-test', log: () => {}, strataList: DEFAULT_STRATA, ...opts });
+  const run = (opts) => runPipeline({ client: m.client, runId: 'guard-test', log: () => {}, strataList: DEFAULT_STRATA, scamClone: home, ...opts });
   const manifest = join(home, 'code-manifest.txt');
   writeFileSync(manifest, formatHashList().replace(/^[0-9a-f]{64}(?= {2}src\/pipeline\.mjs$)/m, '0'.repeat(64)));
   const goodManifest = join(home, 'code-manifest-good.txt');
@@ -96,6 +109,9 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
     [{ set: ['guard=1000'] }, /--set changes guard/],
     [{ set: ['guard=200000'] }, /without --freeze-tx/],
     [{ strataList: FIXTURE_STRATA, strataGiven: true }, /not the hashed strata file/],
+    [{ scamList: FIXTURE_STRATA }, /--scam-list is not the hashed scam-list record/],
+    [{ scamClone: undefined }, /--scam-clone: a mainnet run screens the strata/],
+    [{ ...live(), hypothesesTx: 'bb'.repeat(32), scamClone: undefined }, /--scam-clone: a mainnet run screens the strata/],
     [{ snapshot: 'ab'.repeat(32) }, /snapshot is fixed by rule/],
     [{ snapshot: 'tip' }, /snapshot is fixed by rule/],
     [{ ...freeze, codeManifest: goodManifest, snapshot: 'tip' }, /snapshot is fixed by rule/],
@@ -124,7 +140,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
   ];
   for (const [opts, want] of cases) await assert.rejects(run(opts), want, JSON.stringify(opts));
   // A refused live-fire run under the study run's own id drops nothing.
-  await assert.rejects(runPipeline({ client: m.client, runId: 'study1', log: () => {}, ...live({ testH: undefined }) }), /needs --test-h/);
+  await assert.rejects(runPipeline({ client: m.client, runId: 'study1', log: () => {}, scamClone: home, ...live({ testH: undefined }) }), /needs --test-h/);
   assert.deepEqual(await m.intact(), { runs: 1, params: 2, t: 'study.sample' });
   // A refused live-fire attempt is a failed gate query, never a live-fire
   // run: no start entry, and every gate start closed.
@@ -135,7 +151,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(entries.filter((e) => e.type === 'live-fire-start' || e.type === 'live-fire').length, 0);
   const gates = entries.filter((e) => e.type === 'query' && e.name === 'live-fire gate');
-  assert.equal(gates.length, 9);
+  assert.equal(gates.length, 10);
   for (const e of gates) {
     assert.equal(e.outcome, 'failed');
     assert.equal(entries.find((x) => x.seq === e.start_seq).type, 'query-start');
@@ -220,8 +236,9 @@ test('run passes runPipeline its options one by one, so --study-key-pin never re
 });
 
 test('a test network takes run-time options the mainnet refuses', () => {
-  assert.deepEqual(mainnetOptionErrors({ set: ['guard=200000'], strataPath: DEFAULT_STRATA, defaultStrataPath: DEFAULT_STRATA, snapshot: 'tip', live: true, nodeVersion: 'v24.1.0' }), []);
-  assert.deepEqual(mainnetOptionErrors({ snapshot: 'rule', nodeVersion: 'v24.1.0' }), []);
+  assert.deepEqual(mainnetOptionErrors({ set: ['guard=200000'], strataPath: DEFAULT_STRATA, defaultStrataPath: DEFAULT_STRATA, scamPath: DEFAULT_SCAM_LIST, defaultScamPath: DEFAULT_SCAM_LIST, scamClone: 'clone', snapshot: 'tip', live: true, nodeVersion: 'v24.1.0' }), []);
+  assert.deepEqual(mainnetOptionErrors({ snapshot: 'rule', scamClone: 'clone', nodeVersion: 'v24.1.0' }), []);
+  assert.deepEqual(mainnetOptionErrors({ snapshot: 'rule', nodeVersion: 'v24.1.0' }), ['--scam-clone: a mainnet run screens the strata with the scam list, read again from a clone of its repository']);
   assert.match(mainnetOptionErrors({ nodeVersion: 'v20.19.0' }).join(), /pinned to Node 24/);
   assert.match(mainnetOptionErrors({ set: ['x8_measure=units'], nodeVersion: 'v24.1.0' }).join(), /x8_measure/);
 });
@@ -249,10 +266,10 @@ test('a mainnet live-fire run needs the hypotheses record signed by the study ke
     const hypDigest = sha('hypotheses');
     const good = await m.ch.add({ blockNo: 100, slot: 1000, epoch: 1, epochSlot: 10, body: metadataBytes(record([hypDigest], key)), msg: hypDigest });
     const other = await m.ch.add({ blockNo: 101, slot: 1001, epoch: 1, epochSlot: 11, body: metadataBytes(record([hypDigest], keypair())), msg: hypDigest });
-    const run = (hypothesesTx) => runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx, studyKeyPin: key.pub.toString('hex') });
+    const run = (hypothesesTx) => runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx, studyKeyPin: key.pub.toString('hex'), scamClone: 'not a clone' });
     await assert.rejects(run(other), /not in the database with a record signed by the study key/);
     if (studyRun) {
-      await assert.rejects(runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx: good, studyKey: key.pub.toString('hex') }), /pinned freeze identity/);
+      await assert.rejects(runPipeline({ client: m.client, runId: 'lf-hyp', log: () => {}, expectNetwork: 'mainnet', liveFire: { testH: TEST_H, purpose: 'p' }, hypothesesTx: good, studyKey: key.pub.toString('hex'), scamClone: 'not a clone' }), /pinned freeze identity/);
       await assert.rejects(run(good), /holds the study's run study1/);
       assert.deepEqual(await m.intact(), { runs: 1, params: 2, t: 'study.sample' });
     } else {
@@ -296,7 +313,10 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   // with its first block 2,160 below the tip.
   const hypDigest = sha('hypotheses');
   const forged = sha('a document a stranger names');
-  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false, freezeIsSnap = false, frontRun = false }) => {
+  const scam = scamFixture(home);
+  const otherClone = fixtureRepo();
+  otherClone.commit({ 'src/entries/other.json': '{}' });
+  const attempt = async ({ listed, items, drawkeyNonce = nonce, drawkeyTx = null, deep = false, freezeIsSnap = false, frontRun = false, scamClone = null }) => {
     const m = await mainnetDb({ withChain: true, studyRun: false });
     // With frontRun, a stranger's copy of the hypotheses body with the
     // stranger's own 674 line lands one block ahead: the first carrier.
@@ -330,7 +350,11 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
     };
     writeFileSync(drawkey, JSON.stringify({ format: 'research-freeze-drawkey-v1', network: 'mainnet', tx_hash: drawkeyTx || f, nonce_epoch: 501, nonce: drawkeyNonce, readings: [{ source: 'koios', nonce: drawkeyNonce }, { source: 'blockfrost', nonce: drawkeyNonce }] }));
     const runId = `study-${++k}`;
-    const error = await runPipeline({ client: m.client, runId, log: () => {}, koios, freezeTx: f, prereg: finalDoc, studyKeyPin: studyKey, codeManifest: manifest, drawkey }).then(() => null, (e) => e);
+    // The preprod test list stands in for the hashed strata file (refused
+    // until the strata are captured again), given as runPipeline's option
+    // alone: the command line's --strata always counts as given and is
+    // compared with the hashed file on mainnet.
+    const error = await runPipeline({ client: m.client, runId, log: () => {}, koios, freezeTx: f, prereg: finalDoc, studyKeyPin: studyKey, codeManifest: manifest, drawkey, scamClone: scamClone || scam.clone, scamListPin: scam.record, strataList: FIXTURE_STRATA }).then(() => null, (e) => e);
     const stored = (await m.db.query(`SELECT value FROM study.param WHERE run_id = $1 AND key = 'snapshot'`, [runId])).rows[0];
     const freeze = (await m.db.query(`SELECT value FROM study.param WHERE run_id = $1 AND key = 'freeze'`, [runId])).rows[0];
     return { error, snapshot: stored ? stored.value : null, snap, freeze: freeze ? freeze.value : null, hypTx, copy };
@@ -361,6 +385,12 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   assert.equal(r.snapshot.block_no, 2500);
   assert.deepEqual([r.snapshot.rule.epoch, r.snapshot.rule.n, r.snapshot.rule.cutoff_slot], [500, 501, 500 * E + 259200]);
   assert.equal(r.snapshot.rule.confirmation.db_depth, 4761 - 2601);
+  assert.doesNotMatch(r.error.message, /scam list|strata file/, 'the input files pass and the run reaches its steps');
+  // The input files are read once the snapshot is stored, before any step: a
+  // clone without the scam list's commit is refused there.
+  r = await attempt({ listed: named, items: [manifestDigest, frozenDigest], deep: true, scamClone: otherClone.dir });
+  assert.match(r.error.message, /the scam list's commit [0-9a-f]{40} is not in the clone/);
+  assert.equal(r.snapshot.block_no, 2500);
   // The hypotheses record as the run stores it and the manifest publishes it:
   // its document digest from the key holder's line, the one of the carrier
   // the document cites.
@@ -380,6 +410,8 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   assert.doesNotMatch(r.error.message, /before the freeze block|not after the freeze block/);
   assert.equal(r.snapshot.hash, r.snap.hash);
   assert.equal(r.snapshot.block_no, 2500);
+  scam.done();
+  rmSync(otherClone.dir, { recursive: true, force: true });
 }));
 
 // own-drawn: counts per drawn sample, only for a finished study run of a final

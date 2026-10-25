@@ -75,6 +75,11 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     strata_fungible_floor: report.ft_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.ft_floor ? r.n_holders : null, below_floor: !r.named && r.n_holders < run.settings.ft_floor })),
     // Part 4 the same way: holder counts at or above its floor only.
     strata_stable_commodity_floor: report.sc_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.sc_floor ? r.n_holders : null, below_floor: r.n_holders < run.settings.sc_floor })),
+    // The scam screen as applied: the list's commit and extract digest, the
+    // counts and the strata rows it kept out. The excluded policies that also
+    // hold unlisted assets, a descriptive check of the list, stay in
+    // report.json.
+    scam_screen: (({ policies_with_unlisted_assets, ...rest }) => rest)(report.scam_screen || { applied: false }),
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
     // The case-wallet counts stay in report.json: case wallets can be drawn,

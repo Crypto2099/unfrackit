@@ -7,6 +7,8 @@
 // On mainnet the frozen apparatus is the hashed files, so nothing given at run
 // time may change the sample: --set is refused unless every value equals its
 // hashed default, --strata unless the file's bytes are the hashed strata file,
+// --scam-list unless they are the hashed scam-list record (and the clone it
+// is read from must be given),
 // --snapshot of a live-fire run unless it is the tip (a run on the final
 // freeze takes its snapshot by rule), and the Node major must be the pinned
 // one.
@@ -33,7 +35,7 @@ export function studyKeyFor(network, given, pinned = STUDY_KEY) {
   return pinned;
 }
 
-export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, snapshot, live = false, nodeVersion = process.version }) {
+export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, scamPath = null, defaultScamPath = null, scamClone = null, snapshot, live = false, nodeVersion = process.version }) {
   const errors = [];
   if (set.length) {
     const d = defaultSettings();
@@ -45,6 +47,11 @@ export function mainnetOptionErrors({ set = [], strataPath, defaultStrataPath, s
     const h = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
     if (h(strataPath) !== h(defaultStrataPath)) errors.push('--strata is not the hashed strata file');
   }
+  if (scamPath && defaultScamPath) {
+    const h = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+    if (h(scamPath) !== h(defaultScamPath)) errors.push('--scam-list is not the hashed scam-list record');
+  }
+  if (!scamClone) errors.push('--scam-clone: a mainnet run screens the strata with the scam list, read again from a clone of its repository');
   if (live && snapshot && snapshot !== 'tip') errors.push('--snapshot must be tip for a live-fire run on mainnet');
   if (!live && snapshot && snapshot !== 'rule') errors.push('--snapshot: the study run\'s snapshot is fixed by rule (the last block of epoch N - 1 before its randomness stabilization cutoff)');
   const major = Number(/^v(\d+)\./.exec(nodeVersion)?.[1]);
