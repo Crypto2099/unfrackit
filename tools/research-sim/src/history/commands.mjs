@@ -125,9 +125,9 @@ async function studySamples(ctx) {
 // History files for each wallet and window. A wallet the extraction's
 // reconstruction check excluded is refused; a confirmation-split wallet is
 // read only for a run given the transaction of the record that freezes the
-// analysis scripts (--a6-tx), and the run records it. With --from-study the
-// wallets are the extraction's random sample (`random`) or every sampled
-// wallet (`all`).
+// analysis scripts (--analysis-freeze-tx), and the run records it. With
+// --from-study the wallets are the extraction's random sample (`random`) or
+// every sampled wallet (`all`).
 export async function cmdHistory(opts) {
   if (!opts.runId) throw new Error('--run-id is required');
   const ctx = await makeContext(opts);
@@ -144,7 +144,7 @@ export async function cmdHistory(opts) {
     const splitOf = (sa) => (samples && samples.has(sa) ? samples.get(sa).split : null);
     for (const sa of wallets) {
       if (samples && samples.has(sa) && samples.get(sa).excluded) throw new Error(`wallet ${sa}: the extraction's reconstruction check excluded it`);
-      if (splitOf(sa) === 'confirmation' && !opts.a6Tx) throw new Error(`wallet ${sa} is in the confirmation split; it is read only for a run given --a6-tx`);
+      if (splitOf(sa) === 'confirmation' && !opts.analysisFreezeTx) throw new Error(`wallet ${sa} is in the confirmation split; it is read only for a run given --analysis-freeze-tx`);
     }
     const frames = list(opts.window).length ? list(opts.window) : ['recent'];
     const dir = historyDir(ctx.network, opts.runId);
@@ -156,7 +156,7 @@ export async function cmdHistory(opts) {
       settings: ctx.settings,
       bytes: ctx.bytes.mode,
       studyTables: samples ? 'read' : 'not readable',
-      a6Tx: opts.a6Tx || null,
+      analysisFreezeTx: opts.analysisFreezeTx || null,
       confirmationWallets: wallets.filter((sa) => splitOf(sa) === 'confirmation').length,
       runs: []
     };
