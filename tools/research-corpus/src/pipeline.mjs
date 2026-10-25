@@ -151,6 +151,7 @@ export async function takeLock(client) {
 export async function runPipeline(opts) {
   const live = opts.liveFire || null;
   if (!live && opts.simWallets) throw refuse('refusing: --sim-wallets is for a live-fire run');
+  if (opts.scamList && !opts.scamClone) throw refuse('refusing: --scam-list needs --scam-clone, the clone its extract is read from');
   const t0 = performance.now();
   const say = opts.log || ((s) => process.stderr.write(s + '\n'));
   // A live-fire run prints only step names, outcomes and times.

@@ -26,7 +26,7 @@ import { captureScamList, loadScamList, fingerprintOf, descendsFrom, fingerprint
 import { fingerprint } from '../../src/strata-capture.mjs';
 import { freshDb } from '../lib/pglite.mjs';
 import { defaultSettings, sqlParams } from '../../src/params.mjs';
-import { scamRecheck } from '../../src/pipeline.mjs';
+import { scamRecheck, runPipeline } from '../../src/pipeline.mjs';
 import { mark } from '../../src/runner.mjs';
 
 const P = (b) => b.repeat(28);
@@ -104,6 +104,10 @@ test('the list: an entry file that is not JSON, or whose related_assets is not a
   assert.match(fingerprintOf(fpA.slice(0, 10) + fpA.slice(10).toUpperCase()).reason, /mixed case/);
   assert.match(fingerprintOf('addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x').reason, /prefix addr|payload/);
   assert.equal(fingerprintOf(fpA.toUpperCase()).fingerprint, fpA);
+});
+
+test('a run refuses a scam-list record given without the clone to read it from', async () => {
+  await assert.rejects(runPipeline({ runId: 'x', scamList: 'record.json', log: () => {} }), /--scam-list needs --scam-clone/);
 });
 
 test('a fingerprint db-sync stored that differs from CIP-14 of policy and name is caught', () => {
