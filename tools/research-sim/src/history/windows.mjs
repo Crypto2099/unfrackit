@@ -59,8 +59,10 @@ export async function windowOf(ctx, b1, b2) {
   return { first, last, lo, hi, tStart };
 }
 
-export async function recentWindow(ctx, snap) {
-  const r = (await q(ctx.client, ctx.blocks, 'recent_first_block', { snap_block: { type: 'int', value: snap.id }, seconds: { type: 'int', value: RECENT_SECONDS } }))[0];
+// The recent window, or, for a test, the window of the given number of days
+// ending at the snapshot.
+export async function recentWindow(ctx, snap, seconds = RECENT_SECONDS) {
+  const r = (await q(ctx.client, ctx.blocks, 'recent_first_block', { snap_block: { type: 'int', value: snap.id }, seconds: { type: 'int', value: seconds } }))[0];
   return windowOf(ctx, num(r.id), snap.id);
 }
 

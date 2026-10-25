@@ -166,39 +166,108 @@ export async function cmdNearCap(opts) {
   }
 }
 
+const ADA_BINS = [0, 1, 2, 5, 10, 20, 50, 100, 1000];
+const binOf = (lovelace) => {
+  let k = 0;
+  for (let i = 0; i < ADA_BINS.length; i++) if (lovelace >= BigInt(ADA_BINS[i]) * 1000000n) k = i;
+  return k;
+};
+
 export async function cmdCollateral(opts) {
   if (!opts.runId) throw new Error('--run-id is required');
   const ctx = await makeContext(opts);
   try {
-    const w = await recentWindow(ctx, ctx.snapshot);
+    // --days shortens the window for a test on a test network; the study's
+    // measurement is the recent window.
+    if (opts.days && ctx.network === 'mainnet') throw new Error('--days is for a test network only');
+    const w = await recentWindow(ctx, ctx.snapshot, opts.days ? Number(opts.days) * 86400 : undefined);
+    w.days = opts.days ? Number(opts.days) : 365;
     const p = { lo: { type: 'int', value: w.lo }, hi: { type: 'int', value: w.hi } };
-    const plan = opts.explain ? await explain(ctx.client, ctx.blocks, 'collateral_summary', p) : null;
+    let plans = null;
+    if (opts.explain) {
+      plans = {};
+      for (const n of ['collateral_redeemer_txs', 'collateral_inputs_valid', 'collateral_return_txs']) plans[n] = await explain(ctx.client, ctx.blocks, n, p);
+    }
     const t0 = performance.now();
-    const r = (await q(ctx.client, ctx.blocks, 'collateral_summary', p))[0];
-    const seconds = (performance.now() - t0) / 1000;
-    const n = (x) => (x === null ? 0 : Number(x));
-    const res = {
-      scriptTransactions: n(r.n_script_tx),
-      withoutCollateralRead: n(r.n_no_collateral_read),
-      withScriptCollateral: n(r.n_script_collateral),
-      measured: n(r.n_tx),
-      phase2Invalid: n(r.n_invalid),
-      under20Ada: n(r.n_under_20_ada),
-      shareUnder20Ada: n(r.n_tx) ? n(r.n_under_20_ada) / n(r.n_tx) : null,
-      withReturn: n(r.n_with_return),
-      shareWithReturn: n(r.n_tx) ? n(r.n_with_return) / n(r.n_tx) : null,
-      collateralInputs: n(r.n_inputs),
-      tokenInputs: n(r.n_token_inputs),
-      shareTokenInputs: n(r.n_inputs) ? n(r.n_token_inputs) / n(r.n_inputs) : null,
-      perTransactionBins: r.per_tx_bins,
-      perInputBins: r.per_input_bins,
-      perTransactionQuantiles: r.per_tx_quantiles
+    const timing = {};
+    const timedQ = async (name, params) => {
+      const s0 = performance.now();
+      const rows = await q(ctx.client, ctx.blocks, name, params);
+      timing[name] = (timing[name] || 0) + (performance.now() - s0) / 1000;
+      return rows;
     };
-    // The rule section 7.6 of the study states: the practice rule is
-    // confirmatory when more than half carry less than 20 ADA.
-    const summary = { command: 'collateral', network: ctx.network, snapshot: ctx.snapshot, window: w, result: res, practiceRuleConfirmatory: res.shareUnder20Ada === null ? null : res.shareUnder20Ada > 0.5, seconds, plan };
+    const red = new Set((await timedQ('collateral_redeemer_txs', p)).map((r) => Number(r.tx_id)));
+    const inv = new Set((await timedQ('collateral_invalid_txs', p)).map((r) => Number(r.tx_id)));
+    const script = new Set([...red, ...inv]);
+    const inputs = new Map([...script].map((x) => [x, []]));
+    for (const r of await timedQ('collateral_inputs_valid', p)) {
+      const x = Number(r.tx_id);
+      if (red.has(x)) inputs.get(x).push([Number(r.tx_out_id), Number(r.tx_out_index)]);
+    }
+    const invIds = [...inv];
+    for (let i = 0; i < invIds.length; i += 5000) {
+      for (const r of await timedQ('collateral_inputs_invalid', { ids: { type: 'intarr', value: invIds.slice(i, i + 5000) } })) inputs.get(Number(r.tx_id)).push([Number(r.tx_out_id), Number(r.tx_out_index)]);
+    }
+    const returns = new Set((await timedQ('collateral_return_txs', p)).map((r) => Number(r.tx_id)));
+    for (let i = 0; i < invIds.length; i += 5000) {
+      for (const r of await timedQ('collateral_invalid_returns', { ids: { type: 'intarr', value: invIds.slice(i, i + 5000) } })) returns.add(Number(r.tx_id));
+    }
+    // Outputs are read in the order db-sync stores them (by creating
+    // transaction id), which keeps each batch's index probes close together.
+    const refs = [...new Set([...inputs.values()].flat().map(([a, b]) => `${a}#${b}`))].sort((x, y) => {
+      const [a1, b1] = x.split('#').map(Number);
+      const [a2, b2] = y.split('#').map(Number);
+      return a1 - a2 || b1 - b2;
+    });
+    const outs = new Map();
+    const batch = Number(opts.batch || 2000);
+    for (let i = 0; i < refs.length; i += batch) {
+      const part = refs.slice(i, i + batch);
+      const rows = await timedQ('collateral_outputs', { tx_ids: { type: 'intarr', value: part.map((r) => Number(r.split('#')[0])) }, indexes: { type: 'int4arr', value: part.map((r) => Number(r.split('#')[1])) } });
+      for (const r of rows) outs.set(`${r.tx_id}#${r.index}`, { coin: BigInt(r.value), script: r.script_pay, tokens: r.has_tokens });
+    }
+    const acc = { scriptTransactions: script.size, withoutCollateralRead: 0, withScriptCollateral: 0, measured: 0, phase2Invalid: 0, under20Ada: 0, withReturn: 0, collateralInputs: 0, tokenInputs: 0 };
+    const perTx = ADA_BINS.map(() => 0);
+    const perInput = ADA_BINS.map(() => 0);
+    const coins = [];
+    for (const [x, ins] of inputs) {
+      const os = ins.map(([a, b]) => outs.get(`${a}#${b}`)).filter(Boolean);
+      if (!os.length || os.length !== ins.length) {
+        acc.withoutCollateralRead++;
+        continue;
+      }
+      if (os.some((o) => o.script)) {
+        acc.withScriptCollateral++;
+        continue;
+      }
+      const total = os.reduce((s, o) => s + o.coin, 0n);
+      acc.measured++;
+      if (inv.has(x)) acc.phase2Invalid++;
+      if (total < 20000000n) acc.under20Ada++;
+      if (returns.has(x)) acc.withReturn++;
+      acc.collateralInputs += os.length;
+      acc.tokenInputs += os.filter((o) => o.tokens).length;
+      perTx[binOf(total)]++;
+      for (const o of os) perInput[binOf(o.coin)]++;
+      coins.push(total);
+    }
+    coins.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const quantile = (pp) => (coins.length ? coins[Math.min(coins.length - 1, Math.ceil(pp * coins.length) - 1)] : null);
+    const res = {
+      ...acc,
+      shareUnder20Ada: acc.measured ? acc.under20Ada / acc.measured : null,
+      shareWithReturn: acc.measured ? acc.withReturn / acc.measured : null,
+      shareTokenInputs: acc.collateralInputs ? acc.tokenInputs / acc.collateralInputs : null,
+      perTransactionBins: ADA_BINS.map((a, i) => ({ fromAda: a, n: perTx[i] })),
+      perInputBins: ADA_BINS.map((a, i) => ({ fromAda: a, n: perInput[i] })),
+      perTransactionQuantiles: Object.fromEntries([0.05, 0.25, 0.5, 0.75, 0.95].map((pp) => [pp, quantile(pp)]))
+    };
+    const seconds = (performance.now() - t0) / 1000;
+    // The study's rule: the practice rule is confirmatory when more than half
+    // of these transactions carry less than 20 ADA of collateral.
+    const summary = { command: 'collateral', network: ctx.network, snapshot: ctx.snapshot, window: w, result: res, practiceRuleConfirmatory: res.shareUnder20Ada === null ? null : res.shareUnder20Ada > 0.5, seconds, statementSeconds: timing, plans };
     writeJson(join(runDir(ctx.network, opts.runId), 'collateral.json'), summary);
-    return { ...summary, print: { command: 'collateral', seconds, result: res } };
+    return { ...summary, print: { command: 'collateral', seconds, statementSeconds: timing, result: res } };
   } finally {
     await ctx.client.end();
   }
