@@ -32,7 +32,7 @@ import { buildManifest } from './manifest.mjs';
 import { check61 } from './check61.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
 import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, studyKeyFor } from './guards.mjs';
-import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog } from './checklog.mjs';
+import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog, SIM_KEPT } from './checklog.mjs';
 import { Koios } from './koios.mjs';
 import { loadScamList, descendsFrom, fingerprintMismatches } from './scam-list.mjs';
 
@@ -150,6 +150,7 @@ export async function takeLock(client) {
 
 export async function runPipeline(opts) {
   const live = opts.liveFire || null;
+  if (!live && opts.simWallets) throw refuse('refusing: --sim-wallets is for a live-fire run');
   const t0 = performance.now();
   const say = opts.log || ((s) => process.stderr.write(s + '\n'));
   // A live-fire run prints only step names, outcomes and times.
@@ -181,6 +182,8 @@ export async function runPipeline(opts) {
   let ownsLiveRun = false;
   // A study run on mainnet is logged too, as a query.
   let queryStart = null;
+  // The simulator's live-fire wallets, when asked for.
+  let simSelection = null;
   try {
     client = opts.client || (await connect(opts.db || {}));
     const meta = await dbMeta(client, blocks);
@@ -217,6 +220,14 @@ export async function runPipeline(opts) {
       if (!live.purpose || !live.purpose.trim()) throw refuse('refusing: a live-fire run needs --purpose');
       if (opts.freezeTx || opts.standInTx) throw refuse('refusing: a live-fire run uses a stated test h, never a freeze or stand-in transaction');
       if (opts.capture) throw refuse('refusing: a live-fire run may use --explain, not --capture');
+      // The simulator's live-fire wallets are picked by one live-fire run:
+      // every simulator check uses that run's test h and wallets, so on
+      // mainnet a second selection is refused.
+      if (live.simWallets && mainnet) {
+        const text = existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '';
+        const earlier = text.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === 'live-fire' && e.sim_wallets === SIM_KEPT);
+        if (earlier) throw refuse(`refusing: the simulator's live-fire wallets were picked by run ${earlier.run_id} (check-log entry ${earlier.seq}); every simulator check uses those`);
+      }
       // The hypotheses are frozen before the first live-fire run on mainnet.
       if (mainnet && !HEX32.test(opts.hypothesesTx || '')) throw refuse('refusing: a mainnet live-fire run needs --hypotheses-tx (the hypotheses freeze comes first)');
       const used = (await q(client, blocks, 'test_h_in_use', { h: { type: 'bytea', value: live.testH } }))[0];
@@ -511,6 +522,13 @@ export async function runPipeline(opts) {
     report.profile_check = numRow((await q(client, blocks, 'profile_check', runner.params))[0]);
     report.profiles = (await q(client, blocks, 'profile_counts')).map((r) => ({ ...r, n: num(r.n), nft_heavy: num(r.nft_heavy), ft_heavy: num(r.ft_heavy), dex_active: num(r.dex_active) }));
 
+    // The simulator's live-fire wallets, picked from this run's draw order;
+    // the selection is written once the run's tables are dropped.
+    if (live && live.simWallets) {
+      await runner.run('sim_wallets');
+      simSelection = (await q(client, blocks, 'sim_wallet_rows')).map((r) => ({ stake_address: r.stake_address, conditions: r.conditions.map(Number), frames: r.frames }));
+    }
+
     if (live) {
       result = { runId, dir, mode, live: true };
       return result;
@@ -564,6 +582,21 @@ export async function runPipeline(opts) {
           outputs = `deletion failed: ${sanitizeError(e)}`;
         }
       }
+      // The selection of the simulator's wallets: a private file in the run
+      // directory, kept for the simulator's checks until cleanup deletes it;
+      // the log records only that it was written.
+      let simOutcome = null;
+      if (live.simWallets) {
+        simOutcome = 'none written';
+        if (!error && simSelection && dir) {
+          try {
+            writeJson(join(dir, 'sim', 'wallets.json'), { run_id: opts.runId, network, test_h: live.testH, snapshot: report.snapshot ? { block_no: report.snapshot.block_no, hash: report.snapshot.hash } : null, selected_at: new Date().toISOString(), wallets: simSelection });
+            simOutcome = SIM_KEPT;
+          } catch (e) {
+            simOutcome = `write failed: ${sanitizeError(e)}`;
+          }
+        }
+      }
       const steps = runner ? runner.timings.filter((t) => t.kind === 'step').map((t) => ({ name: t.name, ok: true, ms: Math.round(t.ms) })) : [];
       if (runner && runner.failed) steps.push({ name: runner.failed.name, ok: false, ms: Math.round(runner.failed.ms) });
       const entry = {
@@ -581,7 +614,8 @@ export async function runPipeline(opts) {
         parse: parseCoverage(report),
         explain: !!opts.explain,
         wallet_level_output: outputs,
-        study_tables_dropped: dropped !== null
+        study_tables_dropped: dropped !== null,
+        ...(live.simWallets ? { sim_wallets: simOutcome } : {})
       };
       if (network && startEntry) {
         const logged = appendEntry(network, 'live-fire', entry);
@@ -625,6 +659,9 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
       if (reg) n = (await dropRunTables(client, runId)).length;
       const work = join(runDir(network, runId), 'work');
       if (existsSync(work)) rmSync(work, { recursive: true, force: true });
+      // The simulator's wallets, when this run picked them.
+      const sim = join(runDir(network, runId), 'sim');
+      if (existsSync(sim)) rmSync(sim, { recursive: true, force: true });
     } catch (e) {
       outcome = 'failed';
       error = sanitizeError(e);

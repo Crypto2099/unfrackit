@@ -85,6 +85,11 @@ export function redactCommand(argv) {
 
 export const sanitizeError = (e) => sanitize(e && e.message !== undefined ? e.message : e, { refusal: e instanceof Refusal });
 
+// The end entry's word for a live-fire run whose selection of the
+// simulator's wallets was written: wallet-level output kept for the
+// simulator's checks, reported until cleanup deletes it.
+export const SIM_KEPT = 'kept for the simulator checks';
+
 function readLines(path) {
   if (!existsSync(path)) return { text: '', entries: [] };
   const text = readFileSync(path, 'utf8');
@@ -144,6 +149,7 @@ export function verifyLog(network) {
       for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
     }
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
+    if (e.type === 'live-fire' && e.sim_wallets === SIM_KEPT) open.set(e.run_id, e.seq);
     if ((e.type === 'live-fire' || e.type === 'a1-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
       failedDeletions.push({ run_id: e.run_id, seq: e.seq, wallet_level_output: e.wallet_level_output });
     }

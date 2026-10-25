@@ -47,6 +47,8 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --test-h <hex>              the stated test value of h for a live-fire run (32 bytes)
       --purpose <text>            what the live-fire run checks; written to the check log
       --keep-for-debug            keep a live-fire run's study tables (wallet-level output) after it ends
+      --sim-wallets               live-fire: pick the simulator's live-fire wallets (at most ten, by the run's
+                                  test h) and keep them in sim/wallets.json until cleanup; once on mainnet
       --explain                   plan every statement with plain EXPLAIN before running it; numbers stripped
       --strata <file>             the strata list (default data/strata-mainnet.json; mainnet: that file only)
       --scam-clone <dir>          a git clone of the scam list's repository, holding the record's commit;
@@ -107,7 +109,7 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
 Connection: --host --port --database --user, or PGHOST PGPORT PGDATABASE PGUSER; the password comes
 from the file PGPASSFILE names. Outputs: \${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/.`;
 
-const FLAGS = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain']);
+const FLAGS = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain', 'sim-wallets']);
 
 export function parseArgs(argv) {
   const out = { _: [], set: [], redo: [], stake: [], nodeStake: [], case: [] };
@@ -323,7 +325,8 @@ export function runOptions(a, command) {
     codeManifest: a.codeManifest,
     drawkey: a.drawkey,
     standInTx: lower(a.standInTx),
-    liveFire: a.liveFire ? { testH: lower(a.testH), purpose: a.purpose, keep: !!a.keepForDebug } : null,
+    liveFire: a.liveFire ? { testH: lower(a.testH), purpose: a.purpose, keep: !!a.keepForDebug, simWallets: !!a.simWallets } : null,
+    simWallets: !!a.simWallets,
     explain: !!a.explain,
     strataList: a.strata || DEFAULT_STRATA,
     strataGiven: !!a.strata,

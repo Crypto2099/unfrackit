@@ -40,6 +40,7 @@ export const FIXED = {
   nft_heavy: 100, // section 5.9
   ft_heavy: 10, // section 5.9
   dex_active: 3, // section 5.9
+  sim_utxo_over: 1000, // the simulator's live-fire wallets, condition 7: more than 1,000 UTxOs at the snapshot
   security_k: 2160 // confirm the snapshot hash once 2,160 more blocks exist (mainnet's security parameter)
 };
 
