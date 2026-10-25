@@ -38,6 +38,7 @@ import { loadBundles } from './txdata.mjs';
 import { spendEvent, timeOf, IntentCheck } from './intent.mjs';
 
 export const FORMAT = 'unfrackit-research-sim history 1';
+const BUNDLE_BATCH = 400;
 
 export function bursts(spends, settings) {
   // spends: [{ txId, hash, blockTime, consumed: [refs] }] in transaction order.
@@ -175,7 +176,20 @@ export async function walletHistory(ctx, w, out) {
   const spendIds = ids.filter(isSpend);
   await loadExtras(ctx, [...startRows, ...[...created.values()].flat()]);
   const rows = await txRows(ctx, ids);
-  const bundles = await loadBundles(ctx, spendIds);
+  // Spends are read in batches as the events reach them, so a wallet with
+  // thousands of spends never holds them all decoded at once.
+  const bundles = new Map();
+  let nextSpend = 0;
+  const bundleOf = async (id) => {
+    if (!bundles.has(id)) {
+      bundles.clear();
+      const k = spendIds.indexOf(id, nextSpend);
+      const part = spendIds.slice(k, k + BUNDLE_BATCH);
+      for (const [x, b] of await loadBundles(ctx, part)) bundles.set(x, b);
+      nextSpend = k + part.length;
+    }
+    return bundles.get(id);
+  };
 
   const holdStart = holdingsOf(startRows);
   const holdEnd = holdingsOf(endRows);
@@ -187,7 +201,7 @@ export async function walletHistory(ctx, w, out) {
   for (const id of ids) {
     const row = rows.get(id);
     if (isSpend(id)) {
-      const b = bundles.get(id);
+      const b = await bundleOf(id);
       b.lifeConsumed = (consumed.get(id) || []).map((r) => r.ref);
       spends.push({ txId: id, hash: row.hash, blockTime: Number(row.time), consumed: b.consumed });
       const ev = spendEvent(ctx, wctx, b);

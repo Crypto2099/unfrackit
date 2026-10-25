@@ -258,11 +258,18 @@ SELECT m.tx_id, encode(ma.policy, 'hex') AS policy, encode(ma.name, 'hex') AS na
   JOIN public.multi_asset ma ON ma.id = m.ident
  WHERE m.tx_id = ANY({{ids}});
 
--- Whether the study schema's tables are readable by this role.
+-- Whether the study schema's tables are readable by this role. to_regclass
+-- itself needs USAGE on the schema, so it runs only when the role has it.
 -- @query study_readable
-SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'study')
-            THEN has_schema_privilege(current_user, 'study', 'USAGE') ELSE false END AS usage,
-       to_regclass('study.frame') IS NOT NULL AS has_frame;
+WITH u AS (
+  SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'study')
+              THEN has_schema_privilege(current_user, 'study', 'USAGE') ELSE false END AS usage
+)
+SELECT u.usage,
+       CASE WHEN NOT u.usage THEN false
+            WHEN to_regclass('study.frame') IS NULL OR to_regclass('study.sample') IS NULL THEN false
+            ELSE has_table_privilege(current_user, 'study.sample', 'SELECT') END AS has_frame
+  FROM u;
 
 -- The extraction's study tables (tools/research-corpus, sql/05-04-draw.sql,
 -- 05-05-franken.sql, 06-01-txo.sql), read when this role can read them: the
