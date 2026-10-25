@@ -32,7 +32,11 @@
 -- peak window's start or end (peak); held UTxOs count (x9_count_held). The
 -- draw's conditions: (b) at least 5 spends in the window; (c) 100 or more
 -- tokens, read as distinct assets at the reference block, for the peak frame
--- at its start or end (x8_measure selects distinct, units or nft).
+-- at its start or end (x8_measure selects distinct, units or nft); (d)
+-- fragmented: a token-holding wallet some fungible asset of which (by the
+-- classification rule, lib-cip67.sql) sits on 10 or more of its UTxOs
+-- (frag_min_utxos), held UTxOs included, at the snapshot (recent) or at the
+-- peak window's start or end (peak).
 --
 -- The draw and split keys: SHA-256 of the ASCII bytes of "draw" (or "split"),
 -- then the 32 raw bytes of h, then the 28 raw bytes of the stake credential's
@@ -52,7 +56,8 @@ WITH rec AS (
          coalesce(p.n_pay, 0) AS n_pay, coalesce(p.n_pay_key, 0) AS n_pay_key,
          coalesce(s.n_assets, 0) AS n_assets_a, coalesce(s.n_assets, 0) AS n_assets_b,
          coalesce(s.n_nft, 0) AS n_nft_a, coalesce(s.n_nft, 0) AS n_nft_b,
-         coalesce(s.n_units, 0) AS n_units_a, coalesce(s.n_units, 0) AS n_units_b
+         coalesce(s.n_units, 0) AS n_units_a, coalesce(s.n_units, 0) AS n_units_b,
+         coalesce(s.max_ft_utxos, 0) AS max_ft_utxos_a, coalesce(s.max_ft_utxos, 0) AS max_ft_utxos_b
     FROM study.activity a
     LEFT JOIN study.state s ON s.point = 'snap' AND s.sa_id = a.sa_id
     LEFT JOIN study.paycount p ON p.point = 'snap' AND p.sa_id = a.sa_id
@@ -64,7 +69,8 @@ pk AS (
          coalesce(p.n_pay, 0), coalesce(p.n_pay_key, 0),
          coalesce(b.n_assets, 0), coalesce(e.n_assets, 0),
          coalesce(b.n_nft, 0), coalesce(e.n_nft, 0),
-         coalesce(b.n_units, 0), coalesce(e.n_units, 0)
+         coalesce(b.n_units, 0), coalesce(e.n_units, 0),
+         coalesce(b.max_ft_utxos, 0), coalesce(e.max_ft_utxos, 0)
     FROM study.activity a
     LEFT JOIN study.state b ON b.point = 'peak_start' AND b.sa_id = a.sa_id
     LEFT JOIN study.state e ON e.point = 'peak_end' AND e.sa_id = a.sa_id
@@ -83,6 +89,7 @@ g AS (
          (CASE {{x8_measure}} WHEN 'units' THEN greatest(f.n_units_a, f.n_units_b)
                               WHEN 'nft' THEN greatest(f.n_nft_a, f.n_nft_b)
                               ELSE greatest(f.n_assets_a, f.n_assets_b) END) >= {{assets_c_min}} AS ge100,
+         ((f.n_assets_a >= 1 OR f.n_assets_b >= 1) AND greatest(f.max_ft_utxos_a, f.max_ft_utxos_b) >= {{frag_min_utxos}}) AS frag,
          (f.n_tx > {{heavy_tx}}) AS heavy
     FROM f JOIN study.cred c ON c.sa_id = f.sa_id
 )
@@ -152,6 +159,7 @@ SELECT frame,
        count(*) FILTER (WHERE eligible AND NOT tok) AS eligible_ada_only,
        count(*) FILTER (WHERE eligible AND tok AND ge5) AS eligible_tok_ge5,
        count(*) FILTER (WHERE eligible AND tok AND ge100) AS eligible_tok_ge100,
+       count(*) FILTER (WHERE eligible AND frag) AS eligible_fragmented,
        count(*) FILTER (WHERE eligible AND heavy) AS eligible_over_5000_tx,
        count(*) FILTER (WHERE eligible AND n_spends_key <> n_spends_any) AS eligible_x2_differs,
        count(*) FILTER (WHERE NOT is_script AND frame = 'recent' AND NOT s3) AS emptied_during_window,

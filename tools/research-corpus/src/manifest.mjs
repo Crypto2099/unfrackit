@@ -22,7 +22,7 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
   const key = loadKey(hmacKeyPath || undefined);
   const rows = (
     await client.query(`
-      SELECT s.frame, s.kind, s.stratum, s.sa_id, s.draw_rank, s.prevalence_member, s.split,
+      SELECT s.frame, s.kind, s.stratum, s.sa_id, s.draw_rank, s.prevalence_member, s.split, coalesce(s.fragmented, false) AS fragmented,
              c.hash_raw, c.view, coalesce(k.agree, false) AS check_61_agree,
              coalesce(fr.any_flag, false) AS franken_any
         FROM study.sample s
@@ -33,13 +33,13 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
   ).rows;
   const byInput = (r) => (run.settings.x15_bech32 ? r.view : r.hash_raw);
   const samples = new Map();
-  const raw = ['frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any'];
+  const raw = ['frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any,fragmented'];
   for (const r of rows) {
     const id = identifier(key, byInput(r));
     const k = `${r.frame}|${r.kind}|${r.stratum}`;
     if (!samples.has(k)) samples.set(k, { frame: r.frame, kind: r.kind, stratum: r.stratum, ids: [] });
     samples.get(k).ids.push({ id, split: r.split, excluded_6_1: !r.check_61_agree, prevalence_member: r.prevalence_member });
-    raw.push([r.frame, r.kind, JSON.stringify(r.stratum), r.sa_id, r.view, r.draw_rank, r.prevalence_member, r.split, r.check_61_agree, r.franken_any].join(','));
+    raw.push([r.frame, r.kind, JSON.stringify(r.stratum), r.sa_id, r.view, r.draw_rank, r.prevalence_member, r.split, r.check_61_agree, r.franken_any, r.fragmented].join(','));
   }
   writePrivate(join(dir, 'raw', 'sample.csv'), raw.join('\n') + '\n');
   const list = [...samples.values()].map((s) => {

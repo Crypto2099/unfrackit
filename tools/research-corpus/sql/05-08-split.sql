@@ -32,6 +32,12 @@ UPDATE study.sample x
           FROM (SELECT DISTINCT s.sa_id, f.split_key
                   FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id) u) r
  WHERE x.sa_id = r.sa_id;
+-- Every sampled wallet carries the fragmentation flag of requirement (d) in
+-- its frame, strata included, so outcomes can be reported by it.
+UPDATE study.sample x
+   SET fragmented = f.frag
+  FROM study.frame f
+ WHERE f.frame = x.frame AND f.sa_id = x.sa_id;
 
 -- The driver binds the case wallets (bech32 stake addresses).
 -- @query case_wallet_load
@@ -71,7 +77,8 @@ SELECT frame, kind, stratum, count(*) AS n,
        count(*) FILTER (WHERE split = 'exploration') AS n_exploration,
        count(*) FILTER (WHERE split = 'confirmation') AS n_confirmation,
        count(*) FILTER (WHERE split IS NULL) AS n_unassigned,
-       count(*) FILTER (WHERE excluded_6_1) AS n_excluded_6_1
+       count(*) FILTER (WHERE excluded_6_1) AS n_excluded_6_1,
+       count(*) FILTER (WHERE fragmented) AS n_fragmented
   FROM study.sample GROUP BY frame, kind, stratum ORDER BY frame DESC, kind, stratum;
 
 -- The split over all sampled credentials, each counted once.

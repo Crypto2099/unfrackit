@@ -111,15 +111,17 @@ Each step runs in one transaction with its row in `study.step` (run ID, name, st
 | `cred` | `05-04-credentials.sql` | every stake credential with its header type and network tag, checked |
 | `txo`, `txo_asset`, `asset` | `06-01-txo.sql` | the life table of every output with a stake credential; its assets; every asset's CIP-67 label |
 | `activity` | `05-04-activity.sql` | receipts and spend events per window |
-| `state`, `paycount` | `05-05-exclusions.sql` | UTxO count, lovelace, script-held lovelace, assets and payment credentials (all, and key credentials only) at the reference blocks |
-| `frame`, `flow` | `05-04-frames.sql` | both frames with every stage, the draw and split keys; the flow table, whose first stage starts from the stake credentials with at least one transaction output at or before the snapshot (db-sync's `stake_address` has no transaction ID, so a credential's first appearance is read from its outputs, in the life table `study.txo`, which holds exactly the outputs with a stake credential up to the snapshot), so the count does not depend on when the run happens |
-| `draw` | `05-04-draw.sql` | draw order with running counts; the stopping points; the random and ADA-only samples |
+| `state`, `paycount` | `05-05-exclusions.sql` | UTxO count, lovelace, script-held lovelace, assets, the most UTxOs one fungible asset sits on, and payment credentials (all, and key credentials only) at the reference blocks |
+| `frame`, `flow` | `05-04-frames.sql` | both frames with every stage, the draw conditions (b) to (d), the draw and split keys; the flow table, whose first stage starts from the stake credentials with at least one transaction output at or before the snapshot (db-sync's `stake_address` has no transaction ID, so a credential's first appearance is read from its outputs, in the life table `study.txo`, which holds exactly the outputs with a stake credential up to the snapshot), so the count does not depend on when the run happens |
+| `draw` | `05-04-draw.sql` | draw order with running counts of the four requirements; the stopping points; the random and ADA-only samples |
 | `strata_list_table`, `ft_floor`, `nft_top`, `strata` | `05-04-strata.sql` | the named rows and the CoinGecko candidates; the fungible floor and the ten candidates taken; the frozen NFT query's ten policies; the strata samples |
 | `split`, `sample_wallets` | `05-08-split.sql` | one exploration or confirmation label per sampled credential; the sampled and case wallets |
 | `check_61_table` | `06-01-check.sql` | the three-way check of every sampled wallet at the snapshot; `excluded_6_1` on every sample row |
 | `unfrackit_tx`, `prior_flags` | `05-06-prior-treated.sql` | label-674 UnFrack.It messages; UnFrack.It and Evolution flags per wallet |
 | `franken` | `05-05-franken.sql` | franken flags per payment credential |
 | `script_tx`, `profile` | `05-09-profile-inputs.sql` | the eight features of the profile procedure: spend events (f1), DEX, marketplace and other market interactions (f2 to f4), receipts that consume none of the wallet's outputs (f5), distinct NFTs and fungible assets held (f6, f7) and UTxOs at the window's end (f8); and the descriptive cut-point profile and flags |
+
+The random sample of each frame takes eligible keys in draw order until all four requirements hold: (a) 2,400 token-holding wallets; (b) 1,000 of them with at least 5 spend events in the window; (c) 600 of them holding 100 or more distinct assets; (d) 600 of them fragmented. A token-holding wallet is fragmented when some fungible asset it holds (by the classification rule, over everything the wallet holds of it) sits on 10 or more of its UTxOs, held UTxOs included, at the snapshot for the recent frame and at the peak window's start or end for the peak frame. Every sample row, strata included, carries the wallet's fragmentation flag in its frame, and the draw summary reports the running count of (d) beside the others.
 
 Every count over the sample after `check_61_table` leaves out the wallets the check excluded, and the split counts report them beside the rest.
 
@@ -211,7 +213,7 @@ The strata list has three parts, processed in this order, each part's strata ski
 
 ## Settings
 
-The numbers the pre-registration fixes (73 epochs, the Mary hard fork as the start of the peak search, 365 days, the guard of 200,000, the targets 2,400, 1,000 and 600, the 1,200 ADA-only wallets, 50 per stratum, ten NFT policies, ten fungible tokens and their floor of 1,000 holders, the exclusion caps 20,000 UTxOs, 200 payment credentials and half the value, the profile cut points) are fixed settings in `src/params.mjs`.
+The numbers the pre-registration fixes (73 epochs, the Mary hard fork as the start of the peak search, 365 days, the guard of 200,000, the targets 2,400, 1,000, 600 and 600, the 10 UTxOs that make a wallet fragmented, the 1,200 ADA-only wallets, 50 per stratum, ten NFT policies, ten fungible tokens and their floor of 1,000 holders, the exclusion caps 20,000 UTxOs, 200 payment credentials and half the value, the profile cut points) are fixed settings in `src/params.mjs`.
 
 Where the pre-registration's text admits more than one reading, the reading is a setting named `x1_` to `x21_`, and its default is the reading this code uses. A different answer changes one value through `--set`, not the SQL.
 
@@ -221,7 +223,7 @@ Where the pre-registration's text admits more than one reading, the reading is a
 | `x2_any` | false | A spend consumes a wallet output at a key payment credential; a DEX order at a script address carrying the wallet's stake key, consumed by a third party, is not the wallet's spend. true counts any wallet output. Both counts are kept. |
 | `x3_after_first` | false | The state at a window's start is as of the block before its first block. true uses the state after the first block. |
 | `x5_reward29` | false | The draw and split hash `"draw"` (or `"split"`), then the 32 bytes of h, then the 28-byte credential. true hashes the 29-byte reward address instead. |
-| `x7_prefix` | true | Every token-holding wallet up to the stopping point joins the random sample, a prefix of draw order. false admits only wallets meeting (b) or (c) after (a) is reached. |
+| `x7_prefix` | true | Every token-holding wallet up to the stopping point joins the random sample, a prefix of draw order. false admits only wallets meeting (b), (c) or (d) after (a) is reached. |
 | `x8_measure` | distinct | "100 or more tokens" counts distinct assets; `units` sums quantities; `nft` counts non-fungible assets. |
 | `x9_count_held` | true | Held UTxOs count toward token-holding, asset counts, UTxO counts and lovelace. |
 | `x10_skip_random_only` | false | A stratum skips wallets already in the frame's random, ADA-only and earlier strata samples. true skips only the random sample. |

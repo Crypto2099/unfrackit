@@ -131,7 +131,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(own.listed, 3);
     assert.deepEqual(readdirSync(b.dir).sort(), filesBefore);
     // The raw list carries no published identifier.
-    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any');
+    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any,fragmented');
 
     // h is the epoch nonce of the stand-in's epoch rule, read twice.
     const dk = b.report.freeze.draw;
@@ -188,6 +188,13 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       const n = Number((await c.query('SELECT count(*) AS n FROM study.sample WHERE sa_id = $1', [sa[k]])).rows[0].n);
       assert.ok(n >= 1, `${k} is in the sample`);
     }
+    // Requirement (d): S3 and M2 hold NFTs one unit to a UTxO, so neither is
+    // fragmented; every sample row carries its frame's flag.
+    assert.equal(s3.frag, false);
+    assert.equal(m2.frag, false);
+    const flagMismatch = (await c.query(`SELECT count(*) AS n FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id WHERE s.fragmented IS DISTINCT FROM f.frag`)).rows[0];
+    assert.equal(Number(flagMismatch.n), 0);
+    for (const d of b.report.draw) assert.ok(d.n_d !== undefined && d.n_d <= d.n_a, `${d.frame}: (d) counts token-holding wallets`);
     const s3peak = await row('peak', sa.S3);
     const franken = (await c.query('SELECT sa_id, bool_or(flagged) AS f, max(n_creds) AS n FROM study.franken WHERE sa_id = ANY($1) GROUP BY sa_id', [[sa.S1, sa.S3, sa.M2]])).rows;
     assert.equal(franken.length, 3);

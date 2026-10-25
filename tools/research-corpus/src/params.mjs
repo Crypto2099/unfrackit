@@ -16,6 +16,8 @@ export const FIXED = {
   target_a: 2400, // section 5.4 (a)
   target_b: 1000, // section 5.4 (b)
   target_c: 600, // section 5.4 (c)
+  target_d: 600, // the random sample's requirement (d): fragmented wallets
+  frag_min_utxos: 10, // requirement (d): a fungible asset on 10 or more of the wallet's UTxOs makes it fragmented
   spends_b_min: 5, // section 5.4: at least 5 spends in the window
   assets_c_min: 100, // section 5.4: 100 or more tokens
   ada_only_n: 1200, // section 5.4

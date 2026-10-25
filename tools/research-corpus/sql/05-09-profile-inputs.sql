@@ -28,7 +28,7 @@
 -- script address; it is a DEX interaction if the wallet's net movement in the
 -- transaction includes a fungible asset, otherwise a marketplace interaction
 -- if it includes an NFT, otherwise other. Holdings at the window's start and
--- end are classed by the rule of section 6.2 at that block.
+-- end are classed by the classification rule (lib-cip67.sql) at that block.
 --
 -- The fixed cut points below (spends and market interactions per month) and
 -- the profile column they give are a descriptive field kept beside the

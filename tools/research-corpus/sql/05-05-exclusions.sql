@@ -12,6 +12,8 @@
 --
 --   n_utxo, lovelace, n_assets, n_nft, n_units   at the point; held UTxOs count
 --                                                by default (x9_count_held)
+--   max_ft_utxos                                 at the point; held UTxOs always
+--                                                count
 --   lovelace_all, lovelace_script_pay           every UTxO at the point, for the
 --                                                script-value exclusion
 --   n_pay                                        distinct payment credentials
@@ -28,6 +30,12 @@
 -- n_assets counts distinct assets (policy and name). n_nft counts the assets
 -- held as non-fungible by the classification rule of section 6.2 over the
 -- wallet's total quantity (study.is_fungible_l). n_units sums quantities.
+-- max_ft_utxos is the largest number of the wallet's UTxOs that one fungible
+-- asset sits on, held UTxOs always included and the asset classed by the
+-- classification rule (lib-cip67.sql) over everything the wallet holds of it;
+-- requirement (d) of the draw reads it (05-04-frames.sql). An asset on two or more UTxOs is
+-- held in two or more units, so the rule always finds it fungible there; the
+-- class is applied all the same, as the definition states it.
 -- Aggregation runs in two levels, (credential, asset) then credential, so each
 -- level is a hash aggregate.
 
@@ -54,20 +62,26 @@ v AS (
     FROM u GROUP BY point, sa_id
 ),
 h AS (
-  SELECT u.point, u.sa_id, a.ident, sum(a.quantity) AS qty
+  -- qty follows x9_count_held; qty_all and n_utxo_all count every UTxO.
+  SELECT u.point, u.sa_id, a.ident,
+         sum(a.quantity) FILTER (WHERE {{x9_count_held}} OR NOT (u.has_datum OR u.has_ref_script OR u.script_pay)) AS qty,
+         sum(a.quantity) AS qty_all,
+         count(*) AS n_utxo_all
     FROM u JOIN study.txo_asset a ON a.tx_out_id = u.tx_out_id
-   WHERE {{x9_count_held}} OR NOT (u.has_datum OR u.has_ref_script OR u.script_pay)
    GROUP BY u.point, u.sa_id, a.ident
 ),
 k AS (
-  SELECT h.point, h.sa_id, count(*) AS n_assets,
-         count(*) FILTER (WHERE NOT study.is_fungible_l(s.label, h.qty)) AS n_nft,
-         sum(h.qty) AS n_units
+  SELECT h.point, h.sa_id,
+         count(*) FILTER (WHERE h.qty IS NOT NULL) AS n_assets,
+         count(*) FILTER (WHERE h.qty IS NOT NULL AND NOT study.is_fungible_l(s.label, h.qty)) AS n_nft,
+         sum(h.qty) AS n_units,
+         max(h.n_utxo_all) FILTER (WHERE study.is_fungible_l(s.label, h.qty_all)) AS max_ft_utxos
     FROM h JOIN study.asset s ON s.ident = h.ident
    GROUP BY h.point, h.sa_id
 )
 SELECT v.point, v.sa_id, v.n_utxo, v.lovelace, v.lovelace_all, v.lovelace_script_pay,
-       coalesce(k.n_assets, 0) AS n_assets, coalesce(k.n_nft, 0) AS n_nft, coalesce(k.n_units, 0) AS n_units
+       coalesce(k.n_assets, 0) AS n_assets, coalesce(k.n_nft, 0) AS n_nft, coalesce(k.n_units, 0) AS n_units,
+       coalesce(k.max_ft_utxos, 0) AS max_ft_utxos
   FROM v LEFT JOIN k ON k.point = v.point AND k.sa_id = v.sa_id;
 CREATE INDEX state_point_sa ON study.state (point, sa_id);
 ANALYZE study.state;

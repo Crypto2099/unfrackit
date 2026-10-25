@@ -4,7 +4,9 @@
 // The draw and split digests computed by the frame step's SQL against Node's
 // crypto for fixed inputs (both readings of x5_reward29) and against a
 // published test vector; the frame stages, the draw (the guard path and the
-// path where all three targets are reached) and the split on a fixture small
+// path where all four targets are reached, requirement (d) last), the
+// fragmentation flag on every sample row, the x7_prefix alternative, the
+// state step's fragmentation measure, and the split on a fixture small
 // enough to check by hand.
 
 import { test } from 'node:test';
@@ -26,7 +28,7 @@ async function fixture(db, n) {
   await db.exec(`
     CREATE TABLE study.cred (sa_id bigint PRIMARY KEY, hash_raw bytea, cred_hash bytea, header_type int, network_tag int, is_script boolean, script_hash bytea, view text);
     CREATE TABLE study.activity (win text, sa_id bigint, n_tx_key bigint, n_tx_any bigint, n_spends_key bigint, n_spends_any bigint, n_receipts bigint, n_tx bigint, n_spends bigint);
-    CREATE TABLE study.state (point text, sa_id bigint, n_utxo bigint, lovelace numeric, lovelace_all numeric, lovelace_script_pay numeric, n_assets bigint, n_nft bigint, n_units numeric);
+    CREATE TABLE study.state (point text, sa_id bigint, n_utxo bigint, lovelace numeric, lovelace_all numeric, lovelace_script_pay numeric, n_assets bigint, n_nft bigint, n_units numeric, max_ft_utxos bigint);
     CREATE TABLE study.paycount (point text, sa_id bigint, n_pay bigint, n_pay_key bigint);
     CREATE TABLE public.tx_out (id bigint PRIMARY KEY, tx_id bigint, stake_address_id bigint, index int DEFAULT 0, value numeric DEFAULT 1000000,
                                 payment_cred bytea, address_has_script boolean DEFAULT false, data_hash bytea, inline_datum_id bigint, reference_script_id bigint);
@@ -42,11 +44,14 @@ async function fixture(db, n) {
     for (const win of ['recent', 'peak']) await db.query(`INSERT INTO study.activity VALUES ($1, $2, $3, $3, $3, $3, 0, $3, $3)`, [win, i, i]);
     // Credential 4 holds nothing at the snapshot; 5 has 30,000 UTxOs; 6 has 300
     // key payment credentials; 7 has most of its value at script credentials;
-    // even credentials hold one token, 10 holds 150 distinct assets.
+    // even credentials hold one token, 10 holds 150 distinct assets; every
+    // credential divisible by 4 has a fungible asset on 12 UTxOs (fragmented),
+    // at the peak window's end only for 28.
     const nUtxo = i === 4 ? 0 : i === 5 ? 30000 : 2;
     const tok = i === 10 ? 150 : i % 2 === 0 ? 1 : 0;
     for (const point of ['snap', 'peak_start', 'peak_end']) {
-      if (nUtxo > 0) await db.query(`INSERT INTO study.state VALUES ($1, $2, $3, 100, 100, $4::numeric, $5::bigint, $5::bigint, $5::bigint::numeric)`, [point, i, nUtxo, i === 7 ? 60 : 0, tok]);
+      const maxFt = i % 4 === 0 && (i !== 28 || point === 'peak_end') ? 12 : tok ? 1 : 0;
+      if (nUtxo > 0) await db.query(`INSERT INTO study.state VALUES ($1, $2, $3, 100, 100, $4::numeric, $5::bigint, $5::bigint, $5::bigint::numeric, $6::bigint)`, [point, i, nUtxo, i === 7 ? 60 : 0, tok, maxFt]);
     }
     // 6 has 300 key payment credentials; 11 has 300 payment credentials, only
     // one of them a key, so the key-credential cap keeps it.
@@ -88,7 +93,7 @@ test('x5_reward29 hashes the 29-byte reward address', async () => {
 test('stages, flow, draw order, samples and split on the fixture', async () => {
   const { db, runBlock, rows } = await freshDb();
   await fixture(db, 12);
-  const p = params({ guard: 6, target_a: 2, target_b: 1, target_c: 1, ada_only_n: 2 });
+  const p = params({ guard: 6, target_a: 2, target_b: 1, target_c: 1, target_d: 1, ada_only_n: 2 });
   await runBlock('frame', p);
   await runBlock('txo', p);
   await runBlock('flow', p);
@@ -108,17 +113,18 @@ test('stages, flow, draw order, samples and split on the fixture', async () => {
   assert.equal(Number(peakFlow[0].n_removed), 0, 'stage 3 applies to the recent frame only');
 
   await runBlock('draw', p);
-  const order = await rows(`SELECT sa_id, k, tok, ge5, ge100 FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
+  const order = await rows(`SELECT sa_id, k, tok, ge5, ge100, frag FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
   const keys = await rows(`SELECT sa_id, draw_key FROM study.frame WHERE frame = 'recent' AND eligible ORDER BY draw_key`);
   assert.deepEqual(order.map((r) => r.sa_id), keys.map((r) => r.sa_id));
   // Expected stopping point from the running counts, computed here.
-  let na = 0, nb = 0, nc = 0, kAll = null, kA = null;
+  let na = 0, nb = 0, nc = 0, nd = 0, kAll = null, kA = null;
   for (const r of order) {
     if (r.tok) na++;
     if (r.tok && r.ge5) nb++;
     if (r.tok && r.ge100) nc++;
+    if (r.tok && r.frag) nd++;
     if (kA === null && na >= 2) kA = Number(r.k);
-    if (kAll === null && na >= 2 && nb >= 1 && nc >= 1) kAll = Number(r.k);
+    if (kAll === null && na >= 2 && nb >= 1 && nc >= 1 && nd >= 1) kAll = Number(r.k);
   }
   const kStop = kAll ?? Math.min(6, order.length);
   const random = await rows(`SELECT sa_id, draw_rank, prevalence_member FROM study.sample WHERE frame = 'recent' AND kind = 'random' ORDER BY draw_rank`);
@@ -161,36 +167,53 @@ test('the draw and split keys reproduce the published test vector', async () => 
   assert.deepEqual(r, { d: VECTOR.draw, s: VECTOR.split });
 });
 
-test('all three targets reached: the sample is the prefix up to k_all, prevalence up to k_a', async () => {
+test('all four targets reached: the sample is the prefix up to k_all, prevalence up to k_a', async () => {
   const { db, runBlock, rows } = await freshDb();
   await fixture(db, 40);
-  // Even credentials hold a token, 10 holds 150 assets; spends = id. Targets
-  // the fixture reaches well before its end: (a) 4 token-holding, (b) 3 with
-  // 5 or more spends, (c) 1 with 100 or more assets.
-  const p = params({ guard: 1000, target_a: 4, target_b: 3, target_c: 1, ada_only_n: 3 });
+  // Even credentials hold a token, 10 holds 150 assets, every fourth is
+  // fragmented; spends = id. Targets the fixture reaches well before its end:
+  // (a) 4 token-holding, (b) 3 with 5 or more spends, (c) 1 with 100 or more
+  // assets, (d) 3 fragmented.
+  const p = params({ guard: 1000, target_a: 4, target_b: 3, target_c: 1, target_d: 3, ada_only_n: 3 });
   await runBlock('frame', p);
   await runBlock('draw', p);
-  const order = await rows(`SELECT sa_id, k, tok, ge5, ge100 FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
-  let na = 0, nb = 0, nc = 0, kAll = null, kA = null;
+  const order = await rows(`SELECT sa_id, k, tok, ge5, ge100, frag FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
+  let na = 0, nb = 0, nc = 0, nd = 0, kAll = null, kA = null, kAbc = null;
   for (const r of order) {
     if (r.tok) na++;
     if (r.tok && r.ge5) nb++;
     if (r.tok && r.ge100) nc++;
+    if (r.tok && r.frag) nd++;
     if (kA === null && na >= 4) kA = Number(r.k);
-    if (kAll === null && na >= 4 && nb >= 3 && nc >= 1) kAll = Number(r.k);
+    if (kAbc === null && na >= 4 && nb >= 3 && nc >= 1) kAbc = Number(r.k);
+    if (kAll === null && na >= 4 && nb >= 3 && nc >= 1 && nd >= 3) kAll = Number(r.k);
   }
   assert.ok(kAll !== null && kAll < order.length, 'the fixture reaches every target before its end');
-  const s = (await rows(`SELECT k_all, k_a, k_stop, k_prevalence, guard_reached, n_a, n_b, n_c FROM study.draw_summary WHERE frame = 'recent'`))[0];
+  assert.ok(kAll > kAbc, 'requirement (d) is the last to be met here, so it moves the stopping point');
+  const s = (await rows(`SELECT k_all, k_a, k_stop, k_prevalence, guard_reached, n_a, n_b, n_c, n_d FROM study.draw_summary WHERE frame = 'recent'`))[0];
   assert.equal(Number(s.k_all), kAll);
   assert.equal(Number(s.k_stop), kAll);
   assert.equal(Number(s.k_prevalence), kA);
   assert.equal(s.guard_reached, false);
-  assert.ok(Number(s.n_a) >= 4 && Number(s.n_b) >= 3 && Number(s.n_c) >= 1);
+  assert.ok(Number(s.n_a) >= 4 && Number(s.n_b) >= 3 && Number(s.n_c) >= 1 && Number(s.n_d) === 3);
   const random = await rows(`SELECT draw_rank, prevalence_member FROM study.sample WHERE frame = 'recent' AND kind = 'random' ORDER BY draw_rank`);
   assert.deepEqual(random.map((r) => Number(r.draw_rank)), order.filter((r) => r.tok && Number(r.k) <= kAll).map((r) => Number(r.k)));
   for (const r of random) assert.equal(r.prevalence_member, Number(r.draw_rank) <= kA);
   assert.equal(random.filter((r) => r.prevalence_member).length, 4, 'prevalence members are the first four token-holding wallets');
   assert.equal(random.length > 4, kAll > kA);
+  // Fragmented at the peak window's start or end: 28 only at its end.
+  const f28 = Object.fromEntries((await rows(`SELECT frame, frag FROM study.frame WHERE sa_id = 28`)).map((r) => [r.frame, r.frag]));
+  assert.deepEqual(f28, { recent: false, peak: true });
+  // Every sample row carries its frame's flag.
+  await runBlock('split', p);
+  const flags = await rows(`SELECT s.fragmented, f.frag FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id`);
+  assert.ok(flags.length > 0 && flags.every((r) => r.fragmented === r.frag));
+  // With x7_prefix false, after (a) only wallets meeting (b), (c) or (d) join.
+  const p7 = params({ guard: 1000, target_a: 4, target_b: 3, target_c: 1, target_d: 3, ada_only_n: 3, x7_prefix: false });
+  await runBlock('draw', p7);
+  const r7 = await rows(`SELECT d.k, d.ge5, d.ge100, d.frag FROM study.sample s JOIN study.draw_order d ON d.frame = s.frame AND d.sa_id = s.sa_id WHERE s.frame = 'recent' AND s.kind = 'random' ORDER BY d.k`);
+  assert.ok(r7.every((r) => Number(r.k) <= kA || r.ge5 || r.ge100 || r.frag));
+  assert.ok(r7.some((r) => Number(r.k) > kA && r.frag && !r.ge5 && !r.ge100) || !order.some((r) => Number(r.k) > kA && Number(r.k) <= kAll && r.tok && r.frag && !r.ge5 && !r.ge100), 'a wallet taken after (a) for (d) alone joins');
 });
 
 test('flow stage 1 counts only credentials with an output at or before the snapshot', async () => {
@@ -240,5 +263,49 @@ test('flow stage 1 from the life table equals the count from tx_out', async () =
     assert.equal(Number(s1.n_in), Number(old.n), `x1_enterprise ${x1}`);
     assert.equal(Number(s1.n_in), 13);
     if (x1) assert.equal(Number((await rows(`SELECT count(*) AS n FROM study.txo WHERE via_payment`))[0].n), 1, 'the enterprise output at 1\'s payment credential is in the life table');
+  }
+});
+
+// Requirement (d)'s measure in the state step: the most UTxOs one fungible
+// asset of the wallet sits on, at each point, held UTxOs always included,
+// whatever x9_count_held says of the other measures.
+test('state: the most UTxOs a fungible asset sits on, held UTxOs included', async () => {
+  for (const x9 of [true, false]) {
+    const { db, runBlock, rows } = await freshDb();
+    await db.exec(`
+      CREATE TABLE study.txo (tx_out_id bigint PRIMARY KEY, created_tx bigint, consumed_tx bigint, sa_id bigint, out_index int, value numeric,
+                              payment_cred bytea, script_pay boolean, has_datum boolean, has_ref_script boolean, via_payment boolean);
+      CREATE TABLE study.txo_asset (tx_out_id bigint, ident bigint, quantity numeric);
+      CREATE TABLE study.asset (ident bigint PRIMARY KEY, policy bytea, name bytea, label integer);
+      INSERT INTO study.asset VALUES (1, NULL, NULL, NULL), (2, NULL, NULL, NULL), (3, NULL, NULL, NULL), (4, NULL, NULL, 222), (5, NULL, NULL, NULL);
+    `);
+    let id = 0;
+    const put = async (sa, ident, { created = 1, consumed = null, held = false, qty = 1 } = {}) => {
+      id++;
+      await db.query(`INSERT INTO study.txo VALUES ($1, $2, $3, $4, 0, 1000000, NULL, false, $5, false, false)`, [id, created, consumed, sa, held]);
+      await db.query(`INSERT INTO study.txo_asset VALUES ($1, $2, $3)`, [id, ident, qty]);
+    };
+    // 1: asset 1 on 10 UTxOs, one of them held. 2: asset 2 on 9. 3: asset 3
+    // on 10, five spent before the snapshot, and one unit of a label-222 NFT.
+    // 5: asset 5 on two held UTxOs only.
+    for (let i = 0; i < 10; i++) await put(1, 1, { held: i === 0 });
+    for (let i = 0; i < 9; i++) await put(2, 2);
+    for (let i = 0; i < 10; i++) await put(3, 3, { consumed: i < 5 ? 50 : null });
+    await put(3, 4);
+    await put(5, 5, { held: true });
+    await put(5, 5, { held: true });
+    const p = sqlParams({ network: 'preprod', settings: { ...defaultSettings(), x9_count_held: x9 }, snapshot: { id: 1, t: 100 }, h: H, windows: { recent: { lo: 1, hi: 100, t_start: 0, first_epoch: 1, last_epoch: 1 }, peak: { lo: 1, hi: 40, t_start: 0, first_epoch: 1, last_epoch: 1 } } });
+    await runBlock('state', p);
+    const got = Object.fromEntries((await rows(`SELECT point, sa_id, n_assets, max_ft_utxos FROM study.state WHERE point IN ('snap', 'peak_end') ORDER BY point, sa_id`)).map((r) => [`${r.point} ${r.sa_id}`, [Number(r.n_assets), Number(r.max_ft_utxos)]]));
+    assert.deepEqual(got, {
+      'peak_end 1': [1, 10],
+      'peak_end 2': [1, 9],
+      'peak_end 3': [2, 10],
+      'peak_end 5': [x9 ? 1 : 0, 2],
+      'snap 1': [1, 10],
+      'snap 2': [1, 9],
+      'snap 3': [2, 5],
+      'snap 5': [x9 ? 1 : 0, 2]
+    }, `x9_count_held ${x9}`);
   }
 });
