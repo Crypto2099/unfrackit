@@ -44,7 +44,11 @@ export function assetMap(list) {
 }
 
 // A multi-asset map node of quantities (unsigned for outputs, signed for a
-// mint field) to an asset list.
+// mint field) to an asset list. Zero quantities are dropped, as the ledger
+// drops them when it decodes a multi-asset before protocol version 9 and
+// refuses them from it (eras/mary/impl/src/Cardano/Ledger/Mary/Value.hs:
+// 324-354, decodeMultiAsset and pruneZeroMultiAsset), so the asset list is
+// the ledger's value; the original bytes are kept where bytes are used.
 export function decodeMultiAsset(node, signed = false) {
   if (node.mt !== 5) throw new CborError(`multi-asset: expected a map at byte ${node.s}`);
   const out = [];
@@ -53,7 +57,8 @@ export function decodeMultiAsset(node, signed = false) {
     if (policy.length !== 28) throw new CborError(`policy id of ${policy.length} bytes`);
     if (inner.mt !== 5) throw new CborError(`assets of a policy: expected a map at byte ${inner.s}`);
     for (const [n, q] of inner.entries) {
-      out.push({ policy: policy.toString('hex'), name: asBytes(n, 'asset name').toString('hex'), qty: signed ? asInt(q, 'quantity') : asUint(q, 'quantity') });
+      const qty = signed ? asInt(q, 'quantity') : asUint(q, 'quantity');
+      if (qty !== 0n) out.push({ policy: policy.toString('hex'), name: asBytes(n, 'asset name').toString('hex'), qty });
     }
   }
   return sortAssets(out);

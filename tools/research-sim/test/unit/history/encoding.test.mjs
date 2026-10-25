@@ -213,3 +213,9 @@ test('the CBOR null and heads used for reassembly', () => {
   assert.equal(NULL.toString('hex'), 'f6');
   assert.equal(head(4, 3).toString('hex'), '83');
 });
+
+test('a zero quantity in a multi-asset is not part of the value', () => {
+  // { policy: { "": 1, "A": 0 } }, as some pre-Conway outputs carry.
+  const v = encArray([encUint(2000000), encMap([[encBytes(Buffer.from(P1, 'hex')), encMap([[encBytes(Buffer.alloc(0)), encUint(1)], [encBytes(Buffer.from('41', 'hex')), encUint(0)]])]])]);
+  assert.deepEqual(decodeValue(decode(v)).assets, [{ policy: P1, name: '', qty: 1n }]);
+});
