@@ -25,7 +25,7 @@ cardano-serialization-lib (CSL) comes only through the treatment's `cslkit.mjs`,
 
 ## The database
 
-cardano-db-sync 13.7 with the core `tx_out` layout, `tx_out` values enabled, and multi-asset, metadata, Plutus and ledger data inserted; never `prune`, `bootstrap` or `only_utxo`. The queries read schema `public`, and the extraction's `study` tables when the role can read them (its samples with their split and reconstruction-check exclusion, its franken flags, and its life table). Each filters on an indexed column, except the chain-wide collateral measurement and the epoch boundaries of the near-cap command, which read their tables in one pass each. Nothing is created anywhere.
+cardano-db-sync 13.7 with the core `tx_out` layout, `tx_out` values enabled, and multi-asset, metadata, Plutus and ledger data inserted; never `prune`, `bootstrap` or `only_utxo`. The queries read schema `public`, and the extraction's `study` tables when the role can read them (its samples with their split and reconstruction-check exclusion, its franken flags, and its life table). Each filters on an indexed column, except the chain-wide collateral measurement and the epoch boundaries of the near-cap command, which read their tables in one pass each. Reads by transaction, reference or wallet go in batches (200 transactions, 1,000 or 2,000 output references, or 500 wallets per statement), so that no single statement runs long. Nothing is created anywhere.
 
 Connection: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`. The password comes from the file `PGPASSFILE` names (libpq's format, mode 0600). It is read when the connection opens and never printed or logged. Every session is read only.
 
@@ -47,7 +47,7 @@ Every transaction read from either source must hash to db-sync's transaction has
 | `history --run-id <id> (--wallet <id or stake address>... \| --wallets <file> \| --from-study random\|all) --window <w>...` | History files for each wallet and window. `<w>` is `recent`, `peak`, `snapshot` (the state at the snapshot, no events) or `blocks:<first id>-<last id>` (a test window). |
 | `census --run-id <id> (--wallets <file> \| --from-study \| --all-wallets)` | Per wallet at the snapshot: UTxO count, the largest UTxO's value bytes, near-cap status, locked ADA and excess ADA. |
 | `near-cap --run-id <id> (--wallets <file> \| --from-study \| --all-wallets)` | Per epoch boundary from the Mary hard fork to the snapshot: how many wallets have a largest UTxO above 50, 80 and 90 percent of the value-size limit in force. |
-| `collateral --run-id <id>` | Over the recent window's script-executing transactions whose collateral inputs all sit at key addresses: the share under 20 ADA of collateral, the distribution of collateral coin, the share with a collateral return, the share of collateral inputs carrying tokens. |
+| `collateral --run-id <id>` | Over the recent window's script-executing transactions whose collateral inputs all sit at key addresses: the share under 20 ADA of collateral, the distribution of collateral coin, the share with a collateral return, the share of collateral inputs carrying tokens. On a test network, `--days <n>` measures the last n days instead of the recent window. |
 | `battery-pools --run-id <id> --network <n>` | From a run's recent-window history files, the amounts of the pure-ADA payments (spend type T1) and the shares of a fungible's holding sent in fungible-token spends (T5). |
 | `hash` | SHA-256 of every hashed file, the pinned dependencies and the Node version. Also `npm run hash`. |
 
