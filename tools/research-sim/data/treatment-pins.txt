@@ -1,0 +1,17 @@
+# SHA-256 of every treatment file the simulator imports, one
+# "<64 hex><two spaces><file name>" per line. The simulator refuses a
+# treatment directory whose files differ from these. Until the hypotheses
+# record exists, these are the digests of the treatment as it stood on
+# 2026-10-27; the record's rows replace them.
+a886a459f9a9daf7c34665a8ea749d5681bd9ac4269ac52c8a961c55d8bf5526  planner2.mjs
+80856e26d3209efd1dad39234385ef79402bd682f856ee1920ebf92f12ab2f67  labels.mjs
+47719dcb1759ff0cf9b46674823b05099d731876f1973bc5a66d2800fa9de022  adapter2.mjs
+30384896cd5f6104fb783c002dbe567b5ff518b8088d669797f7964510ff2add  build.mjs
+be344edc1dbb4d4f1027891ac97f82b0dc304b72aa36c5acc2388437e1613cb4  build2.mjs
+dfc964ecd8e642a9175b93175f246b49f503a663b942ee9f2190e404e290e5d1  cslkit.mjs
+2d9db3a84cf137fd6a061df47f97e871bd39bf82214369e1c57fddccea3694cb  conform.mjs
+fe75d76fd2c4d69d579e7788c60c08e3f56eeece459e77b41cb4928891fc656f  apply.mjs
+0246ecc6c4fc5921cae15119642a4a2bb6f06db947648b123250f76132c2160a  select2.mjs
+570a9b2e0b94b96e1bfe7914f63350b29d8eb368e795afeb85e6968c9a9ea625  select2-csl.mjs
+8414e0bacea74e5f91ea4ec2ba9ca1e47a665dc864a061b0e99a29b5d486df6a  package.json
+07f8ca542ce0468c88c9eb4696ccee41a530e312bf543ebcaffdb486795dbe6d  package-lock.json
