@@ -14,6 +14,7 @@
   },
   "scripts": {
     "test": "node --test \"test/unit/**/*.test.mjs\"",
+    "test:treatment": "node --test --test-concurrency=1 \"test/treatment/**/*.test.mjs\"",
     "test:preprod": "node --test --test-concurrency=1 \"test/integration/**/*.test.mjs\"",
     "hash": "node src/cli.mjs hash"
   },
