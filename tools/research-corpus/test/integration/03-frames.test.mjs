@@ -29,6 +29,7 @@ import { db, blocks, record, S1_SEEDING_TX, TAG, RUN_A, RUN_B, SHAPES, FUNDER, s
 import { encode } from '../../src/bech32.mjs';
 import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
+import { Runner } from '../../src/runner.mjs';
 import { fixtureRepo } from '../lib/gitfixture.mjs';
 import { captureScamList } from '../../src/scam-list.mjs';
 import { scamRecheck } from '../../src/pipeline.mjs';
@@ -72,6 +73,9 @@ const strip = (m) => {
 test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeout: 4 * 3600 * 1000 }, async () => {
   const c = await db();
   try {
+    // The bookkeeping tables, created as every run creates them before it
+    // reads them, so the check below holds on a database no run has used.
+    await new Runner({ client: c, blocks, runId: '-', params: {}, log: () => {} }).run('schema');
     const existing = await c.query('SELECT run_id FROM study.run WHERE run_id = ANY($1)', [[RUN_A, RUN_B]]);
     assert.equal(existing.rows.length, 0, `runs ${RUN_A} and ${RUN_B} already exist; set RESEARCH_CORPUS_TEST_TAG to a new value`);
     const tip0 = (await q(c, blocks, 'tip_block'))[0];
