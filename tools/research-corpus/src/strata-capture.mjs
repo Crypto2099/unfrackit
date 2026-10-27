@@ -46,12 +46,10 @@
 //    the commit recorded): the subject (policy id || asset name, CIP-26,
 //    "Special Case: Phase-1 Monetary Policies") must have a mapping file whose
 //    ticker is the coin's symbol or whose name is the coin's name, ignoring
-//    case. A part 2 candidate without a matching mapping is excluded and
-//    listed with the reason. The part 4 rule names no registry cross-check,
-//    so a part 4 coin without a matching mapping is neither taken nor
-//    excluded: it is listed under `unsettled` with its registry reading, and
-//    the run refuses a strata file that lists any unsettled coin until the
-//    case is decided.
+//    case. Part 4 coins are cross-checked exactly as part 2 candidates are: a
+//    coin of either part without a matching mapping is excluded and listed
+//    with the reason. So is a coin whose class is unsettled, since it would
+//    be excluded from whichever part a ruling put it in.
 //
 // The output is the strata file: the named rows of part 1 as given, the part
 // 2 candidates in ranking order (more than ten, so the run can skip those
@@ -231,7 +229,8 @@ export async function captureStrata({ named, rulings = {}, ownSources = {}, maxC
     }
     // A coin whose class is unsettled may be a part 4 coin, so it is read
     // like one, past the part 2 bound too, and listed as unsettled unless an
-    // exclusion of both parts applies to it.
+    // exclusion of both parts applies to it (the registry cross-check among
+    // them).
     const isPart4 = cls.part === 4 || !!cls.unsettled;
     if (!isPart4 && candidates.length >= maxCandidates) {
       beyondBound.push(coin.id);
@@ -274,16 +273,12 @@ export async function captureStrata({ named, rulings = {}, ownSources = {}, maxC
     const match = !m ? 'absent' : same(ticker, coin.symbol) ? 'ticker' : same(regName, coin.name) ? 'name' : 'differs';
     const registry = { subject: res.subject, ticker, name: regName, decimals: m?.decimals?.value ?? null, match };
     const registryReason = `token registry: ${match === 'absent' ? 'no mapping for the subject' : `ticker ${ticker} and name ${regName} differ from CoinGecko's`}`;
-    if (cls.unsettled) {
-      unsettled.push({ ...base, ...part, policy, asset_name: assetName, contract, resolved_by: res.resolved_by, registry, question: cls.unsettled });
+    if (match === 'absent' || match === 'differs') {
+      excluded.push({ ...base, ...part, policy, asset_name: assetName, reason: registryReason });
       continue;
     }
-    if (match === 'absent' || match === 'differs') {
-      if (isPart4) {
-        unsettled.push({ ...base, ...part, policy, asset_name: assetName, contract, resolved_by: res.resolved_by, registry, question: `${registryReason}; the part 4 rule names no registry cross-check, so whether this coin is a part 4 candidate is not decided` });
-      } else {
-        excluded.push({ ...base, policy, asset_name: assetName, reason: registryReason });
-      }
+    if (cls.unsettled) {
+      unsettled.push({ ...base, ...part, policy, asset_name: assetName, contract, resolved_by: res.resolved_by, registry, question: cls.unsettled });
       continue;
     }
     const conf = confirmed.get(policy + assetName);

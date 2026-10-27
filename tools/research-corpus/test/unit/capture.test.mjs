@@ -7,8 +7,9 @@
 // named tokens), part 4 (stablecoins by category, tokenized commodities by
 // category or by a commodity ruling, a bridge copy of a stablecoin kept out,
 // every coin of the ranking read however far past the part 2 bound, a part 4
-// coin without a registry match left unsettled, and a coin whose tokenized
-// category may name another commodity left unsettled), the three forms of
+// coin without a registry match excluded as a part 2 candidate is, and a coin
+// whose tokenized category may name another commodity left unsettled until a
+// ruling, or excluded when it has no registry match), the three forms of
 // CoinGecko's Cardano contract (policy and name, policy alone, CIP-14
 // fingerprint), the registry cross-check, and the provenance (endpoint, Date
 // header, SHA-256 of the raw ranking). Registry file names in upper-case hex
@@ -148,16 +149,15 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
   assert.equal(doc.format, 'research-corpus-strata-v3');
   // Part 4, in ranking order, every coin read however far past the part 2
   // bound; a bridge copy of a stablecoin stays out; a part 4 coin without a
-  // registry match is neither taken nor excluded.
+  // registry match is excluded, as a part 2 candidate is.
   assert.deepEqual(doc.part4.map((c) => [c.rank, c.coingecko_id, c.kind]), [
     [1, 'stable-usd', 'stablecoin'],
     [2, 'gold-token', 'tokenized commodity'],
     [3, 'ruled-gold', 'tokenized commodity']
   ]);
   assert.equal(doc.part4[2].basis, 'rulings file: a tokenized commodity');
-  assert.deepEqual(doc.unsettled.map((u) => [u.coingecko_id, u.registry.match]), [['stable-unmapped', 'absent'], ['oil-token', 'ticker']]);
-  assert.match(doc.unsettled[0].question, /no registry cross-check/);
-  assert.match(doc.unsettled[1].question, /"Tokenized Oil" may name a commodity/);
+  assert.deepEqual(doc.unsettled.map((u) => [u.coingecko_id, u.registry.match]), [['oil-token', 'ticker']]);
+  assert.match(doc.unsettled[0].question, /"Tokenized Oil" may name a commodity/);
   assert.deepEqual(doc.provenance.coingecko.beyond_candidate_bound, ['late']);
   assert.equal(doc.provenance.coingecko.coins_in_ranking, coins.length);
   assert.deepEqual(doc.candidates.map((c) => [c.rank, c.coingecko_id, c.resolved_by, c.registry.match]), [
@@ -182,6 +182,8 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
   assert.equal(reasons.gamma, 'no Cardano native asset listed');
   assert.match(reasons.eps, /token registry: ticker OTHER/);
   assert.match(reasons.zeta, /no mapping/);
+  assert.equal(reasons['stable-unmapped'], reasons.zeta);
+  assert.equal(doc.excluded.find((e) => e.coingecko_id === 'stable-unmapped').part, 4);
   assert.match(reasons.ruled, /bridge copy/);
   assert.match(reasons.bridgy, /bridged: CoinGecko asset_platform_id is ethereum/);
   assert.equal(doc.provenance.coingecko.ranking[0].sha256, createHash('sha256').update(marketsText).digest('hex'));
@@ -190,4 +192,78 @@ test('capture-strata against fakes: candidates in order, every exclusion with it
   assert.equal(doc.provenance.registry.commit, 'f'.repeat(40));
   assert.deepEqual(doc.provenance.confirmed_by_adam.map((c) => c.project), ['HOSKY', 'SNEK', 'World Mobile Token X (WMTX)', 'Nuvola Digital (NVL)']);
   assert.equal(calls429, 2, 'a 429 is retried');
+});
+
+test('part 4 coins cross-checked with the registry as part 2 coins are; a tokenized category settled by a ruling', async () => {
+  const coin = (id, symbol, name, contract, categories) => ({ id, symbol, name, contract, categories });
+  const coins = [
+    coin('usd-ticker', 'usdt1', 'USD One', P('41') + '01', ['Stablecoins']),
+    coin('usd-name', 'usdt2', 'USD Two', P('42') + '01', ['Stablecoins']),
+    coin('usd-absent', 'usdt3', 'USD Three', P('43') + '01', ['Stablecoins']),
+    coin('gold-differs', 'gdf', 'Gold Differs', P('44') + '01', ['Tokenized Gold']),
+    coin('meme-absent', 'mab', 'Meme Absent', P('47') + '01', ['Meme']),
+    coin('meme-differs', 'mdf', 'Meme Differs', P('48') + '01', ['Meme']),
+    coin('stock', 'stk', 'Stock Token', P('45') + '01', ['Tokenized Stock']),
+    coin('stock-absent', 'sab', 'Stock Absent', P('46') + '01', ['Tokenized Stock'])
+  ];
+  const registry = new Map([
+    [P('41') + '01', { ticker: 'USDT1', name: 'Another name' }],
+    [P('42') + '01', { ticker: 'XYZ', name: 'usd two' }],
+    [P('44') + '01', { ticker: 'GOLD', name: 'Gold' }],
+    [P('48') + '01', { ticker: 'MEME', name: 'Meme' }],
+    [P('45') + '01', { ticker: 'STK', name: 'Stock Token' }]
+  ]);
+  const reply = (body) => ({ status: 200, ok: true, headers: { get: (h) => (h === 'date' ? 'Wed, 21 Oct 2026 20:00:00 GMT' : null) }, text: async () => body });
+  const fetchImpl = async (url) => {
+    if (url.includes('/coins/markets')) return reply(JSON.stringify(coins.map((c, i) => ({ id: c.id, symbol: c.symbol, name: c.name, market_cap: 1000 - i, market_cap_rank: i + 1 }))));
+    if (url.includes('/commits/master')) return reply(JSON.stringify({ sha: 'f'.repeat(40) }));
+    if (url.includes('/git/trees/')) return reply(JSON.stringify({ truncated: false, tree: [...registry.keys()].map((s) => ({ path: `mappings/${s}.json` })) }));
+    if (url.includes('raw.githubusercontent.com')) {
+      const s = /mappings\/([0-9a-f]+)\.json/.exec(url)[1];
+      const m = registry.get(s);
+      return reply(JSON.stringify({ subject: s, ticker: { value: m.ticker }, name: { value: m.name } }));
+    }
+    const id = decodeURIComponent(/\/coins\/([^?]+)\?/.exec(url)[1]);
+    const c = coins.find((x) => x.id === id);
+    return reply(JSON.stringify({ id, asset_platform_id: 'cardano', categories: c.categories, detail_platforms: { cardano: { contract_address: c.contract } } }));
+  };
+  const named = [{ project: 'HOSKY', stratum: 'HOSKY', class: 'FT', policy: HOSKY.policy, asset_name: HOSKY.asset_name, nft_top_exclude: false }];
+  const capture = (rulings) => captureStrata({ named, rulings, spacingMs: 0, fetchImpl, now: () => new Date('2026-10-21T20:00:00Z') });
+
+  const doc = await capture({});
+  // A matched part 4 coin is taken, by ticker or by name.
+  assert.deepEqual(doc.part4.map((c) => [c.rank, c.coingecko_id, c.registry.match]), [[1, 'usd-ticker', 'ticker'], [2, 'usd-name', 'name']]);
+  // An unmatched coin is excluded with the same reason in either part: no
+  // mapping for its subject, or a mapping whose ticker and name both differ.
+  const out = Object.fromEntries(doc.excluded.map((e) => [e.coingecko_id, e]));
+  assert.equal(out['usd-absent'].reason, 'token registry: no mapping for the subject');
+  assert.equal(out['meme-absent'].reason, out['usd-absent'].reason);
+  assert.equal(out['gold-differs'].reason, "token registry: ticker GOLD and name Gold differ from CoinGecko's");
+  assert.equal(out['meme-differs'].reason, "token registry: ticker MEME and name Meme differ from CoinGecko's");
+  assert.deepEqual([out['usd-absent'].part, out['gold-differs'].part, out['meme-absent'].part, out['meme-differs'].part], [4, 4, 2, 2]);
+  assert.deepEqual([out['usd-absent'].kind, out['gold-differs'].kind], ['stablecoin', 'tokenized commodity']);
+  assert.deepEqual(doc.candidates, []);
+  // The tokenized category: a matched coin waits for a ruling; an unmatched
+  // one is excluded, since either ruling would exclude it.
+  assert.deepEqual(doc.unsettled.map((u) => [u.coingecko_id, u.registry.match]), [['stock', 'ticker']]);
+  assert.match(doc.unsettled[0].question, /"Tokenized Stock" may name a commodity/);
+  assert.equal(out['stock-absent'].reason, 'token registry: no mapping for the subject');
+  assert.equal(out['stock-absent'].part, 'unsettled');
+
+  // A not-commodity ruling makes the matched coin a part 2 candidate.
+  const notCommodity = await capture({ not_commodities: [{ coingecko_id: 'stock', reason: 'a share, not a commodity', source: 'a ruling' }] });
+  assert.deepEqual(notCommodity.unsettled, []);
+  assert.deepEqual(notCommodity.candidates.map((c) => [c.rank, c.coingecko_id, c.registry.match]), [[1, 'stock', 'ticker']]);
+  assert.deepEqual(notCommodity.part4.map((c) => c.coingecko_id), ['usd-ticker', 'usd-name']);
+  assert.ok(notCommodity.excluded.some((e) => e.coingecko_id === 'stock-absent'));
+
+  // A commodity ruling makes it a part 4 coin after the others in rank order.
+  const commodity = await capture({ commodities: [{ coingecko_id: 'stock', reason: 'a tokenized commodity', source: 'a ruling' }] });
+  assert.deepEqual(commodity.unsettled, []);
+  assert.deepEqual(commodity.candidates, []);
+  assert.deepEqual(commodity.part4.map((c) => [c.rank, c.coingecko_id, c.kind, c.basis]), [
+    [1, 'usd-ticker', 'stablecoin', 'CoinGecko category "Stablecoins"'],
+    [2, 'usd-name', 'stablecoin', 'CoinGecko category "Stablecoins"'],
+    [3, 'stock', 'tokenized commodity', 'rulings file: a tokenized commodity']
+  ]);
 });
