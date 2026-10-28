@@ -4,7 +4,8 @@
 // The contract every selection method implements: the H-12 rule, the test
 // method, and the baseline adapters.
 //
-//   { name, version, deterministic, build(state, intent, params, opts) }
+//   { name, version, deterministic, build(state, intent, params, opts),
+//     ownCollateral? }
 //
 //   opts     { seed, changePolicy ('default' | 'layout' | 'single' |
 //            'naive'), collateralRule, absorb, collateral }
@@ -12,6 +13,9 @@
 //            aside under the arm's rule (replay/engine.mjs setAside); the
 //            state the method is given does not hold it, and every
 //            transaction the method assembles carries it as collateral
+//   ownCollateral  true for a method whose library chooses its own
+//            collateral and cannot be given one (choosesOwnCollateral): the
+//            engine sets nothing aside for it and passes no opts.collateral
 //   result   { ok: true, kind ('single' | 'chain'), txs [{ bytes (hex),
 //            walletInputs [ref], fee, size, k, roles }] }
 //            or { ok: false, class, detail }
@@ -38,8 +42,16 @@ export function checkMethod(m) {
   if (typeof m.version !== 'string' || !m.version) throw new TypeError(`method ${m.name}: no version`);
   if (typeof m.deterministic !== 'boolean') throw new TypeError(`method ${m.name}: deterministic must be a boolean`);
   if (typeof m.build !== 'function') throw new TypeError(`method ${m.name}: no build function`);
+  if (m.ownCollateral !== undefined && !choosesOwnCollateral(m)) throw new TypeError(`method ${m.name}: only the Evolution SDK's methods choose their own collateral`);
   return m;
 }
+
+// The methods whose library chooses its own collateral: the Evolution SDK's
+// (methods/evo.mjs), which no operation or build option can give a collateral
+// UTxO. The engine accepts the collateral such a method's library picks, for
+// these methods only.
+export const OWN_COLLATERAL_METHODS = Object.freeze(['evo-lf', 'evo-unfrack']);
+export const choosesOwnCollateral = (m) => m.ownCollateral === true && OWN_COLLATERAL_METHODS.includes(m.name);
 
 export function checkOptions(opts) {
   if (!CHANGE_OPTIONS.includes(opts.changePolicy)) throw new TypeError(`method options: unknown change policy ${opts.changePolicy}`);

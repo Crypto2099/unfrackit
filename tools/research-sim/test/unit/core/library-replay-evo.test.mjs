@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The Evolution SDK's replay path: its coverage statement (every part but
-// collateral), and, with the treatment, the synthetic streams' replays and
-// constructed intents for the parts the streams do not carry. Each spend
-// builds, fails with a class, is infeasible (by balance or for collateral), or
-// is not replayable; the only class 'other' is a script spend's refusal, since
-// the library chooses its own collateral. Every built transaction passes the
-// kit's checks (the engine runs them) and its four negative controls are
-// caught; its fixed inputs are present and never the selector's.
+// The Evolution SDK's replay path: its coverage statement (every part, its
+// collateral as the library chooses it), and, with the treatment, the
+// synthetic streams' replays and constructed intents for the parts the streams
+// do not carry. Each spend builds, fails with a class other than 'other', is
+// infeasible (by balance or for collateral), or is not replayable. Every built
+// transaction passes the kit's checks (the engine runs them) and its four
+// negative controls are caught; its fixed inputs are present and never the
+// selector's; a script spend's collateral is the library's, recorded as
+// library-chosen.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,7 +24,9 @@ import { fixedResolver } from '../../../src/kit/apply.mjs';
 import { inspectTx, unspentOutputParts } from '../../../src/kit/inspect.mjs';
 import { outputBytes } from '../../../src/kit/assemble.mjs';
 import { CLASSES } from '../../../src/kit/check.mjs';
-import { NOT_REPLAYABLE } from '../../../src/methods/contract.mjs';
+import { NOT_REPLAYABLE, choosesOwnCollateral, checkMethod } from '../../../src/methods/contract.mjs';
+import { makeMethod } from '../../../src/methods/registry.mjs';
+import { constructState, policy, assetName } from '../../lib/construct.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
 import { encodeOutput, unspentOutput } from '../../../src/history/output.mjs';
@@ -33,16 +36,20 @@ import { recipientAddress } from '../../../src/battery/recipients.mjs';
 import { shapeState } from '../../../src/shapes/shapes.mjs';
 import { spendable, holdings } from '../../../src/state/state.mjs';
 
-const REFUSAL = 'evo-lf: the replay path (fixed parts and collateral) is not built yet';
 const out = (extra = {}) => ({ cbor: '00', address: 'x', coin: 2000000n, assets: [], datum: null, scriptRef: null, ...extra });
 const bare = (over = {}) => ({ source: 'replay', requested: [out()], implicit: ZERO_IMPLICIT, fixed: null, collateral: { required: false, observed: null }, ...over });
 const FIXED = { inputs: [], referenceInputs: [], body: { 4: '80' }, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: 0n, fixedBytes: 1 };
 
-test('the Evolution SDK covers every replay part but collateral, and refuses a script spend as before', () => {
-  assert.deepEqual(REPLAY_COVERAGE.evo, ['fixed', 'implicit', 'outputData']);
-  assert.deepEqual(REPLAY_PARTS.filter((p) => !REPLAY_COVERAGE.evo.includes(p)), ['collateral']);
-  for (const it of [bare({ fixed: FIXED }), bare({ implicit: { ...ZERO_IMPLICIT, deposits: 1n } }), bare({ requested: [out({ datum: { kind: 'inline', cbor: 'd87980' } })] })]) assert.doesNotThrow(() => refuseUncovered('evo-lf', REPLAY_COVERAGE.evo, it));
-  for (const it of [bare({ collateral: { required: true, observed: null } }), bare({ fixed: FIXED, collateral: { required: true, observed: null } })]) assert.throws(() => refuseUncovered('evo-lf', REPLAY_COVERAGE.evo, it), (e) => e.constructor === Error && e.message === REFUSAL);
+test('the Evolution SDK covers every replay part, its collateral as the library chooses it, and only its methods choose their own', () => {
+  assert.deepEqual(REPLAY_COVERAGE.evo, [...REPLAY_PARTS]);
+  for (const it of [bare({ fixed: FIXED }), bare({ implicit: { ...ZERO_IMPLICIT, deposits: 1n } }), bare({ requested: [out({ datum: { kind: 'inline', cbor: 'd87980' } })] }), bare({ collateral: { required: true, observed: null } }), bare({ fixed: FIXED, collateral: { required: true, observed: null } })]) assert.doesNotThrow(() => refuseUncovered('evo-lf', REPLAY_COVERAGE.evo, it));
+  for (const m of [evoMethod(), evoMethod({ unfrack: {} })]) {
+    assert.equal(choosesOwnCollateral(m), true, m.name);
+    assert.doesNotThrow(() => checkMethod(m));
+  }
+  const renamed = { ...evoMethod(), name: 'csl-lf' };
+  assert.equal(choosesOwnCollateral(renamed), false);
+  assert.throws(() => checkMethod(renamed), /only the Evolution SDK's methods choose their own collateral/);
 });
 
 const T = await treatment();
@@ -86,11 +93,7 @@ function tally(source, r) {
   const o = {};
   for (const s of r.spends) {
     assert.ok(OUTCOMES.has(s.outcome), s.outcome);
-    if (s.outcome === 'failed' && s.class === CLASSES.other) {
-      // A script spend's refusal is the only class 'other'.
-      assert.ok(intents[s.intent].collateral.required, `${s.type}: ${s.detail}`);
-      assert.equal(s.detail, REFUSAL);
-    }
+    assert.notEqual(s.class, CLASSES.other, `${s.type}: ${s.detail}`);
     const k = `${s.type}:${s.outcome}${s.class ? `:${s.class}` : ''}`;
     o[k] = (o[k] || 0) + 1;
   }
@@ -98,15 +101,20 @@ function tally(source, r) {
 }
 
 // Every built transaction's fixed inputs are present and none is the
-// selector's; it carries no collateral; the library's fee is at least the
-// final transaction's minimum unless a part was written after it priced it.
+// selector's; a script spend's collateral is the library's, recorded as
+// library-chosen, and no other spend carries collateral; the library's fee is
+// at least the final transaction's minimum unless a part was written after it
+// priced it.
 function checkBuilt(source, r) {
   const intents = source.events.filter((e) => e.kind === 'intent').map((e) => e.intent);
   for (const s of r.spends) {
     if (s.outcome !== 'built') continue;
     const it = intents[s.intent];
     const tx = inspectTx(s.built.txs[0].bytes);
-    assert.equal(tx.collateralInputs.length, 0);
+    if (it.collateral.required) {
+      assert.ok(tx.collateralInputs.length >= 1);
+      assert.equal(s.collateralUsed.chosen, 'library');
+    } else assert.equal(tx.collateralInputs.length, 0);
     if (!it.fixed) continue;
     const ins = new Set(tx.inputs.map((x) => x.ref));
     for (const x of it.fixed.inputs) {
@@ -117,7 +125,7 @@ function checkBuilt(source, r) {
   for (const f of r.fees) if (!f.unpriced.length) assert.ok(f.fee >= f.finalMinFee, `${f.type}: fee ${f.fee} under the minimum ${f.finalMinFee}`);
 }
 
-test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, refuses their script spends, and miscounts a legacy registration\'s deposit', { skip }, async (t) => {
+test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, fails their script spends under the minimum for the witness-set datum it cannot price, and miscounts a legacy registration\'s deposit', { skip }, async (t) => {
   const seen = {};
   for (const name of ['S1', 'S7', 'S8', 'M1', 'M7']) {
     const source = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
@@ -134,8 +142,12 @@ test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, 
       assert.equal(o['T8:built'], 1);
       const t1 = r.spends.find((s) => s.type === 'T1' && intents[s.intent].fixed && intents[s.intent].fixed.inputs.some((x) => x.held));
       assert.equal(t1.outcome, 'built');
-      // The script spend is refused; the phase-2-invalid one is a forfeit.
-      assert.equal(o['T6:failed:other'], 1);
+      // The script spend reaches the library, which chooses its own
+      // collateral; its witness-set datum, written after the library priced
+      // the transaction, leaves the fee under the minimum, and the failure
+      // names it. The phase-2-invalid one is a forfeit.
+      assert.equal(o['T6:failed:fee-minimum'], 1);
+      assert.match(r.spends.find((s) => s.type === 'T6' && s.outcome === 'failed').detail, /; parts the library did not price: witness-set datums$/);
       assert.equal(o['T6:forfeit'], 1);
       // The T7 is a legacy stake registration (certificate kind 0): the
       // library counts no deposit for it, so its change keeps the deposit and
@@ -296,7 +308,7 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
   t.diagnostic(JSON.stringify(o));
 });
 
-test('the library chooses its own collateral, so a script spend cannot carry the UTxO set aside', { skip }, async () => {
+test('the library chooses its own collateral from the whole pool, recorded as library-chosen, and the guard refuses a foreign collateral for every other method', { skip }, async () => {
   // The synthetic streams' script spend, its script input locked by an
   // inline datum so that no witness-set datum is needed.
   const stream = loadSource(T, { kind: 'shape', name: 'S1', stream: 'synthetic' });
@@ -308,29 +320,62 @@ test('the library chooses its own collateral, so a script spend cannot carry the
   delete witnesses[4];
   const intent = { ...replayIntent('c1', 10, { type: 'T6', requested: t6.requested, collateral: true }), fixed: { ...t6.fixed, inputs: [scriptIn], witnesses } };
   assert.equal(evoRefusal(intent), null);
-  const state = shapeState(T, 'S1').state;
   const P = SYNTHETIC_PARAMS;
+  const runOf = async (state, method = evoMethod(), rule = 'ledger') => (await replayEvo(sourceOf(state, [intent]), { method, rule })).spends[0];
+
+  // S1 holds three pure-ADA UTxOs of 50 ADA. Nothing is set aside: the
+  // library takes the first of them in the order it was given, a total of
+  // 5 ADA whatever the fee, and its largest-first selection spends the same
+  // UTxO, which the ledger allows.
+  const state = shapeState(T, 'S1').state;
+  const s = await runOf(state);
+  assert.equal(s.outcome, 'built', s.detail);
+  const tx = inspectTx(s.built.txs[0].bytes);
+  assert.deepEqual(tx.redeemers.map((r) => r.exUnits), [t6.fixed.redeemers[0].exUnits]);
+  assert.ok(tx.bodyFields.includes(11));
+  const first = spendable(state)[0];
+  assert.deepEqual(tx.collateralInputs.map((c) => c.ref), [first.ref]);
+  assert.ok(tx.inputs.some((i) => i.ref === first.ref));
+  assert.deepEqual(s.collateralUsed, { inputs: 1, total: 5n * ADA, returned: true, chosen: 'library' });
+  // The adapter takes no UTxO set aside.
   const aside = setAside(T, P, state, intent, 'ledger');
   assert.ok(aside.ok);
-  // Built without the coverage refusal, the library's transaction carries
-  // the observed execution units and its own collateral: the largest
-  // pure-ADA UTxO it was given, a total of 5 ADA, never the UTxO set aside.
-  const r = await buildEvo(aside.pool, intent, P, { changePolicy: 'default', seed: 1, collateral: aside.collateral });
-  assert.equal(r.ok, true, r.detail);
-  const tx = inspectTx(r.txs[0].bytes);
-  assert.deepEqual(tx.redeemers.map((x) => x.exUnits), [t6.fixed.redeemers[0].exUnits]);
-  assert.ok(tx.bodyFields.includes(11));
-  assert.equal(tx.collateralInputs.length, 1);
-  assert.notEqual(tx.collateralInputs[0].ref, aside.collateral.ref);
-  const pure = spendable(aside.pool).filter((u) => !u.assets.length).sort((a, b) => (a.coin > b.coin ? -1 : a.coin < b.coin ? 1 : 0));
-  assert.equal(tx.collateralInputs[0].ref, pure[0].ref);
-  assert.equal(tx.totalCollateral, 5n * ADA);
-  // Through the engine, that collateral is the method's defect.
-  const unrefused = { ...evoMethod(), build: (s, it, params, opts) => buildEvo(s, it, params, opts) };
-  const rr = await replayEvo(sourceOf(state, [intent]), { method: unrefused });
-  assert.equal(rr.spends[0].outcome, 'failed');
-  assert.equal(rr.spends[0].class, CLASSES.other);
-  assert.match(rr.spends[0].detail, /collateral is not the UTxO set aside/);
+  await assert.rejects(buildEvo(aside.pool, intent, P, { changePolicy: 'default', seed: 1, collateral: aside.collateral }), /chooses its own collateral/);
+
+  // One UTxO of 20 ADA: every other method would set it aside and could not
+  // pay without it; the library spends it as input and collateral both.
+  const tlf = makeMethod(T, 'test-largest-first');
+  const one = constructState(T, [{ coin: 20n * ADA }]);
+  assert.deepEqual([(await runOf(one, tlf)).outcome, (await runOf(one, tlf)).reason], ['infeasible-collateral', 'payment']);
+  const s1 = await runOf(one);
+  assert.equal(s1.outcome, 'built', s1.detail);
+  const tx1 = inspectTx(s1.built.txs[0].bytes);
+  assert.ok(tx1.inputs.some((i) => i.ref === tx1.collateralInputs[0].ref));
+
+  // No UTxO the rule would set aside (twenty of 1.5 ADA): infeasible for
+  // collateral for this library as for every method.
+  const small = constructState(T, Array.from({ length: 20 }, () => ({ coin: 1500000n })));
+  for (const m of [tlf, evoMethod()]) {
+    const r = await runOf(small, m);
+    assert.deepEqual([r.outcome, r.reason], ['infeasible-collateral', 'none-eligible'], m.name);
+  }
+
+  // A collateral the library cannot make is its own failure, class
+  // collateral: under the token-bearing rule the 3 ADA token UTxO is
+  // eligible, but the library, pure ADA first, reaches 4.5 ADA of its 5.
+  const tok = constructState(T, [{ coin: 3n * ADA, assets: [{ policy: policy('p'), name: assetName('t'), qty: 1n }] }, { coin: 1500000n }]);
+  const failed = await runOf(tok, evoMethod(), 'token-bearing');
+  assert.deepEqual([failed.outcome, failed.class], ['failed', CLASSES.collateral]);
+  assert.match(failed.detail, /Insufficient collateral available/);
+
+  // Under any other method's name the engine sets a UTxO aside, and the
+  // library's own choice is a foreign collateral: the method's defect.
+  for (const name of ['test-largest-first', 'cjs-rrri', 'csl-lf', 'unfrackit-h12', 'evo-other']) {
+    const other = { ...evoMethod(), name, build: (st, it, params, opts) => buildEvo(st, it, params, { ...opts, collateral: undefined }) };
+    const r = await runOf(state, other);
+    assert.deepEqual([r.outcome, r.class], ['failed', CLASSES.other], name);
+    assert.match(r.detail, /collateral is not the UTxO set aside/);
+  }
 });
 
 test('a replay repeats byte for byte', { skip }, async () => {

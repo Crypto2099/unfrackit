@@ -24,7 +24,9 @@
 //               mint field, validity, required signers, votes, proposals, the
 //               treasury fields, auxiliary data and witnesses
 //   collateral  collateral for a script spend: the UTxO the engine set aside
-//               under the arm's rule before selection (opts.collateral)
+//               under the arm's rule before selection (opts.collateral), or,
+//               for the Evolution SDK, the collateral its library chooses from
+//               the whole pool (methods/contract.mjs choosesOwnCollateral)
 //   implicit    withdrawals, refunds, deposits, a donation, a mint or a burn
 //   outputData  a requested output that carries a datum or a script reference
 // Each adapter states which of them its replay path covers (REPLAY_COVERAGE),
@@ -55,16 +57,15 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 // The parts each adapter's replay path covers, by adapter module:
 //   csl   csl-lf, csl-ri, csl-lf-pure, csl-ri-pure: every part
 //         (methods/csl.mjs, its replay path)
-//   evo   evo-lf (and the survey's evo-unfrack): fixed parts, implicit
-//         values and output data, not collateral: the library chooses its
-//         own collateral and cannot be given the UTxO the engine sets aside
-//         (methods/evo.mjs)
+//   evo   evo-lf (and the survey's evo-unfrack): every part, collateral as
+//         the library chooses it, since it cannot be given the UTxO the
+//         engine would set aside (methods/evo.mjs)
 //   mesh  the survey's Mesh subjects: none; Mesh is surveyed on battery spends
 //         only and never replays
 //   cjs   cjs-rrri: every part (methods/cjs.mjs, its replay path)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  evo: Object.freeze(['fixed', 'implicit', 'outputData']),
+  evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   mesh: Object.freeze([]),
   cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });

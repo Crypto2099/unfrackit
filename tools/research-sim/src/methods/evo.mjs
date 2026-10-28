@@ -43,6 +43,10 @@
 //   under its minimum with no fallback, :326-345)               change-minimum
 //   "Transaction size (...) exceeds protocol maximum" (internal/build.ts:
 //   119-127)                                                    tx-size
+//   "No suitable UTxOs available for collateral", "Insufficient collateral
+//   available", "Collateral return (...) is below minimum UTxO requirement"
+//   (phases/Collateral.ts:157-165, :203-209, :273-281): the library's own
+//   collateral choice fails                                     collateral
 //
 // The replay path: every intent the history reader writes (source 'replay')
 // is built with the run's parameters as the library's full protocol
@@ -127,8 +131,19 @@
 // (:220) and the rest returned to the change address (:289-294); a selected
 // input may serve (:147-149). No operation or build option names a
 // collateral UTxO (BuildOptions, TransactionBuilder.ts:472-601), so the
-// UTxO the engine sets aside cannot be given to it, and REPLAY_COVERAGE.evo
-// leaves collateral out: a script spend is refused before the library runs.
+// library cannot be given the UTxO the engine would set aside. Its script
+// spends take the library's own choice (ownCollateral; methods/contract.mjs
+// choosesOwnCollateral): the engine sets nothing aside, the library selects
+// and chooses its collateral from the whole pool, the engine records that
+// collateral as library-chosen, and a collateral the kit's check refuses is
+// class 'collateral', charged to the library. The ledger allows a collateral
+// input that is also a spent input: the Babbage UTXO rule, which Conway's
+// runs (eras/conway/impl/src/Cardano/Ledger/Conway/Rules/Utxo.hs:253), checks
+// the collateral UTxOs alone (feesOK and validateTotalCollateral,
+// eras/babbage/impl/src/Cardano/Ledger/Babbage/Rules/Utxo.hs:195-212,
+// :241-256), requires only that every input, collateral and reference input
+// be in the UTxO (:388-390), and keeps only the spent and reference inputs
+// disjoint (disjointRefInputs, :215-229, :371).
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -153,6 +168,7 @@ export function classOfEvoError(e) {
   if (/^Cannot balance transaction: Native assets present in leftover but insufficient lovelace/.test(m)) return CLASSES.changeMinimum;
   if (/^Cannot create valid change: Insufficient funds/.test(m)) return CLASSES.changeMinimum;
   if (/^Transaction size \(\d+ bytes\) exceeds protocol maximum/.test(m)) return CLASSES.txSize;
+  if (/^(No suitable UTxOs available for collateral|Insufficient collateral available|Collateral return \(\d+ lovelace\) is below minimum UTxO requirement)/.test(m)) return CLASSES.collateral;
   return CLASSES.other;
 }
 
@@ -526,6 +542,7 @@ function walletKeysOf(state, intent, inputs, collateralRefs) {
 // refuses what its coverage leaves out first.
 export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', unfrack = null } = {}) {
   if (opts.changePolicy !== 'default') return { ok: false, class: CLASSES.other, detail: 'the Evolution SDK baseline takes no change substitution' };
+  if (opts.collateral) throw new Error(`${name}: the library chooses its own collateral and cannot be given a UTxO set aside`);
   const replay = intent.source === 'replay';
   if (replay) {
     const refusal = evoRefusal(intent);
@@ -645,6 +662,7 @@ export function evoMethod({ unfrack = null } = {}) {
     name,
     version: `@evolution-sdk/evolution ${EVO_VERSION} largest-first${unfrack ? ', unfrack' : ''}`,
     deterministic: true,
+    ownCollateral: true,
     async build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.evo, intent);
       return buildEvo(state, intent, params, opts, { name, unfrack });

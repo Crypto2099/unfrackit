@@ -43,12 +43,22 @@
 //     the balance cannot make without it, is infeasible for collateral
 //     (outcome 'infeasible-collateral', reason 'none-eligible' or 'payment'):
 //     recorded apart from build failures and from infeasibility by balance,
-//     never a selector failure; the state is left as it was.
+//     never a selector failure; the state is left as it was. A method whose
+//     library chooses its own collateral (the Evolution SDK's,
+//     methods/contract.mjs choosesOwnCollateral) has nothing set aside: it
+//     selects from the whole pool, and its transaction's collateral is the
+//     library's, recorded as library-chosen. Its spend is infeasible for
+//     collateral ('none-eligible') when the rule would set no UTxO aside, as
+//     for every method, since no method could build it; the 'payment' reason
+//     does not apply to it.
 //   - otherwise the method builds it from the pool. A method's exception or a
 //     failed kit check is a build failure with its class (class collateral: a
-//     transaction whose collateral fails the kit's check); 'not-replayable'
-//     (an intent the method cannot express) is counted apart. A failure
-//     leaves the state as it was, and the replay continues.
+//     transaction whose collateral fails the kit's check, charged to the
+//     method, whether the engine or its library chose the collateral);
+//     'not-replayable' (an intent the method cannot express) is counted
+//     apart. A failed kit check on a transaction carrying parts its adapter
+//     wrote after the library priced it names those parts in its detail. A
+//     failure leaves the state as it was, and the replay continues.
 // At the first spend of each parallel burst, a separate pass builds the
 // burst's intents in order from the state at its start without spending any
 // output created earlier in the burst (burst feasibility, H-5 and H-6's rescue
@@ -75,7 +85,7 @@ import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
 import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers } from '../kit/replay.mjs';
-import { checkResult, checkOptions, NOT_REPLAYABLE } from '../methods/contract.mjs';
+import { checkResult, checkOptions, choosesOwnCollateral, NOT_REPLAYABLE } from '../methods/contract.mjs';
 import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
 import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
 import { replaySuffices } from './feasible.mjs';
@@ -120,6 +130,16 @@ export function setAside(T, params, state, intent, rule) {
   if (!u) return { ok: false, reason: 'none-eligible' };
   if (!replaySuffices(T, state, params, intent, { aside: u.ref }).suffices) return { ok: false, reason: 'payment' };
   return { ok: true, pool: removeSpent(state, [u.ref]), collateral: u };
+}
+
+// A spend's collateral for `method`: the set-aside, or for a method whose
+// library chooses its own collateral, the whole pool with no UTxO set aside
+// ({ ok: true, pool, collateral: null, library: true }), or 'none-eligible'
+// when the rule would set no UTxO aside.
+function collateralFor(T, params, state, intent, rule, method) {
+  if (!intent.collateral.required || !choosesOwnCollateral(method)) return setAside(T, params, state, intent, rule);
+  if (!collateralToSetAside(params, state, intent, rule)) return { ok: false, reason: 'none-eligible' };
+  return { ok: true, pool: state, collateral: null, library: true };
 }
 
 // Whether collateral is available under each rule at a script spend, for
@@ -365,7 +385,7 @@ export async function replay(T, params, source, job) {
       continue;
     }
 
-    const aside = setAside(T, params, state, intent, opts.collateralRule);
+    const aside = collateralFor(T, params, state, intent, opts.collateralRule, method);
     if (!aside.ok) {
       counts.infeasibleCollateral++;
       out.spends.push({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: aside.reason });
@@ -401,7 +421,7 @@ export async function replay(T, params, source, job) {
         walletFee: wcf,
         size: r.size,
         ...m,
-        collateralUsed: r.inspected.collateralInputs.length ? { inputs: r.inspected.collateralInputs.length, total: r.inspected.totalCollateral, returned: !!r.inspected.collateralReturn } : null,
+        collateralUsed: r.inspected.collateralInputs.length ? { inputs: r.inspected.collateralInputs.length, total: r.inspected.totalCollateral, returned: !!r.inspected.collateralReturn, chosen: aside.library ? 'library' : 'set-aside' } : null,
         ms: r.ms,
         utxosAfter: st.utxos,
         largestValueBytesAfter: st.largestValueBytes,
@@ -454,8 +474,9 @@ export async function replay(T, params, source, job) {
 // detail; empty when there are none.
 const unpricedText = (r) => (r.library && r.library.unpriced && r.library.unpriced.length ? `; parts the library did not price: ${r.library.unpriced.join(', ')}` : '');
 
-// One intent by the method from the pool the set-aside leaves (setAside),
-// checked by the kit against the whole state and applied.
+// One intent by the method from the pool the set-aside leaves (setAside, or
+// the whole pool for a library that chooses its own collateral), checked by
+// the kit against the whole state and applied.
 async function buildOne(T, params, state, intent, method, opts, aside) {
   const t0 = performance.now();
   let r;
@@ -469,7 +490,9 @@ async function buildOne(T, params, state, intent, method, opts, aside) {
   if (!r.ok) return { ok: false, class: r.class, detail: r.detail, ms };
   const last = r.txs[r.txs.length - 1];
   const inspected = inspectTx(last.bytes);
-  // The collateral of a script spend is the UTxO set aside, and no other.
+  // The collateral of a script spend is the UTxO set aside, and no other,
+  // unless the method's library chooses its own (aside.library), which the
+  // kit's check alone judges.
   if (aside.collateral) {
     for (const t of r.txs) {
       const c = t === last ? inspected.collateralInputs : inspectTx(t.bytes).collateralInputs;
@@ -508,7 +531,7 @@ async function burstPass(T, params, start, events, method, opts) {
       continue;
     }
     if (!replaySuffices(T, s, params, intent).suffices) break;
-    const aside = setAside(T, params, s, intent, opts.collateralRule);
+    const aside = collateralFor(T, params, s, intent, opts.collateralRule, method);
     if (!aside.ok) break;
     const r = await buildOne(T, params, s, intent, method, opts, aside);
     if (!r.ok) break;
