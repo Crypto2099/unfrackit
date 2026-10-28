@@ -44,7 +44,9 @@ export const ORACLE_SETTINGS = Object.freeze({
   // the rest of the time limit, starting from the best found so far (the
   // exhaustive result and the incumbents), and the lower fee is kept; the
   // status then speaks for every spendable UTxO, so a spend the candidate set
-  // cannot build is not reported infeasible. 'mip': the program runs only
+  // cannot build is not reported infeasible. Under every value, a candidate
+  // set that holds every spendable UTxO needs no program: the completed
+  // exhaustive search speaks for the pool. 'mip': the program runs only
   // when the exhaustive search finds no feasible set. 'report': the
   // exhaustive result stands, its status speaking for the candidate set only.
   afterExhaustive: 'mip-always'

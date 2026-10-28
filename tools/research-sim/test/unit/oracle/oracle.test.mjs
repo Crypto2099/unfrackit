@@ -71,14 +71,20 @@ test('each method maps to the change policy its reference uses', () => {
 });
 
 test('the program follows a completed exhaustive search as afterExhaustive says', () => {
+  const f = (v, complete, found, coversPool = false) => programFollows(v, { complete, found, coversPool });
   for (const found of [true, false]) {
-    assert.equal(programFollows('mip-always', true, found), true);
-    assert.equal(programFollows('report', true, found), false);
-    for (const v of ['mip-always', 'mip', 'report']) assert.equal(programFollows(v, false, found), false, `${v} after an incomplete search`);
+    assert.equal(f('mip-always', true, found), true);
+    assert.equal(f('report', true, found), false);
+    for (const v of ['mip-always', 'mip', 'report']) {
+      assert.equal(f(v, false, found), false, `${v} after an incomplete search`);
+      // A candidate set that holds every spendable UTxO leaves the program
+      // nothing to search.
+      assert.equal(f(v, true, found, true), false, `${v} over the whole pool`);
+    }
   }
-  assert.equal(programFollows('mip', true, false), true);
-  assert.equal(programFollows('mip', true, true), false);
-  assert.throws(() => programFollows('never', true, true), /not implemented/);
+  assert.equal(f('mip', true, false), true);
+  assert.equal(f('mip', true, true), false);
+  assert.throws(() => f('never', true, true), /not implemented/);
 });
 
 test('statuses and bounds: proven only when the last search completed', () => {

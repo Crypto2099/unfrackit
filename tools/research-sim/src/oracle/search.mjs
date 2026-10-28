@@ -33,9 +33,12 @@
 //                  solution
 //
 // `scope` names the search space the status speaks for: 'spendable' when the
-// program ran over every spendable UTxO, 'candidates' when the search covered
-// the candidate set only (the exhaustive search alone, or the program forced
-// onto the candidates for the comparison of the paths). So under 'mip-always' a run is optimal or
+// program ran over every spendable UTxO, or when the candidate set holds every
+// spendable UTxO (the exhaustive search then searched the whole pool, and no
+// program follows it, since none could find a lower fee); 'candidates' when
+// the search covered the candidate set only (the exhaustive search alone, or
+// the program forced onto the candidates for the comparison of the paths).
+// So under 'mip-always' a run is optimal or
 // infeasible over every spendable UTxO only when the program proves it, and
 // a completed exhaustive search alone proves nothing over the pool; the
 // exhaustive search's own result over the candidates is kept beside it as
@@ -115,17 +118,20 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
     if (chosen === 'exhaustive') {
       phase = 'exhaustive';
       paths.push('exhaustive');
+      const pool = spendable(state);
+      // The candidates are drawn from the spendable UTxOs, so equal counts
+      // mean the candidate set is the whole pool.
+      const coversPool = cs.all.length === pool.length;
       candidates = cs.all.length;
-      scope = 'candidates';
+      scope = coversPool ? 'spendable' : 'candidates';
       const r = await exhaustiveSearch({ model, candidates: cs.all, evaluate: ev.evaluate, best, deadline, onImprove: improve });
       best = r.best;
       detail = { nodes: r.nodes, popped: r.popped, evaluated: r.evaluated, pruned: r.pruned };
       result = statusOf({ proven: r.complete, best });
-      exhaustive = { complete: r.complete, status: result.status, fee: best ? best.fee : null };
-      if (path === 'auto' && programFollows(settings.afterExhaustive, r.complete, best !== null)) {
+      exhaustive = { complete: r.complete, status: result.status, fee: best ? best.fee : null, coversPool };
+      if (path === 'auto' && programFollows(settings.afterExhaustive, { complete: r.complete, found: best !== null, coversPool })) {
         phase = 'mip';
         paths.push('mip');
-        const pool = spendable(state);
         const m = await mipSearch({ highs: highs || (await loadSolver()), model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
         best = m.best;
         detail.mip = mipDetail(m);
@@ -178,15 +184,17 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
   }
 }
 
-// Whether the program over every spendable UTxO follows a completed
-// exhaustive search, by the setting afterExhaustive; found: whether a
-// feasible set is known.
-export function programFollows(afterExhaustive, complete, found) {
-  if (!complete) return false;
+// Whether the program over every spendable UTxO follows an exhaustive
+// search, by the setting afterExhaustive: complete, whether the search
+// completed; found, whether a feasible set is known; coversPool, whether the
+// candidate set holds every spendable UTxO, when a completed search already
+// speaks for the pool and no program follows it under any value.
+export function programFollows(afterExhaustive, { complete, found, coversPool }) {
+  if (!['mip-always', 'mip', 'report'].includes(afterExhaustive)) throw new Error(`afterExhaustive ${afterExhaustive} is not implemented`);
+  if (!complete || coversPool) return false;
   if (afterExhaustive === 'mip-always') return true;
   if (afterExhaustive === 'mip') return !found;
-  if (afterExhaustive === 'report') return false;
-  throw new Error(`afterExhaustive ${afterExhaustive} is not implemented`);
+  return false;
 }
 
 // The status and the lower bound of a run from its last search: proven,

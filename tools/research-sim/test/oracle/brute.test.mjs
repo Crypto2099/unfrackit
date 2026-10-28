@@ -13,8 +13,9 @@
 //     subset under 'mip-always' (the default), where the program over every
 //     spendable UTxO follows the exhaustive search; the candidate set under
 //     'report'; under 'mip', the candidate set when one of its subsets
-//     builds and every subset otherwise. The status's scope must name that
-//     space;
+//     builds and every subset otherwise; and every subset, under any value,
+//     when the candidate set holds every spendable UTxO. The status's scope
+//     must name that space;
 //   - the lower bound is never above the exact fee of a feasible set, and a
 //     set the bound calls infeasible never builds;
 //   - the mixed-integer path over the same candidates gives the same fee, or
@@ -46,7 +47,7 @@ export const SUB_SEEDS = (i) => [4001 + 2 * i, 4002 + 2 * i];
 // The search space the oracle's own run speaks for under afterExhaustive,
 // and the least exact fee over it: r is a record of brute-worker.mjs.
 export function expected(afterExhaustive, r) {
-  const spendable = !r.exhaustivePath || afterExhaustive === 'mip-always' || (afterExhaustive === 'mip' && r.candidateMin === null);
+  const spendable = !r.exhaustivePath || r.candidates === r.utxos || afterExhaustive === 'mip-always' || (afterExhaustive === 'mip' && r.candidateMin === null);
   return spendable ? { scope: 'spendable', min: r.globalMin } : { scope: 'candidates', min: r.candidateMin };
 }
 
