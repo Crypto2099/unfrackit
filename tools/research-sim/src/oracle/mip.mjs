@@ -369,11 +369,14 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       if (!idx.length) break;
       const S = idx.map((i) => pool[i]);
       const relaxed = sol[prog.F] * ADA;
-      // The solver's tolerances can admit a set a little short of a request
-      // or of the coin; the bound's exact conditions catch it before the
-      // rebuild.
+      // The program can propose a set that fails the bound's exact
+      // conditions: on a large pool its return and change indicators are
+      // continuous, so it charges the change and its minimum only in part,
+      // and its tolerances can admit a set a little short of a request.
+      // Such a set is refuted by the bound (bound.mjs boundOf) without a
+      // rebuild, and cut off like any other.
       const bd = boundOf(M, S);
-      const ev = bd.feasible ? await evaluate(S) : { ok: false, class: 'tolerance', detail: !bd.covers ? 'a requested asset is not covered' : bd.coinIn < bd.need ? 'the coin falls short' : 'the bytes pass the size limit' };
+      const ev = bd.feasible ? await evaluate(S) : { ok: false, class: 'bound', detail: !bd.covers ? 'a requested asset is not covered' : bd.coinIn < bd.need ? 'the coin falls short' : 'the bytes pass the size limit' };
       if (!ev.ok) out.rejections.push({ inputs: S.length, reason: ev.class, detail: ev.detail, relaxedFee: Math.round(relaxed) });
       else {
         const d = Number(ev.fee) - relaxed;
