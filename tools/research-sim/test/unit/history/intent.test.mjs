@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { encUint, encBytes, encArray, encMap, encTag } from '../../../src/history/cbor.mjs';
 import { encodeOutput } from '../../../src/history/output.mjs';
 import { assembleTx, decodeTx } from '../../../src/history/tx.mjs';
-import { spendEvent, IntentCheck } from '../../../src/history/intent.mjs';
+import { spendEvent, IntentCheck, raiseToMinimum, atMinimum } from '../../../src/history/intent.mjs';
 import { loadTreatmentCsl, minAdaForOutput } from '../../../src/history/csl.mjs';
 import { settingsWith } from '../../../src/history/settings.mjs';
 import { blake2b224 } from '../../../src/history/blake2b.mjs';
@@ -97,9 +97,9 @@ test('a purchase-like spend: a raised payment, an inflow, a fixed input', { skip
   assert.equal(raised.index, 0);
   assert.equal(raised.raised.from, 100000n);
   assert.equal(raised.raised.rule, 'babbage-conway');
-  assert.equal(raised.coin, minAdaForOutput(CSL, Buffer.from(raised.cbor, 'hex'), '4310'));
+  assert.equal(raised.coin, minAdaForOutput(Buffer.from(raised.cbor, 'hex'), '4310'));
   assert.deepEqual([inflow.inflow, inflow.from, inflow.index, inflow.assets.length], [true, 1, null, 1]);
-  assert.equal(inflow.coin, minAdaForOutput(CSL, Buffer.from(inflow.cbor, 'hex'), '4310'));
+  assert.equal(inflow.coin, minAdaForOutput(Buffer.from(inflow.cbor, 'hex'), '4310'));
   assert.deepEqual(it.fixed.inputs.map((x) => x.ref), [`${TXB}#3`]);
   assert.deepEqual(Object.keys(it.fixed.body), ['3']);
   assert.ok(it.fixed.witnesses[0], 'the other party\'s witness is a fixed part');
@@ -176,4 +176,23 @@ test('a phase-2-invalid spend forfeits its collateral', { skip }, async () => {
   assert.deepEqual([it.type, it.requested.length, it.fixed, it.collateral.required, it.invalid.forfeit], ['T6', 0, null, true, 3000000n]);
   assert.deepEqual(it.observed.walletOutputs.map((o) => o.index), [1]);
   assert.deepEqual(it.observed.walletInputs.map((x) => x.ref), [`${TXA}#0`]);
+});
+
+test('the minimum is measured on the bytes as written, not on CSL\'s re-encoding', { skip }, async () => {
+  const { CSL } = await setup();
+  const written = encodeOutput({ address: WALLET_ADDR, coin: 2000000n, assets: [NFT] }, 'map');
+  const asCsl = (() => {
+    const o = CSL.TransactionOutput.from_bytes(Uint8Array.from(written));
+    const back = o.to_bytes().length;
+    const dc = CSL.DataCost.new_coins_per_byte(CSL.BigNum.from_str('4310'));
+    const m = BigInt(CSL.min_ada_for_output(o, dc).to_str());
+    return { back, m };
+  })();
+  assert.equal(asCsl.back, written.length - 2, 'CSL writes the map-form output back as an array, 2 bytes shorter');
+  assert.equal(minAdaForOutput(written, '4310'), 4310n * (160n + BigInt(written.length)));
+  assert.equal(minAdaForOutput(written, '4310') - asCsl.m, 2n * 4310n);
+  const r = raiseToMinimum(written, 100000n, '4310');
+  assert.equal(r.coin, minAdaForOutput(r.bytes, '4310'));
+  const a = atMinimum({ address: WALLET_ADDR, assets: [NFT] }, 'map', '4310');
+  assert.equal(a.coin, minAdaForOutput(a.bytes, '4310'));
 });

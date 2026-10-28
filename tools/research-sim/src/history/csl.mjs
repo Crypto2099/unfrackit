@@ -56,23 +56,14 @@ export async function loadTreatmentCsl(dir, pinsText) {
   return kit.CSL;
 }
 
-// CSL's min_ada_for_output on the output as CSL decodes and re-encodes it,
-// at the given coins per UTxO byte. The ledger's rule it implements is
-// coinsPerUTxOByte * (160 + |output|) (IntersectMBO/cardano-ledger at
+// The minimum coin of an output as it is written in the transaction: coins
+// per UTxO byte times (160 plus the output's serialized size). This is the
+// ledger's rule (IntersectMBO/cardano-ledger at
 // 391db20866113f08bc6317cb5c341304365986c6, eras/babbage/impl/src/Cardano/
-// Ledger/Babbage/TxOut.hs:678-702, babbageMinUTxOValue).
-export function minAdaForOutput(CSL, outputBytes, coinsPerUtxoByte) {
-  const out = CSL.TransactionOutput.from_bytes(Uint8Array.from(outputBytes));
-  const per = CSL.BigNum.from_str(String(coinsPerUtxoByte));
-  const dc = CSL.DataCost.new_coins_per_byte(per);
-  try {
-    const c = CSL.min_ada_for_output(out, dc);
-    const v = BigInt(c.to_str());
-    c.free();
-    return v;
-  } finally {
-    out.free();
-    dc.free();
-    per.free();
-  }
+// Ledger/Babbage/TxOut.hs:678-702, babbageMinUTxOValue) and what the kit's
+// minimum check computes. CSL's min_ada_for_output is not used: it measures
+// the output after decoding and re-encoding it, and writes a map-form output
+// without a datum or a reference script back as an array, 2 bytes shorter.
+export function minAdaForOutput(outputBytes, coinsPerUtxoByte) {
+  return BigInt(coinsPerUtxoByte) * (160n + BigInt(outputBytes.length));
 }

@@ -16,9 +16,8 @@
 // - battery-pools: the T1 amounts and T5 shares of a run's history files.
 //
 // Value bytes are the ledger's serialization of the Value (value.mjs); a
-// UTxO's minimum is cardano-serialization-lib's min_ada_for_output on the
-// output re-encoded from db-sync's columns, at the snapshot's coins per UTxO
-// byte. Per-wallet rows are written to the private run directory only.
+// UTxO's minimum is the ledger's rule on the output re-encoded from
+// db-sync's columns, at the snapshot's coins per UTxO byte. Per-wallet rows are written to the private run directory only.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -101,7 +100,7 @@ export async function cmdCensus(opts) {
           if (vb > largest) largest = vb;
           if (r.assets.length) {
             tokenUtxos++;
-            const min = minAdaForOutput(ctx.CSL, reencode(ctx, r).bytes, ctx.params.coinsPerUtxoByte);
+            const min = minAdaForOutput(reencode(ctx, r).bytes, ctx.params.coinsPerUtxoByte);
             locked += min;
             excess += r.coin > min ? r.coin - min : 0n;
           }

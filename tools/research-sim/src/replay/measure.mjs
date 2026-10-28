@@ -27,9 +27,8 @@
 //   utxos                the UTxO count
 //   largestValueBytes    the largest Value of any UTxO, in bytes
 //   lockedAda            the minimum coin of every token-carrying UTxO,
-//                        coinsPerUtxoByte * (160 + its output's bytes), which
-//                        equals CSL's min_ada_for_output on the same output
-//                        (setting heldBytes 'ledger')
+//                        coinsPerUtxoByte * (160 + its output's bytes as
+//                        written; setting heldBytes 'ledger')
 //   lockedAdaPerToken    lockedAda over the distinct assets held
 
 import { valueSize } from '../history/value.mjs';

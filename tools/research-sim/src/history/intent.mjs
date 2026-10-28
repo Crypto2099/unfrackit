@@ -12,8 +12,8 @@
 //   from the wallet's other outputs, the net inflow of each native asset that
 //   did not come from wallet inputs, as requested wallet outputs at their
 //   minimum. A requested output whose coin is below today's minimum
-//   (cardano-serialization-lib's min_ada_for_output at the snapshot's coins
-//   per UTxO byte) is raised to it, the raise recorded with the rule of its
+//   (the ledger's rule on the output's bytes as written, at the snapshot's
+//   coins per UTxO byte) is raised to it, the raise recorded with the rule of its
 //   transaction's era. The wallet's other outputs are change.
 // - implicit values: withdrawals, refunds, deposits, the treasury donation,
 //   mints and burns, read from the transaction's own fields and checked
@@ -82,15 +82,15 @@ function sameSet(a, b) {
   return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
-// Raises an output's coin to CSL's minimum, re-checking after the coin's own
+// Raises an output's coin to its minimum (on the bytes as written), re-checking after the coin's own
 // encoding grows. Returns { bytes, coin, raisedFrom }.
-export function raiseToMinimum(CSL, bytes, coin, coinsPerUtxoByte) {
-  let min = minAdaForOutput(CSL, bytes, coinsPerUtxoByte);
+export function raiseToMinimum(bytes, coin, coinsPerUtxoByte) {
+  let min = minAdaForOutput(bytes, coinsPerUtxoByte);
   if (coin >= min) return { bytes, coin, raisedFrom: null };
   let b = bytes;
   for (let k = 0; k < 8; k++) {
     b = withCoin(bytes, min);
-    const again = minAdaForOutput(CSL, b, coinsPerUtxoByte);
+    const again = minAdaForOutput(b, coinsPerUtxoByte);
     if (again <= min) return { bytes: b, coin: min, raisedFrom: coin };
     min = again;
   }
@@ -98,11 +98,11 @@ export function raiseToMinimum(CSL, bytes, coin, coinsPerUtxoByte) {
 }
 
 // The coin of a new output at its minimum.
-export function atMinimum(CSL, out, form, coinsPerUtxoByte) {
+export function atMinimum(out, form, coinsPerUtxoByte) {
   let coin = 0n;
   for (let k = 0; k < 8; k++) {
     const b = encodeOutput({ ...out, coin }, form);
-    const min = minAdaForOutput(CSL, b, coinsPerUtxoByte);
+    const min = minAdaForOutput(b, coinsPerUtxoByte);
     if (min <= coin) return { bytes: b, coin };
     coin = min;
   }
@@ -293,7 +293,7 @@ export function spendEvent(ctx, w, b) {
     const isWallet = wal(o.row);
     const asObserved = !isWallet || (settings.requested === 'a' && (o.row.scriptPay || o.dec.datum || o.dec.scriptRef));
     if (asObserved) {
-      const r = raiseToMinimum(ctx.CSL, o.raw, o.dec.coin, cpb);
+      const r = raiseToMinimum(o.raw, o.dec.coin, cpb);
       requested.push({
         cbor: hex(r.bytes),
         address: o.row.address,
@@ -330,7 +330,7 @@ export function spendEvent(ctx, w, b) {
         left.set(k, rem - t);
       }
       if (!take.length) continue;
-      const m = atMinimum(ctx.CSL, { address: o.dec.address, assets: take }, o.dec.form, cpb);
+      const m = atMinimum({ address: o.dec.address, assets: take }, o.dec.form, cpb);
       requested.push({
         cbor: hex(m.bytes),
         address: o.row.address,
