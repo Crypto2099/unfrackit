@@ -61,7 +61,7 @@
 
 import { CLASSES } from '../kit/check.mjs';
 import { buildWithChange } from './change.mjs';
-import { inputOrder, recordsOf, keyCount, batteryOnly, errorText, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 
 export const CSL_STRATEGIES = Object.freeze({ lf: 'LargestFirstMultiAsset', ri: 'RandomImproveMultiAsset' });
@@ -147,7 +147,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
     version: `cardano-serialization-lib ${T.cslkit.CSL_VERSION} ${CSL_STRATEGIES[strategy]}${preferPureChange ? ', prefer_pure_change' : ''}`,
     deterministic: strategy === 'lf',
     build(state, intent, params, opts) {
-      batteryOnly(name, intent);
+      refuseUncovered(name, REPLAY_COVERAGE.csl, intent);
       const C = T.CSL;
       const S = scope();
       try {

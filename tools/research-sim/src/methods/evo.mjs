@@ -50,7 +50,7 @@ import * as E from '@evolution-sdk/evolution';
 import { makeTxBuilder } from '@evolution-sdk/evolution/sdk/builders/TransactionBuilder';
 import { CLASSES } from '../kit/check.mjs';
 import { unspentOutputParts, inspectTx } from '../kit/inspect.mjs';
-import { inputOrder, recordsOf, keyCount, batteryOnly, errorText, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 export const EVO_VERSION = JSON.parse(readFileSync(createRequire(import.meta.url).resolve('@evolution-sdk/evolution/package.json'), 'utf8')).version;
 if (EVO_VERSION !== '0.6.0') throw new Error(`@evolution-sdk/evolution ${EVO_VERSION} is installed; the baseline is 0.6.0`);
@@ -100,7 +100,7 @@ export function evoMethod({ unfrack = null } = {}) {
     version: `@evolution-sdk/evolution ${EVO_VERSION} largest-first${unfrack ? ', unfrack' : ''}`,
     deterministic: true,
     async build(state, intent, params, opts) {
-      batteryOnly(name, intent);
+      refuseUncovered(name, REPLAY_COVERAGE.evo, intent);
       if (opts.changePolicy !== 'default') return { ok: false, class: CLASSES.other, detail: 'the Evolution SDK baseline takes no change substitution' };
       let b = makeTxBuilder({ chain: chainOf(state.network) });
       for (const o of intent.requested) {

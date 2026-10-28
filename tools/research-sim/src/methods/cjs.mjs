@@ -81,7 +81,7 @@ import { minFee } from '../kit/fee.mjs';
 import { valueSize } from '../history/value.mjs';
 import { makeRng } from '../shapes/rng.mjs';
 import { buildWithChange } from './change.mjs';
-import { inputOrder, recordsOf, batteryOnly, errorText, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
 
 const PKG = JSON.parse(readFileSync(join(dirname(createRequire(import.meta.url).resolve('@cardano-sdk/input-selection')), '..', '..', 'package.json'), 'utf8'));
@@ -170,7 +170,7 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
     version: `@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`,
     deterministic: false,
     async build(state, intent, params, opts) {
-      batteryOnly(name, intent);
+      refuseUncovered(name, REPLAY_COVERAGE.cjs, intent);
       let random = opts.random;
       if (!random) {
         if (!Number.isSafeInteger(opts.seed)) throw new Error(`${name}: a seed is required`);

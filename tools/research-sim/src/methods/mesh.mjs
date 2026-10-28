@@ -40,7 +40,7 @@ import { MeshTxBuilder, LargestFirstInputSelector } from '@meshsdk/transaction';
 import { CLASSES } from '../kit/check.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { makeRng } from '../shapes/rng.mjs';
-import { inputOrder, recordsOf, keyCount, batteryOnly, errorText, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 const require = createRequire(import.meta.url);
 export const MESH_VERSION = JSON.parse(readFileSync(join(dirname(require.resolve('@meshsdk/transaction')), '..', 'package.json'), 'utf8')).version;
@@ -94,7 +94,7 @@ export function meshMethod({ selector = 'default' } = {}) {
     version: `@meshsdk/transaction ${MESH_VERSION} ${selector === 'default' ? 'CardanoSdkInputSelector' : 'LargestFirstInputSelector'}`,
     deterministic: selector !== 'default',
     async build(state, intent, params, opts) {
-      batteryOnly(name, intent);
+      refuseUncovered(name, REPLAY_COVERAGE.mesh, intent);
       if (opts.changePolicy !== 'default') return { ok: false, class: CLASSES.other, detail: 'Mesh is surveyed at its own change only' };
       const b = new MeshTxBuilder({ params: meshParams(params), ...(selector === 'default' ? {} : { selector: new LargestFirstInputSelector() }) });
       for (const o of intent.requested) b.txOut(o.address, meshAmount(o.coin, o.assets));

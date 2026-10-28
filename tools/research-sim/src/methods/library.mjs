@@ -16,9 +16,23 @@
 // credential makes it held; state/utxo.mjs), so the count is the number of
 // distinct credentials among the inputs.
 //
-// The replay path (an intent with fixed parts, or one that needs collateral)
-// is not built yet: the adapters refuse such an intent with an error, which the
-// engine counts as class 'other', so no replay can be scored by mistake.
+// The replay path. A replayed intent can carry parts a battery spend never
+// does (REPLAY_PARTS):
+//   fixed       fixed parts: inputs the selector does not choose (other
+//               parties' and script inputs, the wallet's held UTxOs the spend
+//               consumed), reference inputs, certificates, withdrawals, the
+//               mint field, validity, required signers, votes, proposals, the
+//               treasury fields, auxiliary data and witnesses
+//   collateral  collateral for a script spend, chosen by the arm's rule
+//   implicit    withdrawals, refunds, deposits, a donation, a mint or a burn
+//   outputData  a requested output that carries a datum or a script reference
+// Each adapter states which of them its replay path covers (REPLAY_COVERAGE),
+// and refuses, before it builds anything, an intent with a part it does not
+// cover (refuseUncovered). The refusal is an ordinary error, which the engine
+// counts as class 'other' with its message, so no replay is scored by an
+// adapter that has not built its path. A part an adapter covers but its
+// library has no way to express is the adapter's to return as
+// 'not-replayable'.
 
 import { spendable } from '../state/state.mjs';
 
@@ -35,11 +49,43 @@ export function recordsOf(state, refs) {
 
 export const keyCount = (records) => new Set(records.map((u) => u.cred)).size;
 
-export function batteryOnly(name, intent) {
-  if (intent.fixed || intent.collateral.required) throw new Error(`${name}: the replay path (fixed parts and collateral) is not built yet`);
-  const imp = intent.implicit;
-  if (imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length) throw new Error(`${name}: implicit values come only with fixed parts, whose path is not built yet`);
-  if (intent.requested.some((o) => o.datum || o.scriptRef)) throw new Error(`${name}: requested outputs with a datum or a script reference come only with replays, whose path is not built yet`);
+export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']);
+
+// The parts each adapter's replay path covers, by adapter module:
+//   csl   csl-lf, csl-ri, csl-lf-pure, csl-ri-pure: none yet
+//   evo   evo-lf (and the survey's evo-unfrack): none yet
+//   mesh  the survey's Mesh subjects: none; Mesh is surveyed on battery spends
+//         only and never replays
+//   cjs   cjs-rrri: none yet
+export const REPLAY_COVERAGE = Object.freeze({
+  csl: Object.freeze([]),
+  evo: Object.freeze([]),
+  mesh: Object.freeze([]),
+  cjs: Object.freeze([])
+});
+
+const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
+
+// The parts of an intent, among REPLAY_PARTS.
+export function partsOf(intent) {
+  const out = [];
+  if (intent.fixed) out.push('fixed');
+  if (intent.collateral.required) out.push('collateral');
+  if (hasImplicit(intent.implicit)) out.push('implicit');
+  if (intent.requested.some((o) => o.datum || o.scriptRef)) out.push('outputData');
+  return out;
+}
+
+// Throws for the first part of the intent the adapter's statement does not
+// cover, with the same message for every adapter that covers none.
+export function refuseUncovered(name, covered, intent) {
+  for (const p of covered) if (!REPLAY_PARTS.includes(p)) throw new Error(`${name}: unknown replay part ${p}`);
+  const has = new Set(partsOf(intent));
+  const covers = new Set(covered);
+  const missing = (p) => has.has(p) && !covers.has(p);
+  if (missing('fixed') || missing('collateral')) throw new Error(`${name}: the replay path (fixed parts and collateral) is not built yet`);
+  if (missing('implicit')) throw new Error(`${name}: implicit values come only with fixed parts, whose path is not built yet`);
+  if (missing('outputData')) throw new Error(`${name}: requested outputs with a datum or a script reference come only with replays, whose path is not built yet`);
 }
 
 export const errorText = (e) => (typeof e === 'string' ? e : e && e.message !== undefined ? String(e.message) : String(e));
