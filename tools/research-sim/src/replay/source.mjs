@@ -2,20 +2,26 @@
 // Copyright 2026 Adam K. Dean
 
 // A replay's or battery's wallet, from its history file or a synthetic shape:
-//   { wallet, window, network, stakeCred, changeAddress, franken, start,
-//     events, arrival, windowStart, windowEnd, params, analysisFreezeTx }
+//   { wallet, window, network, stakeCred, changeAddress, changeAddressEnd,
+//     franken, start, events, arrival, windowStart, windowEnd, params,
+//     analysisFreezeTx }
 // `wallet` is db-sync's stake-credential id or the shape's name; `window` the
 // history's frame ('recent', 'peak', or a test frame), 'snapshot' for a
 // snapshot file (no window), or 'synthetic' for a shape's own stream. The
-// change address is the change-address rule's over the start state
-// (state/history.mjs), and the stake credential is the change address's.
+// change address is the change-address rule's over every output the wallet
+// has received on the chain (state/state.mjs annotateChangeAddresses):
+// `changeAddress` at the window's start (for a snapshot, at the snapshot),
+// `changeAddressEnd` after its last event, and each event's own; either may
+// be null when the wallet has received no output the rule can name. The
+// stake credential is that of the addresses the rule names; a shape's stream
+// starts from the shape's change address.
 //
 // spec: { kind: 'history', path, analysisFreezeTx } or { kind: 'shape', name,
 // stream: null | 'synthetic' } (shapes/streams.mjs).
 
 import { readFileSync } from 'node:fs';
 import { readHistory } from '../state/history.mjs';
-import { parseAddress, addressBytes } from '../history/address.mjs';
+import { annotateChangeAddresses } from '../state/state.mjs';
 import { shapeState } from '../shapes/shapes.mjs';
 import { syntheticStream } from '../shapes/streams.mjs';
 import { SYNTHETIC_PARAMS } from '../kit/params.mjs';
@@ -34,8 +40,9 @@ export function loadSource(T, spec) {
       window: w ? h.header.frame : 'snapshot',
       split: h.header.split || null,
       network: h.header.network,
-      stakeCred: h.changeAddress ? parseAddress(addressBytes(h.changeAddress)).stake : null,
+      stakeCred: h.stakeCred,
       changeAddress: h.changeAddress,
+      changeAddressEnd: h.changeAddressEnd,
       franken: h.franken,
       start: h.start,
       events: h.events,
@@ -48,13 +55,15 @@ export function loadSource(T, spec) {
   } else if (spec.kind === 'shape') {
     const s = shapeState(T, spec.name);
     const stream = spec.stream ? syntheticStream(T, s, SYNTHETIC_PARAMS, { kind: spec.stream }) : { events: [], windowEnd: 0 };
+    const change = annotateChangeAddresses({ address: s.state.changeAddress, txId: -1, index: 0 }, stream.events, new Set());
     source = {
       wallet: spec.name,
       window: spec.stream ? 'synthetic' : 'snapshot',
       split: null,
       network: 'synthetic',
       stakeCred: s.state.stakeCred,
-      changeAddress: s.state.changeAddress,
+      changeAddress: change.start,
+      changeAddressEnd: change.end,
       franken: new Set(),
       start: [...s.state.utxos.values()],
       events: stream.events,

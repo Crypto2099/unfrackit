@@ -7,6 +7,9 @@
 //
 //   stakeCred      the wallet's stake credential, hex
 //   changeAddress  bech32 text, the change address of every method in the arm
+//                  at this point of the replay; null before the wallet has
+//                  received any output the change-address rule can name, when
+//                  no method or plan may run on the state
 //   utxos          Map ref -> UTxO record (state/utxo.mjs), in ref order:
 //                  transaction id bytes, then output index, ascending
 //   franken        the franken-flagged payment credentials (a Set of hex)
@@ -20,6 +23,7 @@
 // credentials leave the wallet.
 
 import { parseAddress, addressBytes } from '../history/address.mjs';
+import { decodeOutputBytes } from '../history/output.mjs';
 import { utxoFromOutput, addressTextOf } from './utxo.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 
@@ -44,11 +48,17 @@ function sortedMap(utxos) {
   return m;
 }
 
-export function makeState({ network, stakeCred, changeAddress, utxos, at = { slot: null, time: null }, franken = [] }) {
-  if (!/^[0-9a-f]{56}$/.test(stakeCred)) throw new TypeError('state: the stake credential must be 28 bytes of hex');
+function checkChangeAddress(changeAddress, stakeCred) {
+  if (changeAddress === null) return;
   const ca = parseAddress(addressBytes(changeAddress));
   if (ca.stake !== stakeCred) throw new Error('state: the change address does not carry the wallet\'s stake credential');
   if (ca.paymentKind !== 'key') throw new Error('state: the change address must have a key payment credential');
+}
+
+export function makeState({ network, stakeCred, changeAddress, utxos, at = { slot: null, time: null }, franken = [] }) {
+  if (!/^[0-9a-f]{56}$/.test(stakeCred)) throw new TypeError('state: the stake credential must be 28 bytes of hex');
+  if (changeAddress === undefined) throw new TypeError('state: no change address (null when the rule names none yet)');
+  checkChangeAddress(changeAddress, stakeCred);
   return Object.freeze({
     network,
     stakeCred,
@@ -60,6 +70,13 @@ export function makeState({ network, stakeCred, changeAddress, utxos, at = { slo
 }
 
 const withUtxos = (s, utxos, at = s.at) => Object.freeze({ ...s, utxos: sortedMap(utxos), at: Object.freeze({ ...at }) });
+
+// The state with the change address the rule names at a later point.
+export function withChangeAddress(s, changeAddress) {
+  if (changeAddress === s.changeAddress) return s;
+  checkChangeAddress(changeAddress, s.stakeCred);
+  return Object.freeze({ ...s, changeAddress });
+}
 
 export const spendable = (s) => [...s.utxos.values()].filter((u) => u.held === null);
 export const held = (s) => [...s.utxos.values()].filter((u) => u.held !== null);
@@ -142,24 +159,95 @@ export function holdings(utxos) {
   return { coin, assets };
 }
 
-// The change address rule: the address of the wallet's most recently created
-// output at a key payment credential and a base address (largest creating
-// transaction id, then output index). `created` maps a ref to the creating
-// transaction's id in chain order (db-sync's tx.id); a UTxO without one makes
-// the rule inapplicable, which stops the run rather than guessing. A UTxO
-// whose payment credential the franken rule flags is passed over: change sent
-// there would be held at once and never spent again.
-export function latestKeyBaseAddress(utxos, created) {
+// The change-address rule, over a set of outputs: the address of the latest
+// one (largest creating transaction id, then output index) at a key payment
+// credential and a base address (CIP-0019, "Shelley addresses": header types
+// 0 and 2). An output whose payment credential the franken rule flags is
+// passed over: change sent there would be held at once and never spent again.
+const nameable = (a, franken) => a.paymentKind === 'key' && a.type <= 3 && !(franken && franken.has(a.payment));
+const later = (o, best) => !best || o.txId > best.txId || (o.txId === best.txId && o.index > best.index);
+
+// The rule over a set of UTxOs alone (a start state): { address, txId, index }
+// or null. `created` maps a ref to the creating transaction's id in chain
+// order (db-sync's tx.id); a UTxO without one makes the rule inapplicable,
+// which stops the run rather than guessing.
+export function latestKeyBase(utxos, created) {
   let best = null;
   for (const u of utxos) {
     if (u.held === 'franken') continue;
     const a = parseAddress(addressBytes(u.address));
-    if (a.paymentKind !== 'key' || a.type > 3) continue;
-    const id = created.get(u.ref);
-    if (id === undefined) throw new Error(`change address: no creating transaction id for ${u.ref}`);
-    const idx = indexOf(u.ref);
-    if (!best || id > best.id || (id === best.id && idx > best.index)) best = { id, index: idx, address: u.address };
+    if (!nameable(a, null)) continue;
+    const txId = created.get(u.ref);
+    if (txId === undefined) throw new Error(`change address: no creating transaction id for ${u.ref}`);
+    const o = { address: u.address, txId, index: indexOf(u.ref) };
+    if (later(o, best)) best = o;
   }
+  return best;
+}
+
+export function latestKeyBaseAddress(utxos, created) {
+  const best = latestKeyBase(utxos, created);
   if (!best) throw new Error('change address: the wallet has no output at a key payment credential and a base address');
   return best.address;
+}
+
+// The outputs an event brings to the wallet on the chain: a deposit's UTxOs,
+// and the observed wallet outputs of a spend (a phase-2-invalid spend's
+// collateral return among them) and of a self-reorganization, the real
+// wallet's own change included.
+function receivedOutputs(e) {
+  const of = (list) =>
+    list.map((o) => {
+      const bytes = decodeOutputBytes(Buffer.from(o.cbor, 'hex')).address;
+      return { address: addressTextOf(bytes), addr: parseAddress(bytes), index: o.index };
+    });
+  let outs = [];
+  if (e.kind === 'deposit') outs = e.utxos.map((u) => ({ address: u.address, addr: parseAddress(addressBytes(u.address)), index: indexOf(u.ref) }));
+  else if (e.kind === 'intent') outs = e.intent.observed ? of(e.intent.observed.walletOutputs) : [];
+  else if (e.kind === 'self-reorganization') outs = of(e.walletOutputs || []);
+  if (outs.length && !Number.isSafeInteger(e.txId)) throw new Error(`change address: a ${e.kind} event without its transaction id`);
+  return outs.map((o) => ({ ...o, txId: e.txId }));
+}
+
+// The rule over every output the wallet has received on the chain up to each
+// point of the window, so that every arm and method has the same change
+// address at a given point, and the address moves as later outputs arrive.
+// `before` is the latest such output received before the window ({ address,
+// txId, index } or null). Every event is given `changeAddress`, the address in
+// effect when it applies: an event's own outputs count from the next event
+// on. Returns the address at the window's start and after its last event.
+export function annotateChangeAddresses(before, events, franken) {
+  let best = before ? { address: before.address, txId: before.txId, index: before.index } : null;
+  for (const e of events) {
+    e.changeAddress = best ? best.address : null;
+    for (const o of receivedOutputs(e)) if (nameable(o.addr, franken) && later(o, best)) best = { address: o.address, txId: o.txId, index: o.index };
+  }
+  return { start: before ? before.address : null, end: best ? best.address : null };
+}
+
+export const CHANGE_GAPS = Object.freeze({
+  none: 'the wallet receives no output at a key payment credential and a base address, so the change-address rule names no address',
+  spendable: 'the wallet holds a spendable UTxO before it receives an output at a key payment credential and a base address, so the change-address rule names no address for a plan',
+  spend: 'the wallet spends before it receives an output at a key payment credential and a base address, so the change-address rule names no address for the spend'
+});
+
+// Where a replay needs a change address the rule does not name: the wallet
+// spends, or holds a spendable UTxO a plan could spend, before the first
+// output the rule can name, or never receives one. Returns null or the
+// reason, the same in every arm, so that a wallet is refused in all of them
+// or in none. Before the first such output a state holds no spendable UTxO,
+// so no plan has anything to propose. Events without `changeAddress` keep the
+// address in effect; once named, an address stays named.
+export function changeAddressGap({ changeAddress, changeAddressEnd, start, events }) {
+  let address = changeAddress ?? null;
+  let spendableN = start.filter((u) => u.held === null).length;
+  for (const e of events) {
+    if (e.changeAddress !== undefined) address = e.changeAddress;
+    if (address !== null) return null;
+    if (spendableN) return CHANGE_GAPS.spendable;
+    if (e.kind === 'intent') return CHANGE_GAPS.spend;
+    if (e.kind === 'deposit') spendableN += e.utxos.filter((u) => u.held === null).length;
+  }
+  if ((changeAddressEnd !== undefined ? changeAddressEnd : address) !== null) return null;
+  return spendableN ? CHANGE_GAPS.spendable : CHANGE_GAPS.none;
 }

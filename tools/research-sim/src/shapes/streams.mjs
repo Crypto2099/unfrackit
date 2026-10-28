@@ -16,6 +16,9 @@
 //              before)
 //   day 12     T5   send half of the fungible held on the most UTxOs
 //   day 20     a parallel burst of two T1 payments, 2 ADA and 3 ADA, 30 s apart
+//   day 25     deposit: 7 ADA at a second base address of the wallet (payment
+//              key 1), to which the change address moves for every later
+//              spend and plan
 //   day 30     mark 1
 //   day 35     T6   a Plutus spend: a script input of 10 ADA with a spend
 //              redeemer, a Plutus V2 script and a datum in the witness set,
@@ -174,6 +177,14 @@ export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
   // A parallel burst of two payments.
   intent(20 * DAY, 'T1', [payOut(params, ext(5), 2n * ADA, [])], { burst: { id: 'b1', parallel: true, index: 0 } });
   intent(20 * DAY + 30, 'T1', [payOut(params, ext(6), 3n * ADA, [])], { burst: { id: 'b1', parallel: true, index: 1 } });
+
+  // A deposit at a second base address: the latest output the wallet has
+  // received, so the change address moves to it.
+  const second = T.cslkit.baseAddress(1);
+  const secondBytes = addressBytes(second.to_bech32());
+  second.free();
+  const moveTx = hash32(`${name} second address`);
+  events.push({ kind: 'deposit', tx: moveTx, txId: n++, time: time(25 * DAY), utxos: [utxoFromOutput(moveTx, 0, encodeOutput({ address: secondBytes, coin: 7n * ADA, assets: [] }, 'array'), { origin: 'deposit' })] });
 
   events.push({ kind: 'mark', n: 1, blockTime: 30 * DAY });
 

@@ -93,13 +93,13 @@ Every record names its wallet (the stake-credential id, or a shape's name), wind
 - `trigger`: an H-6 trigger, with its rescue outcome under each confirmatory collateral rule;
 - `wallet-arm`: per wallet and arm over the window: counts by outcome and class, failures per 100 attempted spends, spend, wallet-controlled, plan and forfeit fees, burst feasibility, the end state's UTxO count, locked ADA and locked ADA per token, the largest Value's trajectory, the end state's conformity to the arm's layout, and H-3's time-averaged locked ADA per policy where the arm records it;
 - `battery` and `h12`: one battery run by one method, its outcome, fees, the "balance suffices" flag, the plan after the spend, and for the H-12 rule its completion, chain length and whole-chain fees; the oracle's reference, when an oracle is given;
-- `timeout` and `refused`: a replay that ran past its limit, and one the rules do not settle (a wallet with no change address, a start plan the planner refuses).
+- `timeout` and `refused`: a replay that ran past its limit, and one the rules do not settle (a wallet for which the change-address rule names no address where the replay needs one, a start plan the planner refuses).
 
 ### History files
 
 One JSON Lines file per wallet and window. Amounts are decimal strings; hashes, policies, names and CBOR lowercase hex; references `<transaction id>#<index>`.
 
-1. `header`: the wallet, frame and split; the window's first and last blocks, its transaction-id range [`lo`, `hi`] and the transaction id of its start state; the snapshot; the snapshot epoch's protocol parameters; the franken-flagged payment credentials; the arrival table; the settings; the byte source and db-sync version.
+1. `header`: the wallet, frame and split; the window's first and last blocks, its transaction-id range [`lo`, `hi`] and the transaction id of its start state; the snapshot; the snapshot epoch's protocol parameters; the franken-flagged payment credentials; the arrival table; `latestKeyBase`, the latest output the wallet received at or before the start state's transaction, spent or not, at a key payment credential and a base address whose credential is not franken-flagged, as `{ address, txId, index }` (null when there is none); the settings; the byte source and db-sync version.
 2. `state`: the UTxO set as of the last block before the window's first block, as UTxO records.
 3. Events in chain order:
    - `deposit`: the wallet outputs created by a transaction that is not the wallet's spend, as UTxO records;
@@ -165,7 +165,7 @@ A selection-only method's transaction is assembled with CSL: its inputs sorted b
 
 ### States, the treatment and the methods
 
-A state holds the wallet's UTxO records (in `txid#index` order), its stake credential, its franken-flagged credentials and its change address: the address of its most recently created UTxO at the arm's start at a key payment credential and a base address, by creating transaction then index, passing over franken-flagged credentials. Applying a transaction removes its wallet inputs and adds its outputs that carry the wallet's stake credential; payments to other stake credentials leave the wallet.
+A state holds the wallet's UTxO records (in `txid#index` order), its stake credential, its franken-flagged credentials and its change address. The change address is the address of the latest output at a key payment credential and a base address, by creating transaction then index and passing over franken-flagged credentials, among every output the wallet has received on the chain up to that point: `latestKeyBase`, then the deposits and the observed wallet outputs of the window's spends and self-reorganizations, the real wallet's own change included. Every arm and method therefore has the same change address at a given spend, and it moves as later outputs arrive; an event's own outputs count from the next event on. A wallet that spends, or holds a spendable UTxO, before it has received such an output, or never receives one, is refused; before that output its state holds nothing a plan could spend, so plans there are recorded empty and not run. Applying a transaction removes its wallet inputs and adds its outputs that carry the wallet's stake credential; payments to other stake credentials leave the wallet.
 
 The treatment is loaded from the directory the operator names, every file's digest checked against `data/treatment-pins.txt` first. Its planner and its H-12 selection rule run on states, given the UTxOs in `txid#index` order with held UTxOs marked held, and every transaction they build must pass both the treatment's own checks and the kit's; a disagreement stops the run. Protocol parameters reach it as its parameters object, and a parameter it would read differently from the run's is refused.
 
@@ -195,7 +195,7 @@ At the snapshot, from the observed layout: an ADA payment drawn from the pooled 
 
 ### Synthetic shapes and streams
 
-The 17 shapes of the preprod seeder (byte for byte the treatment harness's) and the claim and merchant shapes CL1, CL3, E1 and E2 are generated deterministically with mulberry32. Each shape has a synthetic intent stream of fixed test values for the engine's tests, over 75 days: payments of each type T1 to T8 that its holdings allow, a deposit with a held datum UTxO, a parallel burst, a Plutus spend with a script input, redeemer, script and datum, a phase-2-invalid forfeit, a payment with a validity interval, a message and a held fixed input, a self-reorganization, a native-script mint, a stake registration with its deposit, and two 30-day marks.
+The 17 shapes of the preprod seeder (byte for byte the treatment harness's) and the claim and merchant shapes CL1, CL3, E1 and E2 are generated deterministically with mulberry32. Each shape has a synthetic intent stream of fixed test values for the engine's tests, over 75 days: payments of each type T1 to T8 that its holdings allow, a deposit with a held datum UTxO, a parallel burst, a deposit at a second base address of the wallet, to which the change address moves, a Plutus spend with a script input, redeemer, script and datum, a phase-2-invalid forfeit, a payment with a validity interval, a message and a held fixed input, a self-reorganization, a native-script mint, a stake registration with its deposit, and two 30-day marks.
 
 ## Baselines
 
@@ -292,7 +292,7 @@ The simulator core's readings (`src/settings.mjs`), recorded in every run's `run
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `changeAddress` | `latest-key-base` | The change address of every arm and method, as above. |
+| `changeAddress` | `latest-key-base-received` | The change address of every arm and method, as above. |
 | `serialization` | `own` | A method that returns whole transactions keeps its own serialization; a selection-only method is assembled by the kit. |
 | `batteryDraws` | `pool` | Battery draws from frozen pools, one generator per wallet and spend kind. |
 | `recipients` | `synthetic-base` | External recipients are synthetic base addresses. |

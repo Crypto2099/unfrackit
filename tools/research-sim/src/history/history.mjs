@@ -4,7 +4,9 @@
 // One wallet's history over one window, written as one JSON Lines file:
 //   header       the stake-credential id, frame, window bounds as block and
 //                transaction ids, the snapshot parameters, the franken-flagged
-//                credentials, the arrival table, the settings
+//                credentials, the arrival table, the latest output received
+//                before the window at a key payment credential and a base
+//                address (latestKeyBase, wallet.mjs), the settings
 //   state        the UTxO set as of the last block before the window's first
 //   events       in chain order, by transaction id:
 //                  deposit              wallet outputs created by a
@@ -33,11 +35,11 @@
 // state: the result must be the UTxO set at the window's last block.
 
 import { q } from './db.mjs';
-import { loadLife, aliveAt, frankenFlags, holdingsOf, arrivalTable, loadExtras, utxoRecord, digestOf, heldReason } from './wallet.mjs';
+import { loadLife, aliveAt, frankenFlags, holdingsOf, arrivalTable, loadExtras, utxoRecord, digestOf, heldReason, latestKeyBase } from './wallet.mjs';
 import { loadBundles } from './txdata.mjs';
 import { spendEvent, timeOf, IntentCheck } from './intent.mjs';
 
-export const FORMAT = 'unfrackit-research-sim history 2';
+export const FORMAT = 'unfrackit-research-sim history 3';
 const BUNDLE_BATCH = 400;
 
 export function bursts(spends, settings) {
@@ -259,6 +261,7 @@ export async function walletHistory(ctx, w, out) {
     franken: [...franken].sort(),
     frankenSource: fr.source,
     arrival: arrivalTable(life, tStart),
+    latestKeyBase: latestKeyBase(life, tStart, franken),
     settings: ctx.settings,
     source: { bytes: ctx.bytes.mode, dbsync: ctx.client.dbsyncVersion }
   });

@@ -7,7 +7,9 @@
 //   header   the wallet (db-sync's stake-credential id), frame, split, window
 //            bounds, snapshot, the snapshot epoch's parameters, the
 //            franken-flagged payment credentials, the arrival table, the
-//            reader's settings, the byte source
+//            latest output received before the window at a key payment
+//            credential and a base address (latestKeyBase), the reader's
+//            settings, the byte source
 //   state    the UTxO set at the window's start
 //   events   in chain order: deposit, held-consumed, intent,
 //            self-reorganization, mark
@@ -15,8 +17,11 @@
 //            the event counts
 //
 // Every UTxO record of the start state and of a deposit carries `txId`, db-sync's
-// id of its creating transaction, in chain order; the change address of every
-// arm is read from the start state by the change-address rule.
+// id of its creating transaction, in chain order. The change address of every
+// arm is the change-address rule's over every output the wallet has received
+// on the chain up to each point: the header's latestKeyBase, then the outputs
+// of the window's events (state/state.mjs annotateChangeAddresses), so every
+// event carries the address in effect at it.
 //
 // A file without its end record, or whose event counts differ from the end
 // record's, is refused as incomplete. A confirmation-split wallet is refused
@@ -26,9 +31,10 @@
 import { normalizeParams } from '../kit/params.mjs';
 import { utxoFromRecord } from './utxo.mjs';
 import { intentFromHistory } from './intent.mjs';
-import { latestKeyBaseAddress } from './state.mjs';
+import { latestKeyBase, annotateChangeAddresses } from './state.mjs';
+import { parseAddress, addressBytes } from '../history/address.mjs';
 
-export const HISTORY_FORMAT = 'unfrackit-research-sim history 2';
+export const HISTORY_FORMAT = 'unfrackit-research-sim history 3';
 
 // A record's creating transaction id, which every record must carry.
 function createdId(r, created) {
@@ -61,7 +67,7 @@ export function readHistory(text, { analysisFreezeTx = null } = {}) {
     else if (e.kind === 'intent') events.push({ kind: 'intent', txId: e.txId, intent: intentFromHistory(e.intent) });
     else if (e.kind === 'self-reorganization') {
       const vc = e.valueChange || { coin: '0', assets: [] };
-      events.push({ kind: 'self-reorganization', tx: e.tx, txId: e.txId, time: e.time, burst: e.burst || null, heldConsumed: [...(e.heldConsumed || [])], valueChange: { coin: BigInt(vc.coin), assets: (vc.assets || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) } });
+      events.push({ kind: 'self-reorganization', tx: e.tx, txId: e.txId, time: e.time, burst: e.burst || null, heldConsumed: [...(e.heldConsumed || [])], valueChange: { coin: BigInt(vc.coin), assets: (vc.assets || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }, walletOutputs: (e.observed ? e.observed.walletOutputs : []).map((o) => ({ index: o.index, cbor: o.cbor })) });
     }
     else events.push({ kind: 'mark', n: e.n, blockTime: e.blockTime });
   }
@@ -71,18 +77,29 @@ export function readHistory(text, { analysisFreezeTx = null } = {}) {
   // The arrival table, as the planner's arrival grouping reads it: each
   // asset's arrival key is db-sync's integer id of its arrival transaction.
   const arrival = new Map((header.arrival || []).map((a) => [`${a.policy}.${a.name}`, { txId: a.txId, flagged: !!a.flagged }]));
-  return { header, params, franken, start, events, end, arrival, created, changeAddress: startChangeAddress(start, created), analysisFreezeTx };
+  const before = latestKeyBaseOf(header, start, created);
+  const change = annotateChangeAddresses(before, events, franken);
+  const stakeCred = change.end === null ? null : parseAddress(addressBytes(change.end)).stake;
+  return { header, params, franken, start, events, end, arrival, created, changeAddress: change.start, changeAddressEnd: change.end, stakeCred, analysisFreezeTx };
 }
 
-// The change address at the window's start: the change-address rule over the
-// start state, or null when no UTxO there sits at a key payment credential and
-// a base address (a wallet whose start state is empty, for one), which the
-// rule does not settle and a run refuses for that wallet.
+// The header's latest output before the window at a key payment credential
+// and a base address, checked against the start state: the header ranges
+// over every output received before the window, the start state's UTxOs among
+// them, so the start state's own latest such UTxO is never later.
+function latestKeyBaseOf(header, start, created) {
+  if (!('latestKeyBase' in header)) throw new Error('history file: the header carries no latestKeyBase');
+  const k = header.latestKeyBase;
+  if (k !== null && (typeof k.address !== 'string' || !Number.isSafeInteger(k.txId) || !Number.isSafeInteger(k.index))) throw new Error('history file: latestKeyBase is not { address, txId, index }');
+  const own = latestKeyBase(start, created);
+  if (own && (!k || own.txId > k.txId || (own.txId === k.txId && (own.index > k.index || (own.index === k.index && own.address !== k.address))))) throw new Error('history file: the start state holds a later output at a key payment credential and a base address than the header\'s latestKeyBase');
+  return k;
+}
+
+// The change address of the start state's UTxOs alone (the rule before it
+// counted every output received), or null when none sits at a key payment
+// credential and a base address. Kept for comparison.
 export function startChangeAddress(start, created) {
-  try {
-    return latestKeyBaseAddress(start, created);
-  } catch (e) {
-    if (/has no output at a key payment credential/.test(e.message)) return null;
-    throw e;
-  }
+  const b = latestKeyBase(start, created);
+  return b ? b.address : null;
 }

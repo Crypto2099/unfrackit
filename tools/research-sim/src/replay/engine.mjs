@@ -5,8 +5,14 @@
 // by one method under one change policy, collateral rule and repetition.
 //
 // The arm's state starts from the window's start state, laid out by the arm
-// (arms/arms.mjs) with its plan fees charged and recorded apart. The events
-// then apply in chain order:
+// (arms/arms.mjs) with its plan fees charged and recorded apart. Its change
+// address, for every method and plan, is the one the source names at each
+// event (replay/source.mjs): the change-address rule over the outputs the
+// wallet has received on the chain up to that point, the same in every arm.
+// A wallet for which the rule names no address where the replay needs one is
+// refused (state/state.mjs changeAddressGap); before its first such address a
+// state holds no spendable UTxO, so a plan there proposes nothing and is not
+// run. The events then apply in chain order:
 //   deposit              the UTxOs are added, in every arm, when they occurred
 //   held-consumed        the held UTxOs leave the state
 //   intent               built by the method, checked by the ledger kit and
@@ -41,7 +47,7 @@
 // to finalization are released by settling the heap (kit/heap.mjs) after each
 // plan and every `settleEvery` spends.
 
-import { makeState, addUtxos, removeHeld } from '../state/state.mjs';
+import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
@@ -98,8 +104,9 @@ function arrivalMap(state, table) {
 
 const pureOnlyCount = (plan) => plan.txs.filter((t) => t.notes.includes('pure-ada-only')).length;
 
-// source: { wallet, window, network, stakeCred, changeAddress, franken,
-// start [UTxO], events, arrival (Map), windowStart (block time) }.
+// source: { wallet, window, network, stakeCred, changeAddress,
+// changeAddressEnd, franken, start [UTxO], events (each with the
+// changeAddress in effect at it), arrival (Map), windowStart (block time) }.
 // job: { key, arm, variant, repetition, method, opts, settleEvery, policyLock }.
 export async function replay(T, params, source, job) {
   const t0 = performance.now();
@@ -107,13 +114,20 @@ export async function replay(T, params, source, job) {
   checkOptions(opts);
   checkRule(opts.collateralRule);
   const out = { spends: [], plans: [], bursts: [], triggers: [], summary: null };
-  if (!source.changeAddress) {
-    out.refused = 'the start state has no UTxO at a key payment credential and a base address, so the change-address rule names no address';
+  const gap = changeAddressGap(source);
+  if (gap) {
+    out.refused = gap;
     return out;
   }
   const settings = armSettings(arm, variant, repetition);
-  let state = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress, utxos: source.start, at: { slot: null, time: source.windowStart }, franken: source.franken });
-  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, byClass: {} };
+  let state = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress ?? null, utxos: source.start, at: { slot: null, time: source.windowStart }, franken: source.franken });
+  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
+  // The change address the source names at a point of the replay.
+  const follow = (address) => {
+    if (address === undefined || address === state.changeAddress) return;
+    if (state.changeAddress !== null) counts.changeAddressMoves++;
+    state = withChangeAddress(state, address);
+  };
   const fees = { spends: 0n, walletControlled: 0n, plans: 0n, forfeits: 0n };
   const trajectory = [];
   const lock = job.policyLock ? new PolicyLock(params) : null;
@@ -134,6 +148,10 @@ export async function replay(T, params, source, job) {
     for (const a of assets) if (!arrivalTable.has(`${a.policy}.${a.name}`)) arrivalTable.set(`${a.policy}.${a.name}`, { txId, flagged: false });
   };
   const doPlan = async (at, time) => {
+    if (state.changeAddress === null) {
+      out.plans.push({ at, t: rel(time), txs: 0, fee: 0n, size: 0, utxosAfter: state.utxos.size, notes: [], control: null, trigger: false, noChangeAddress: true });
+      return;
+    }
     const arrival = needsArrival(variant) ? arrivalMap(state, arrivalTable) : null;
     const p = planState(T, state, params, settings, { arrival });
     let trigger = null;
@@ -166,13 +184,14 @@ export async function replay(T, params, source, job) {
   const bursts = new Map();
   for (const e of source.events) if (e.kind === 'intent' && e.intent.burst && e.intent.burst.parallel) {
     if (!bursts.has(e.intent.burst.id)) bursts.set(e.intent.burst.id, []);
-    bursts.get(e.intent.burst.id).push(e.intent);
+    bursts.get(e.intent.burst.id).push(e);
   }
   const passed = new Set();
   let ordinal = 0;
   let sinceSettle = 0;
 
   for (const e of source.events) {
+    follow(e.changeAddress);
     if (e.kind === 'deposit') {
       advance(e.time && e.time.blockTime);
       state = addUtxos(state, e.utxos);
@@ -289,17 +308,22 @@ export async function replay(T, params, source, job) {
     }
   }
   advance(source.windowEnd ?? lastTime);
+  follow(source.changeAddressEnd);
 
   const end = stateMeasures(state, params);
   // Conformity of the end state to the arm's layout: whether the planner, at
   // the arm's settings, would propose a plan for it.
+  // A state with no change address yet holds no spendable UTxO: no plan.
   let conformity;
-  try {
-    const own = !(arm === 'naive-tidy' || arm === 'random-tidy' || arm === 'observed');
-    const p = planOnly(T, state, params, own ? settings : {}, { arrival: own && needsArrival(variant) ? arrivalMap(state, arrivalTable) : null });
-    conformity = { proposes: p.txs.length > 0, txs: p.txs.length, fee: sum(p.txs.map((t) => BigInt(t.fee))) };
-  } catch (e) {
-    conformity = { refused: e.message };
+  if (state.changeAddress === null) conformity = { proposes: false, txs: 0, fee: 0n, noChangeAddress: true };
+  else {
+    try {
+      const own = !(arm === 'naive-tidy' || arm === 'random-tidy' || arm === 'observed');
+      const p = planOnly(T, state, params, own ? settings : {}, { arrival: own && needsArrival(variant) ? arrivalMap(state, arrivalTable) : null });
+      conformity = { proposes: p.txs.length > 0, txs: p.txs.length, fee: sum(p.txs.map((t) => BigInt(t.fee))) };
+    } catch (e) {
+      conformity = { refused: e.message };
+    }
   }
   const attempted = counts.built + counts.failed;
   out.summary = {
@@ -348,11 +372,13 @@ async function buildOne(T, params, state, intent, method, opts) {
 
 // A parallel burst's separate pass: every intent built in order from the
 // state at the burst's start, each later one without the outputs of the
-// earlier ones (their wallet inputs are gone, their outputs never arrive).
-async function burstPass(T, params, start, intents, method, opts) {
+// earlier ones (their wallet inputs are gone, their outputs never arrive),
+// each at the change address the source names at it.
+async function burstPass(T, params, start, events, method, opts) {
   let s = start;
   let built = 0;
-  for (const intent of intents) {
+  for (const { intent, changeAddress } of events) {
+    if (changeAddress !== undefined) s = withChangeAddress(s, changeAddress);
     if (intent.invalid) {
       const f = forfeit(params, s, intent, opts.collateralRule);
       if (!f.ok) break;
@@ -367,7 +393,7 @@ async function burstPass(T, params, start, intents, method, opts) {
     s = removeSpent(s, [...r.txs.flatMap((t) => t.walletInputs), ...heldIns]);
     built++;
   }
-  return { spends: intents.length, built, feasible: built === intents.length };
+  return { spends: events.length, built, feasible: built === events.length };
 }
 
 function removeSpent(s, refs) {

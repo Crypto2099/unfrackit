@@ -8,10 +8,13 @@
 //     answer), CSL reads it, and the four negative controls are caught on it
 //     for their own reasons; where CSL's re-serialization differs from the
 //     transaction it is counted (cslReencoded, cslDiffers);
-//   - events land where they belong: the deposit before the spends that use
-//     it, held consumption, the two 30-day marks, the maintained-tidy arm's
+//   - events land where they belong: the deposits before the spends that use
+//     them, held consumption, the two 30-day marks, the maintained-tidy arm's
 //     re-plans at exactly those marks and no other arm's, the burst pass, the
 //     forfeit and the self-reorganization counted;
+//   - the change address moves once, at the deposit to the wallet's second
+//     address, and every change output of a replayed spend lands at the
+//     address the stream names at it;
 // Needs RESEARCH_SIM_TREATMENT_DIR.
 
 import { test } from 'node:test';
@@ -26,6 +29,8 @@ import { testPlan, mergePlan } from '../../src/arms/plan.mjs';
 import { fixedResolver } from '../../src/kit/apply.mjs';
 import { inspectTx } from '../../src/kit/inspect.mjs';
 import { parseAddress, addressBytes } from '../../src/history/address.mjs';
+import { addressTextOf } from '../../src/state/utxo.mjs';
+import { requestedIndexes } from '../../src/replay/measure.mjs';
 import { settle } from '../../src/kit/heap.mjs';
 
 const T = await treatment();
@@ -59,7 +64,8 @@ test('the synthetic streams replay under every arm the planner expresses, every 
         const label = `${name} ${e.arm}/${e.variant}/${e.change}/${collateralRule}`;
         // Events in place.
         const s = r.summary.counts;
-        if (s.deposits !== 1 || s.marks !== 2 || s.selfReorganizations !== 1) bad.push(`${label}: deposits ${s.deposits}, marks ${s.marks}, reorganizations ${s.selfReorganizations}`);
+        if (s.deposits !== 2 || s.marks !== 2 || s.selfReorganizations !== 1) bad.push(`${label}: deposits ${s.deposits}, marks ${s.marks}, reorganizations ${s.selfReorganizations}`);
+        if (s.changeAddressMoves !== 1) bad.push(`${label}: the change address moved ${s.changeAddressMoves} times`);
         if (s.heldConsumed + s.heldMissing !== 1) bad.push(`${label}: the held UTxO is consumed ${s.heldConsumed} times and missing ${s.heldMissing}`);
         const ts = r.spends.map((x) => x.t);
         if (ts.some((x, i) => i && x < ts[i - 1])) bad.push(`${label}: spends out of order`);
@@ -85,7 +91,15 @@ test('the synthetic streams replay under every arm the planner expresses, every 
             bad.push(`${label} intent ${x.intent}: ${x.detail}`);
           }
           if (x.outcome !== 'built') continue;
-          const intent = src.events.filter((ev) => ev.kind === 'intent')[x.intent].intent;
+          const event = src.events.filter((ev) => ev.kind === 'intent')[x.intent];
+          const intent = event.intent;
+          const spendTx = inspectTx(x.built.txs[x.built.txs.length - 1].bytes);
+          const req = requestedIndexes(intent, spendTx);
+          for (const o of spendTx.outputs) {
+            if (req.has(o.index) || parseAddress(o.address).stake !== src.stakeCred) continue;
+            counts.changeOutputs = (counts.changeOutputs || 0) + 1;
+            if (addressTextOf(o.address) !== event.changeAddress) bad.push(`${label} intent ${x.intent}: change output ${o.index} is not at the change address the stream names`);
+          }
           const fixed = fixedResolver(intent.fixed);
           const view = (u) => u && { coin: u.coin, assets: u.assets, addr: parseAddress(addressBytes(u.address)) };
           for (const tx of x.built.txs) {

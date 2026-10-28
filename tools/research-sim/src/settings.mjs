@@ -10,11 +10,15 @@
 // Every run records the values it ran under.
 
 export const SIM_SETTINGS = Object.freeze({
-  // The change address of every arm and method. 'latest-key-base': the
-  // address of the wallet's most recently created output (largest creating
-  // transaction id, then output index) at a key payment credential and a base
-  // address, at the arm's start.
-  changeAddress: 'latest-key-base',
+  // The change address of every arm and method. 'latest-key-base-received':
+  // the address of the latest output (largest creating transaction id, then
+  // output index) at a key payment credential and a base address, its
+  // credential not franken-flagged, among every output the wallet has
+  // received on the chain up to the point of use, the real wallet's own
+  // change included, so it moves as later outputs arrive and is the same in
+  // every arm; a wallet that spends or holds a spendable UTxO before the
+  // first such output, or never receives one, is refused.
+  changeAddress: 'latest-key-base-received',
   // Serialization. 'own': a method that returns whole transaction bytes keeps
   // its own serialization, with synthetic witnesses in the same encoding; a
   // selection-only method is assembled by the ledger kit with CSL.
@@ -92,7 +96,7 @@ export const SIM_SETTINGS = Object.freeze({
 });
 
 const IMPLEMENTED = {
-  changeAddress: ['latest-key-base'],
+  changeAddress: ['latest-key-base-received'],
   serialization: ['own'],
   batteryDraws: ['pool'],
   recipients: ['synthetic-base'],

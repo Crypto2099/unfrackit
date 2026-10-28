@@ -9,9 +9,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { unspentOutput, encodeOutput } from '../../../src/history/output.mjs';
 import { utxoFromCbor, utxoFromRecord, utxoJson, addressTextOf } from '../../../src/state/utxo.mjs';
-import { makeState, applyTx, addUtxos, removeHeld, spendable, cmpRef, latestKeyBaseAddress } from '../../../src/state/state.mjs';
+import { makeState, applyTx, addUtxos, removeHeld, spendable, cmpRef, latestKeyBaseAddress, withChangeAddress, annotateChangeAddresses, changeAddressGap, CHANGE_GAPS } from '../../../src/state/state.mjs';
 import { batteryIntent, intentFromHistory } from '../../../src/state/intent.mjs';
-import { readHistory, HISTORY_FORMAT } from '../../../src/state/history.mjs';
+import { readHistory, HISTORY_FORMAT, startChangeAddress } from '../../../src/state/history.mjs';
 import { paramsFromRow } from '../../../src/history/params.mjs';
 import { tx, input, out, baseAddr, scriptAddr, keyHash, STAKE } from '../../lib/txcbor.mjs';
 import { inspectTx } from '../../../src/kit/inspect.mjs';
@@ -116,10 +116,13 @@ test('battery intents carry requested outputs only', () => {
 
 const PARAMS = paramsFromRow('preprod', { epoch_no: 300, protocol_major: 10, min_fee_a: 44, min_fee_b: 155381, coins_per_utxo_size: 4310, max_val_size: 5000, max_tx_size: 16384, max_collateral_inputs: 3, collateral_percent: 150, price_mem: 0.0577, price_step: 0.0000721, min_fee_ref_script_cost_per_byte: 15, key_deposit: 2000000, pool_deposit: 500000000, drep_deposit: 500000000, gov_action_deposit: 100000000000 });
 
-function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId = false } = {}) {
+const LKB_A1 = { address: addressTextOf(A1), txId: 1, index: 10 };
+
+function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId = false, latestKeyBase = LKB_A1, franken = [] } = {}) {
   const r = (txid, i, address, coin, assets = [], origin = 'initial', held = null, txId = 1) => {
     const u = utxoFromCbor(rec(txid, i, address, coin, assets), { origin });
-    return noTxId ? { ...utxoJson(u), held } : { ...utxoJson(u), held, txId };
+    const h = held !== null ? held : franken.includes(u.cred) ? 'franken' : null;
+    return noTxId ? { ...utxoJson(u), held: h } : { ...utxoJson(u), held: h, txId };
   };
   const intent = {
     id: '55'.repeat(32), source: 'replay', type: 'T1', time: { slot: 10, blockTime: 1000, blockIndex: 0, epoch: 300, block: 5 },
@@ -127,16 +130,16 @@ function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId 
     implicit: { withdrawals: '0', refunds: '0', deposits: '0', donation: '0', mint: [], burn: [] },
     fixed: { inputs: [], referenceInputs: [], body: { 3: '1a00989680', 6: 'a0' }, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: '0', fixedBytes: 7, refScriptBytes: 0 },
     collateral: { required: false, observed: null }, invalid: null, burst: null,
-    observed: { tx: '55'.repeat(32), size: 300, fee: '170000', epoch: 300, protocolMajor: 10, minFeeA: '44', minFeeB: '155381', walletInputs: [{ ref: `${T1}#2`, cbor: rec(T1, 2, A0, 3000000n) }], walletOutputs: [], walletWitnesses: [{ keyHash: keyHash(0), cbor: '00' }] },
+    observed: { tx: '55'.repeat(32), size: 300, fee: '170000', epoch: 300, protocolMajor: 10, minFeeA: '44', minFeeB: '155381', walletInputs: [{ ref: `${T1}#2`, cbor: rec(T1, 2, A0, 3000000n) }], walletOutputs: [{ index: 1, cbor: out(A1, 1830000n).toString('hex') }], walletWitnesses: [{ keyHash: keyHash(0), cbor: '00' }] },
     classes: {}, derived: { poolDeposits: '500000000' }
   };
   const lines = [
-    { kind: 'header', format: HISTORY_FORMAT, network: 'preprod', wallet: 42, frame: 'recent', split, window: null, snapshot: { block: 1, tx: 1 }, params: PARAMS, franken: [], arrival: [{ policy: POL, name: '4e4654', tx: T1, txId: 17, flagged: false }], settings: {}, source: { bytes: 'tx_cbor' } },
+    { kind: 'header', format: HISTORY_FORMAT, network: 'preprod', wallet: 42, frame: 'recent', split, window: null, snapshot: { block: 1, tx: 1 }, params: PARAMS, franken, arrival: [{ policy: POL, name: '4e4654', tx: T1, txId: 17, flagged: false }], ...(latestKeyBase === 'omit' ? {} : { latestKeyBase }), settings: {}, source: { bytes: 'tx_cbor' } },
     { kind: 'state', at: { tx: 1 }, utxos: [r(T1, 2, A0, 3000000n, [], 'initial', null, 0), r(T1, 10, A1, 2000000n, [{ policy: POL, name: '4e4654', qty: 1n }], 'initial', null, 1)] },
     { kind: 'deposit', tx: T2, txId: 3, time: {}, utxos: [r(T2, 0, A0, 4000000n, [], 'deposit', null, 3)] },
     { kind: 'mark', n: 1, blockTime: 900 },
     { kind: 'intent', txId: 4, intent },
-    { kind: 'self-reorganization', tx: T3, txId: 5, time: {}, burst: null }
+    { kind: 'self-reorganization', tx: T3, txId: 5, time: {}, burst: null, observed: { walletOutputs: [{ index: 0, cbor: out(A0, 2800000n).toString('hex') }] } }
   ];
   if (withEnd) lines.push({ kind: 'end', at: { tx: 9 }, utxos: 2, digest: '00', counts: { deposit: 1, 'held-consumed': 0, intent: count, 'self-reorganization': 1, mark: 1, skippedInvalid: 0, raised: 0 } });
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
@@ -155,15 +158,70 @@ test('a history file reads into parameters, the start state, events and intents'
   assert.equal(it.observed.walletWitnesses.length, 1);
   assert.deepEqual(it.derived, { poolDeposits: '500000000' });
   assert.equal(h.arrival.get(`${POL}.4e4654`).txId, 17);
-  // Every record's creating transaction id is kept, and the change address is
-  // the start state's latest output at a key payment credential and a base
-  // address: T1#10 at A1 (transaction id 1) over T1#2 at A0 (id 0).
+  // Every record's creating transaction id is kept. The change address
+  // starts at the header's latest output before the window at a key payment
+  // credential and a base address (here the start state's T1#10 at A1, over
+  // T1#2 at A0), and moves with every later output the wallet receives on the
+  // chain, which counts from the next event on: the deposit's at A0, the
+  // spend's own change at A1, the self-reorganization's at A0.
   assert.deepEqual([...h.created], [[`${T1}#2`, 0], [`${T1}#10`, 1], [`${T2}#0`, 3]]);
   assert.equal(h.changeAddress, addressTextOf(A1));
+  assert.equal(startChangeAddress(h.start, h.created), addressTextOf(A1));
+  assert.deepEqual(h.events.map((e) => [e.kind, e.changeAddress]), [['deposit', addressTextOf(A1)], ['mark', addressTextOf(A0)], ['intent', addressTextOf(A0)], ['self-reorganization', addressTextOf(A1)]]);
+  assert.equal(h.changeAddressEnd, addressTextOf(A0));
+  assert.equal(h.stakeCred, STAKE);
+  assert.equal(h.events[3].walletOutputs.length, 1);
+  // A franken-flagged credential is passed over at every step: with A1's key
+  // flagged, the start falls back to A0 (the header the extraction writes
+  // then names A0's latest output), and the spend's change at A1 never moves
+  // it.
+  const fr = readHistory(historyText({ franken: [keyHash(1)], latestKeyBase: { address: addressTextOf(A0), txId: 0, index: 2 } }));
+  assert.deepEqual(fr.events.map((e) => e.changeAddress), [addressTextOf(A0), addressTextOf(A0), addressTextOf(A0), addressTextOf(A0)]);
+  // The header ranges over every output before the window: one received and
+  // spent before it can be later than any UTxO of the start state, and none
+  // can be earlier.
+  const spentBefore = { address: addressTextOf(A0), txId: 2, index: 0 };
+  assert.equal(readHistory(historyText({ latestKeyBase: spentBefore })).changeAddress, addressTextOf(A0));
+  assert.throws(() => readHistory(historyText({ latestKeyBase: { address: addressTextOf(A0), txId: 0, index: 2 } })), /later output/);
+  assert.throws(() => readHistory(historyText({ latestKeyBase: null })), /later output/);
+  assert.throws(() => readHistory(historyText({ latestKeyBase: 'omit' })), /no latestKeyBase/);
   assert.throws(() => readHistory(historyText({ noTxId: true })), /carries no creating transaction id/);
   assert.throws(() => readHistory(historyText({ withEnd: false })), /no end record/);
   assert.throws(() => readHistory(historyText({ count: 2 })), /end record says 2/);
   assert.throws(() => readHistory(historyText({ split: 'confirmation' })), /confirmation split/);
   assert.equal(readHistory(historyText({ split: 'confirmation' }), { analysisFreezeTx: 'ab'.repeat(32) }).analysisFreezeTx, 'ab'.repeat(32));
   assert.throws(() => intentFromHistory({ source: 'battery' }), /source battery/);
+});
+
+test('the change address follows the outputs received; a wallet is refused only where the rule names no address it needs', () => {
+  const ptr = Buffer.concat([Buffer.from([0x41]), Buffer.from(keyHash(2), 'hex'), Buffer.from([1, 2, 3])]);
+  const u = (txid, i, address, coin, extra = {}) => utxoFromCbor(rec(txid, i, address, coin, [], extra), { origin: 'deposit' });
+  const s = makeState({ network: 'synthetic', stakeCred: STAKE, changeAddress: null, utxos: [] });
+  assert.equal(s.changeAddress, null);
+  assert.throws(() => makeState({ network: 'synthetic', stakeCred: STAKE, utxos: [] }), /no change address/);
+  assert.equal(withChangeAddress(s, addressTextOf(A0)).changeAddress, addressTextOf(A0));
+  assert.throws(() => withChangeAddress(s, addressTextOf(EXT)), /stake credential/);
+  const intent = (txId) => ({ kind: 'intent', txId, intent: { observed: { walletOutputs: [] } } });
+  const dep = (txId, utxos) => ({ kind: 'deposit', txId, utxos });
+  const run = (start, events) => {
+    const c = annotateChangeAddresses(null, events, new Set());
+    return { gap: changeAddressGap({ changeAddress: c.start, changeAddressEnd: c.end, start, events }), at: events.map((e) => e.changeAddress), end: c.end };
+  };
+  // An empty start, then a deposit: the spend after it has an address.
+  const a = run([], [dep(3, [u(T2, 0, A0, 5000000n)]), intent(4)]);
+  assert.deepEqual(a, { gap: null, at: [null, addressTextOf(A0)], end: addressTextOf(A0) });
+  // A spend before any output the rule can name.
+  assert.equal(run([], [intent(4), dep(5, [u(T2, 0, A0, 5000000n)])]).gap, CHANGE_GAPS.spend);
+  // A spendable UTxO at a pointer address, which the rule cannot name.
+  assert.equal(run([u(T1, 0, ptr, 5000000n)], []).gap, CHANGE_GAPS.spendable);
+  assert.equal(run([], [dep(3, [u(T1, 0, ptr, 5000000n)]), { kind: 'mark', n: 1 }, dep(5, [u(T2, 0, A0, 5000000n)])]).gap, CHANGE_GAPS.spendable);
+  // The pointer UTxO arrives with an output the rule names: no gap.
+  assert.equal(run([], [dep(3, [u(T1, 0, ptr, 5000000n), u(T1, 1, A0, 5000000n)]), intent(4)]).gap, null);
+  // Held UTxOs alone at a script payment credential, and nothing else ever.
+  assert.equal(run([u(T3, 0, scriptAddr('ab'.repeat(28)), 4000000n)], [dep(3, [u(T2, 0, scriptAddr('ab'.repeat(28)), 4000000n)])]).gap, CHANGE_GAPS.none);
+  // A datum does not stop the rule naming an address: change goes to the
+  // address without it.
+  assert.equal(run([], [dep(3, [u(T2, 0, A0, 4000000n, { datum: { kind: 'inline', cbor: '182a' } })]), intent(4)]).gap, null);
+  // A source without annotations keeps its start address.
+  assert.equal(changeAddressGap({ changeAddress: addressTextOf(A0), start: [], events: [intent(4)] }), null);
 });

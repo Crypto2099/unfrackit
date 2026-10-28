@@ -37,6 +37,7 @@ const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 // The battery's spends for a wallet, in their fixed order: [{ n, layout,
 // intent | unsettled }].
 export function batterySpends(T, source, params, { pools }) {
+  if (!source.changeAddress) throw new Error('the change-address rule names no address at the snapshot: the wallet has received no output at a key payment credential and a base address');
   const observed = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress, utxos: source.start, franken: source.franken });
   const plan = planState(T, observed, params, {});
   const tidy = plan.after;

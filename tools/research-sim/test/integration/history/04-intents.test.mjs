@@ -14,7 +14,11 @@
 // file reaches the wallet's UTxO set at the window's end. Every spend type
 // must occur; a few intents of each type are written out for reading by hand.
 // Each file is then read back by the simulator's reader, and every UTxO
-// record's creating transaction id is checked against db-sync's.
+// record's creating transaction id is checked against db-sync's. Counted from
+// the files: the wallets whose start state holds no UTxO the change-address
+// rule can name (the rule over the start state alone), those the rule over
+// every output received still refuses, by reason, and how often the change
+// address moves within the window.
 //
 // Selection, reproducible: key stake credentials ranked by the number of
 // transactions among the last 100,000 before the snapshot that consume one of
@@ -34,7 +38,8 @@ import { context, record, shapeWallets, TAG } from './env.mjs';
 import { walletHistory } from '../../../src/history/history.mjs';
 import { windowOf } from '../../../src/history/windows.mjs';
 import { JsonLines, runDir, writeJson } from '../../../src/history/paths.mjs';
-import { readHistory } from '../../../src/state/history.mjs';
+import { readHistory, startChangeAddress } from '../../../src/state/history.mjs';
+import { changeAddressGap } from '../../../src/state/state.mjs';
 import { q } from '../../../src/history/db.mjs';
 
 const N = Number(process.env.RESEARCH_SIM_TEST_WALLETS || 200);
@@ -43,7 +48,7 @@ const TYPES = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8'];
 
 test(`every spend of the funder and ${N} preprod wallets is an intent that rebuilds its transaction`, { timeout: 24 * 3600 * 1000 }, async () => {
   const ctx = await context();
-  const out = { wallets: 0, intents: 0, selfReorganizations: 0, types: {}, raised: 0, phase2Invalid: 0, fixedNull: 0, withRedeemers: 0, perWallet: [], created: { records: 0, differ: 0, noChangeAddress: 0 } };
+  const out = { wallets: 0, intents: 0, selfReorganizations: 0, types: {}, raised: 0, phase2Invalid: 0, fixedNull: 0, withRedeemers: 0, perWallet: [], created: { records: 0, differ: 0 }, changeAddress: { startStateNone: 0, beforeWindowNone: 0, refused: 0, reasons: {}, moves: 0, walletsMoving: 0 } };
   // Bursts on real histories: their count by kind, the chained bursts with
   // two spends in one block, and every pair of consecutive spends 59 to 61
   // seconds apart with whether they share a burst.
@@ -118,7 +123,22 @@ test(`every spend of the funder and ${N} preprod wallets is an intent that rebui
         for (const [r, id] of part) if (ids.get(r) !== id) out.created.differ++;
       }
       out.created.records += recs.length;
-      if (h.changeAddress === null) out.created.noChangeAddress++;
+      const ca = out.changeAddress;
+      if (startChangeAddress(h.start, h.created) === null) ca.startStateNone++;
+      if (h.changeAddress === null) ca.beforeWindowNone++;
+      const gap = changeAddressGap(h);
+      if (gap) {
+        ca.refused++;
+        ca.reasons[gap] = (ca.reasons[gap] || 0) + 1;
+      }
+      let moves = 0;
+      let at = h.changeAddress;
+      for (const e of [...h.events, { changeAddress: h.changeAddressEnd }]) {
+        if (at !== null && e.changeAddress !== at) moves++;
+        at = e.changeAddress;
+      }
+      ca.moves += moves;
+      if (moves) ca.walletsMoving++;
       const byBurst = new Map();
       spendsSeen.forEach((s, i) => {
         if (s.burst) {

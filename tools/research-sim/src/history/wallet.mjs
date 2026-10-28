@@ -24,7 +24,7 @@
 // selector or the planner.
 
 import { q } from './db.mjs';
-import { addressBytes } from './address.mjs';
+import { addressBytes, parseAddress } from './address.mjs';
 import { sortAssets, canonicalLine } from './value.mjs';
 import { encodeOutput, autoForm, unspentOutput, decodeOutputBytes } from './output.mjs';
 import { outputs as txOutputs } from './tx.mjs';
@@ -75,6 +75,22 @@ export function lifeRow(r, assets) {
 }
 
 export const aliveAt = (life, t) => life.filter((r) => r.createdTx <= t && (r.consumedTx === null || r.consumedTx > t));
+
+// The latest output the wallet received at or before transaction id t, spent
+// or not, at a key payment credential and a base address (CIP-0019, "Shelley
+// addresses": header types 0 and 2) whose credential is not franken-flagged,
+// by creating transaction then output index: { address, txId, index }, or
+// null. The simulator's change-address rule starts from it.
+export function latestKeyBase(life, t, franken) {
+  let best = null;
+  for (const r of life) {
+    if (r.createdTx > t || r.scriptPay || (franken && franken.has(r.paymentCred))) continue;
+    const a = parseAddress(addressBytes(r.address));
+    if (a.paymentKind !== 'key' || a.type > 3) continue;
+    if (!best || r.createdTx > best.txId || (r.createdTx === best.txId && r.index > best.index)) best = { address: r.address, txId: r.createdTx, index: r.index };
+  }
+  return best;
+}
 
 export function heldReason(row, franken) {
   if (row.scriptPay) return HELD.script;
