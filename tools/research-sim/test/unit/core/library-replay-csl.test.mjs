@@ -11,7 +11,7 @@
 // carry: a Plutus spend with its datum and redeemer, a Plutus mint whose
 // script is a reference script, a burn, a deregistration with its refund and a
 // reward withdrawal, a treasury donation, a deposit CSL counts differently,
-// body field 6 and body field 15. Each spend builds, fails with a class other
+// a network id, and body field 6. Each spend builds, fails with a class other
 // than 'other', is infeasible (by balance or for collateral), or is not
 // replayable; every built one passes the kit's checks (the engine runs them)
 // and its four negative controls are caught; its fixed inputs are present and
@@ -194,7 +194,7 @@ const payTo = (i, coin) => {
 };
 const hash32 = (s) => blake2b256(Buffer.from(s)).toString('hex');
 
-test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, a deregistration with a withdrawal and a donation, and refuses what it cannot express as not replayable', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
+test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, a deregistration with a withdrawal, a donation and a network id, and refuses what it cannot express as not replayable', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
   const shape = shapeState(T, 'S8');
   const state = shape.state;
   // The synthetic parameters with a reference-script price, which the
@@ -306,13 +306,12 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
       assert.deepEqual(controlsOf(source, r), []);
       checkParts(source, r);
       const nr = Object.fromEntries(r.spends.filter((s) => s.outcome === 'not-replayable').map((s) => [s.intent, s.detail]));
-      assert.deepEqual(Object.keys(nr).map(Number), [5, 6, 7], JSON.stringify(o));
+      assert.deepEqual(Object.keys(nr).map(Number), [5, 6], JSON.stringify(o));
       assert.match(nr[5], /CSL counts 2000000 lovelace of deposits, the transaction 3000000/);
       assert.match(nr[6], /body field 6/);
-      assert.match(nr[7], /body field 15 \(network id\)/);
-      assert.equal(r.summary.counts.notReplayable, 3);
+      assert.equal(r.summary.counts.notReplayable, 2);
       const built = (i) => r.spends.find((s) => s.intent === i && s.outcome === 'built');
-      if (strategy === 'lf') for (const i of [0, 1, 2, 3, 4]) assert.ok(built(i), `${r.name} ${changePolicy}: intent ${i}: ${r.spends[i].outcome} ${r.spends[i].class} ${r.spends[i].detail}`);
+      if (strategy === 'lf') for (const i of [0, 1, 2, 3, 4, 7]) assert.ok(built(i), `${r.name} ${changePolicy}: intent ${i}: ${r.spends[i].outcome} ${r.spends[i].class} ${r.spends[i].detail}`);
       const tx = (i) => built(i) && inspectTx(built(i).built.txs[0].bytes);
       if (tx(0)) {
         assert.equal(tx(0).redeemers.length, 1);
@@ -328,6 +327,8 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
       if (tx(2)) assert.deepEqual(tx(2).mint, [{ policy: burnPolicy, name: '42', qty: -1n }]);
       if (tx(3)) assert.equal(tx(3).withdrawals.reduce((s, w) => s + w.coin, 0n), 5n * ADA);
       if (tx(4)) assert.equal(tx(4).donation, ADA);
+      // The network id on the body CSL built.
+      if (tx(7) && changePolicy === 'default') assert.deepEqual(Buffer.from(tx(7).tx.body.fields.get(15).raw), Buffer.from([0]));
       // CSL prices the script fee itself: its fee covers the final minimum,
       // execution and reference-script terms included.
       for (const f of r.fees) assert.ok(f.fee >= f.finalMinFee, `${f.fee} under ${f.finalMinFee}`);
