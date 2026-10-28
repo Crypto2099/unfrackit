@@ -11,7 +11,7 @@
 -- (the recent window for the recent frame, the peak window for the peak
 -- frame):
 --
---   f1  n_spends              spend events in the window (05-04-activity.sql)
+--   f1  n_spends              spend events in the window (activity.sql)
 --   f2  n_dex                 DEX interactions in the window
 --   f3  n_marketplace         marketplace interactions in the window
 --   f4  n_market_other        other market interactions in the window

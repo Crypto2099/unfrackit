@@ -44,7 +44,7 @@ const STRATA_FORMAT = 'research-corpus-strata-v3';
 
 // The strata file: the named rows of part 1, the CoinGecko candidates of part
 // 2 and the stablecoins and tokenized commodities of part 4, each in rank
-// order (see sql/05-04-strata.sql). A file that lists a coin no decided rule
+// order (see sql/strata.sql). A file that lists a coin no decided rule
 // settles (its `unsettled` list) is refused until the case is decided.
 export function loadStrataList(path, settings) {
   const doc = JSON.parse(readFileSync(path, 'utf8'));

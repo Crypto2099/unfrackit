@@ -33,7 +33,7 @@
 -- max_ft_utxos is the largest number of the wallet's UTxOs that one fungible
 -- asset sits on, held UTxOs always included and the asset classed by the
 -- classification rule (lib-cip67.sql) over everything the wallet holds of it;
--- requirement (d) of the draw reads it (05-04-frames.sql). An asset on two or more UTxOs is
+-- requirement (d) of the draw reads it (frames.sql). An asset on two or more UTxOs is
 -- held in two or more units, so the rule always finds it fungible there; the
 -- class is applied all the same, as the definition states it.
 -- Aggregation runs in two levels, (credential, asset) then credential, so each

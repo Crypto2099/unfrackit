@@ -113,28 +113,28 @@ Each step runs in one transaction with its row in `study.step` (run ID, name, st
 | Step | File | Builds |
 |---|---|---|
 | (precondition) | `00-study-schema.sql` | order check; `study.run`, `study.param`, `study.step`; T(B) helpers |
-| `epoch_counts`, `peak_runs` | `05-03-windows.sql` | transactions per epoch (all, phase-2-valid, the `epoch` view's count); 73-epoch runs since the Mary hard fork, ranked |
-| `era_report` | `05-03-windows.sql` | fee, minimum-UTxO (Mary's `min_utxo_value`, then coins per UTxO word or byte), value-size and tx-size changes inside each window |
-| `cred` | `05-04-credentials.sql` | every stake credential with its header type and network tag, checked |
-| `txo`, `txo_asset`, `asset` | `06-01-txo.sql` | the life table of every output with a stake credential; its assets; every asset's CIP-67 label |
-| `activity` | `05-04-activity.sql` | receipts and spend events per window |
-| `state`, `paycount` | `05-05-exclusions.sql` | UTxO count, lovelace, script-held lovelace, assets, the most UTxOs one fungible asset sits on, and payment credentials (all, and key credentials only) at the reference blocks |
-| `frame`, `flow` | `05-04-frames.sql` | both frames with every stage, the draw conditions (b) to (d), the draw and split keys; the flow table, whose first stage starts from the stake credentials with at least one transaction output at or before the snapshot (db-sync's `stake_address` has no transaction ID, so a credential's first appearance is read from its outputs, in the life table `study.txo`, which holds exactly the outputs with a stake credential up to the snapshot), so the count does not depend on when the run happens |
-| `draw` | `05-04-draw.sql` | draw order with running counts of the four requirements; the stopping points; the random and ADA-only samples |
-| `scam_list_table`, `scam_policy` | `05-04-scam-screen.sql` | the scam list's fingerprints; the listed assets and their policies, through `multi_asset.fingerprint` |
-| `strata_list_table`, `ft_floor`, `sc_floor`, `nft_top`, `strata` | `05-04-strata.sql` | the named rows, the CoinGecko candidates and the part 4 coins; the fungible floor and the ten candidates taken; the part 4 floor; the frozen NFT query's ten policies; the strata samples |
-| `split`, `sample_wallets` | `05-08-split.sql` | one exploration or confirmation label per sampled credential; the sampled and case wallets |
-| `check_61_table` | `06-01-check.sql` | the three-way check of every sampled wallet at the snapshot; `excluded_6_1` on every sample row |
-| `unfrackit_tx`, `prior_flags` | `05-06-prior-treated.sql` | label-674 UnFrack.It messages; UnFrack.It and Evolution flags per wallet |
-| `franken` | `05-05-franken.sql` | franken flags per payment credential |
-| `script_tx`, `profile` | `05-09-profile-inputs.sql` | the eight features of the profile procedure: spend events (f1), DEX, marketplace and other market interactions (f2 to f4), receipts that consume none of the wallet's outputs (f5), distinct NFTs and fungible assets held (f6, f7) and UTxOs at the window's end (f8); and the descriptive cut-point profile and flags |
-| `sim_wallets` (live-fire with `--sim-wallets` only) | `05-01-sim-wallets.sql` | the simulator's live-fire wallets |
+| `epoch_counts`, `peak_runs` | `windows.sql` | transactions per epoch (all, phase-2-valid, the `epoch` view's count); 73-epoch runs since the Mary hard fork, ranked |
+| `era_report` | `windows.sql` | fee, minimum-UTxO (Mary's `min_utxo_value`, then coins per UTxO word or byte), value-size and tx-size changes inside each window |
+| `cred` | `credentials.sql` | every stake credential with its header type and network tag, checked |
+| `txo`, `txo_asset`, `asset` | `txo.sql` | the life table of every output with a stake credential; its assets; every asset's CIP-67 label |
+| `activity` | `activity.sql` | receipts and spend events per window |
+| `state`, `paycount` | `exclusions.sql` | UTxO count, lovelace, script-held lovelace, assets, the most UTxOs one fungible asset sits on, and payment credentials (all, and key credentials only) at the reference blocks |
+| `frame`, `flow` | `frames.sql` | both frames with every stage, the draw conditions (b) to (d), the draw and split keys; the flow table, whose first stage starts from the stake credentials with at least one transaction output at or before the snapshot (db-sync's `stake_address` has no transaction ID, so a credential's first appearance is read from its outputs, in the life table `study.txo`, which holds exactly the outputs with a stake credential up to the snapshot), so the count does not depend on when the run happens |
+| `draw` | `draw.sql` | draw order with running counts of the four requirements; the stopping points; the random and ADA-only samples |
+| `scam_list_table`, `scam_policy` | `scam-screen.sql` | the scam list's fingerprints; the listed assets and their policies, through `multi_asset.fingerprint` |
+| `strata_list_table`, `ft_floor`, `sc_floor`, `nft_top`, `strata` | `strata.sql` | the named rows, the CoinGecko candidates and the part 4 coins; the fungible floor and the ten candidates taken; the part 4 floor; the frozen NFT query's ten policies; the strata samples |
+| `split`, `sample_wallets` | `split.sql` | one exploration or confirmation label per sampled credential; the sampled and case wallets |
+| `check_61_table` | `reconstruction-check.sql` | the three-way check of every sampled wallet at the snapshot; `excluded_6_1` on every sample row |
+| `unfrackit_tx`, `prior_flags` | `prior-treated.sql` | label-674 UnFrack.It messages; UnFrack.It and Evolution flags per wallet |
+| `franken` | `franken.sql` | franken flags per payment credential |
+| `script_tx`, `profile` | `profile-inputs.sql` | the eight features of the profile procedure: spend events (f1), DEX, marketplace and other market interactions (f2 to f4), receipts that consume none of the wallet's outputs (f5), distinct NFTs and fungible assets held (f6, f7) and UTxOs at the window's end (f8); and the descriptive cut-point profile and flags |
+| `sim_wallets` (live-fire with `--sim-wallets` only) | `sim-wallets.sql` | the simulator's live-fire wallets |
 
 The random sample of each frame takes eligible keys in draw order until all four requirements hold: (a) 2,400 token-holding wallets; (b) 1,000 of them with at least 5 spend events in the window; (c) 600 of them holding 100 or more distinct assets; (d) 600 of them fragmented. A token-holding wallet is fragmented when some fungible asset it holds (by the classification rule, over everything the wallet holds of it) sits on 10 or more of its UTxOs, held UTxOs included, at the snapshot for the recent frame and at the peak window's start or end for the peak frame. Every sample row, strata included, carries the wallet's fragmentation flag in its frame, and the draw summary reports the running count of (d) beside the others.
 
 Every count over the sample after `check_61_table` leaves out the wallets the check excluded, and the split counts report them beside the rest.
 
-`lib-cip67.sql` holds the CIP-67 label parser and the classification rule; `06-01-utxo-at-block.sql` the three UTxO-set queries.
+`lib-cip67.sql` holds the CIP-67 label parser and the classification rule; `utxo-at-block.sql` the three UTxO-set queries.
 
 ### Conventions
 

@@ -24,7 +24,7 @@
 --      filled after part 3, so adding it leaves the strata of parts 1 to 3 as
 --      they would otherwise be.
 -- The computed parts are frozen for both frames. The scam screen
--- (05-04-scam-screen.sql) keeps every policy in study.scam_policy out of every
+-- (scam-screen.sql) keeps every policy in study.scam_policy out of every
 -- part: a screened named row gives no stratum, a screened candidate of part 2
 -- or 4 is skipped so the next one is taken, and the NFT ranking of part 3
 -- leaves screened policies out before ranking.

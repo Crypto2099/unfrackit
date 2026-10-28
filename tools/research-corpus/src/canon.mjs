@@ -2,7 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 // The canonical line of one UTxO, the same as the SQL builds in
-// sql/06-01-utxo-at-block.sql:
+// sql/utxo-at-block.sql:
 //   <tx hash hex>#<index>:<lovelace>:<policy hex>.<name hex>=<qty>,...
 // with assets sorted by (policy, name) bytes. Lowercase hex of equal-length
 // policies, then names, sorts as the bytes do, and the lines themselves are

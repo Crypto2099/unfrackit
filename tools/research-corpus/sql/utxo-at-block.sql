@@ -11,7 +11,7 @@
 --    less those consumed by an input whose transaction is in a block with
 --    id <= B; restricted to the wallets' credentials. It reads db-sync's tables
 --    only.
--- 2. The life table (06-01-txo.sql) at T(B).
+-- 2. The life table (txo.sql) at T(B).
 -- 3. "Read directly", read as the wallet's outputs with no consuming input at
 --    all, in a database stopped at the snapshot block. It is defined at the
 --    database tip only.

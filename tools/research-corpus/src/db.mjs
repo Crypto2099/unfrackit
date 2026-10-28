@@ -17,7 +17,7 @@
 //   (cardano-db, Cardano/Db/Types.hs), so the match is on "consume"; and
 //   every database must have tx_in rows, whatever its configuration says.
 //   Probes then check that db-sync inserted what the SQL reads (db_probes in
-//   05-01-snapshot.sql); a missing insert option would otherwise empty a
+//   snapshot.sql); a missing insert option would otherwise empty a
 //   measure silently.
 // - The session must have standard_conforming_strings on. Parameters are
 //   written as decode() calls and do not depend on it, but any string literal

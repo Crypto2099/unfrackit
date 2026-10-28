@@ -8,7 +8,7 @@
 -- counted: study.sample.excluded_6_1 is set for every sample row, and every
 -- count over the sample after this step leaves excluded wallets out.
 --
--- The driver runs the three digest queries of 06-01-utxo-at-block.sql over the
+-- The driver runs the three digest queries of utxo-at-block.sql over the
 -- sampled wallets in batches and loads the results here, so the check uses the
 -- same SQL the integration tests compare. "Read directly" is only meaningful
 -- when the database tip is the snapshot block, which holds when db-sync is
