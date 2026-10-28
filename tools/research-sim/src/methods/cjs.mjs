@@ -69,6 +69,66 @@
 // Change substitution (setting substitutedChange 'fail'): with a change policy
 // other than 'default', the library's selection.inputs are kept and the
 // simulator's policy builds the change (methods/change.mjs).
+//
+// The replay path: every intent the history reader writes (source 'replay')
+// goes through the library's own parameters for what a selection has to
+// balance (types.ts:73-92), and through the ledger kit (kit/replay.mjs) for
+// the parts a selector does not choose, as follows:
+//   fixed inputs     the inputs that are not the selector's (other parties'
+//                    and script inputs, and the wallet's held UTxOs the spend
+//                    consumed) are preSelectedUtxo, which the selection starts
+//                    from (RoundRobinRandomImprove/roundRobin.ts:84), so their
+//                    value counts toward every target and their tokens not
+//                    requested go to the change (change.ts:45-101); they are
+//                    never offered as ordinary UTxOs. The library never reads
+//                    a UTxO's address; a Byron one is given as its hex.
+//   withdrawals,     ImplicitValue.coin (packages/core/src/Cardano/util/
+//   refunds,         computeImplicitCoin.ts:9-19): withdrawals as
+//   deposits         withdrawals, refunds as reclaimDeposit, their sum as
+//                    input, deposits as deposit. The library reads input and
+//                    deposit only (util.ts:107-117, roundRobin.ts:64-65,
+//                    change.ts:170-171, :447-449).
+//   donation         added to deposit. The library has no donation field, and
+//                    the SDK's own builder fills ImplicitValue from
+//                    certificates, proposals and withdrawals only
+//                    (packages/tx-construction/src/tx-builder/
+//                    initializeTx.ts:137-149); deposit is the field the
+//                    library reads as coin the transaction spends outside its
+//                    outputs, which a donation is.
+//   mint, burn       ImplicitValue.mint, a mint as a positive quantity and a
+//                    burn as a negative one (types.ts:77-78), which the
+//                    library splits into implicit token input and spend
+//                    (util.ts:45-52, roundRobin.ts:43-59, change.ts:162-169).
+//   requested        outputs, by address and value, which is all the library
+//   outputs          reads of them; the kit writes each as its own bytes, so a
+//                    datum, a script reference and a coin raised to its
+//                    minimum pass through as observed.
+//   other fixed      reference inputs, certificates, the withdrawal and mint
+//   parts            fields, validity, required signers, network id, votes,
+//                    proposals, the treasury fields, auxiliary data, scripts,
+//                    datums and redeemers are not input selection's: the
+//                    library has no parameter for them. The kit writes each
+//                    as its original bytes, each spend redeemer's index
+//                    recomputed, into every skeleton transaction the callbacks
+//                    assemble and into the final one, so computeMinimumCost
+//                    and computeSelectionLimit see their bytes, and
+//                    computeMinimumCost adds the intent's script fee, held
+//                    constant across arms. The redeemers' execution units are
+//                    the observed ones; the callbacks return no redeemers
+//                    (types.ts:43).
+//   collateral       not input selection's either: for a script spend, the
+//                    UTxO the arm's rule chooses (replay/collateral.mjs:
+//                    the smallest eligible UTxO that is not an input of the
+//                    spend, with a return output and the total-collateral
+//                    field) for the skeleton's inputs and fee, in every
+//                    skeleton the callbacks assemble and in the final
+//                    transaction. When the rule names none, the spend fails
+//                    with class collateral at that point.
+// A part the kit cannot write (a body field 6, protocol parameter updates,
+// which no Conway transaction carries) makes the intent not replayable for
+// this adapter, counted apart from build failures. A battery spend carries
+// none of these parts and keeps the battery path: its outputs as CSL
+// serializes them, assembled by kit/assemble.mjs.
 
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -76,7 +136,11 @@ import { join, dirname } from 'node:path';
 import { roundRobinRandomImprove, InputSelectionError, InputSelectionFailure } from '@cardano-sdk/input-selection';
 import { CLASSES } from '../kit/check.mjs';
 import { assembleOnce, assembleAtMinimumFee, outputBytes } from '../kit/assemble.mjs';
-import { inspectTx } from '../kit/inspect.mjs';
+import { assembleReplayOnce, assembleReplayAtMinimumFee, collateralFrom, replayRefusal, NotReplayable } from '../kit/replay.mjs';
+import { eligibleCollateral } from '../replay/collateral.mjs';
+import { addressTextOf } from '../state/utxo.mjs';
+import { inspectTx, unspentOutputParts } from '../kit/inspect.mjs';
+import { NOT_REPLAYABLE } from './contract.mjs';
 import { minFee } from '../kit/fee.mjs';
 import { valueSize } from '../history/value.mjs';
 import { makeRng } from '../shapes/rng.mjs';
@@ -98,7 +162,17 @@ const ERROR_CLASSES = Object.freeze({
   [InputSelectionFailure.MaximumInputCountExceeded]: CLASSES.maxInputs
 });
 
+// A replayed skeleton for which the arm's collateral rule names no
+// collateral, thrown out of a callback so that the selection stops there.
+export class NoCollateral extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'NoCollateral';
+  }
+}
+
 export function classOfCjsError(e) {
+  if (e instanceof NoCollateral) return CLASSES.collateral;
   if (e instanceof InputSelectionError && ERROR_CLASSES[e.failure]) return ERROR_CLASSES[e.failure];
   return CLASSES.other;
 }
@@ -123,11 +197,78 @@ export function cjsUtxo(u) {
 export const cjsTxOut = (o) => ({ address: o.address, value: { coins: o.coin, assets: tokenMap(o.assets) } });
 const refOfUtxo = ([i]) => `${i.txId}#${i.index}`;
 
+const addressText = (bytes) => {
+  try {
+    return addressTextOf(bytes);
+  } catch {
+    return Buffer.from(bytes).toString('hex');
+  }
+};
+
+// A replayed intent's fixed inputs as the library's pre-selected UTxOs.
+export function cjsPreSelected(intent) {
+  if (!intent.fixed) return [];
+  return intent.fixed.inputs.map((x) => {
+    const p = unspentOutputParts(x.cbor);
+    if (p.ref !== x.ref) throw new Error(`fixed input ${x.ref}: its bytes name ${p.ref}`);
+    const address = addressText(p.address);
+    return [{ txId: p.txid, index: p.index, address }, { address, value: { coins: p.coin, assets: tokenMap(p.assets) } }];
+  });
+}
+
+// A replayed intent's implicit values as the library's ImplicitValue.
+export function cjsImplicitValue(imp) {
+  const mint = new Map();
+  const add = (a, sign) => {
+    const id = `${a.policy}${a.name}`;
+    mint.set(id, (mint.get(id) || 0n) + sign * BigInt(a.qty));
+  };
+  for (const a of imp.mint) add(a, 1n);
+  for (const a of imp.burn) add(a, -1n);
+  for (const [id, q] of [...mint]) if (q === 0n) mint.delete(id);
+  const withdrawals = BigInt(imp.withdrawals);
+  const reclaimDeposit = BigInt(imp.refunds);
+  const coin = { withdrawals, reclaimDeposit, input: withdrawals + reclaimDeposit, deposit: BigInt(imp.deposits) + BigInt(imp.donation) };
+  return mint.size ? { coin, mint } : { coin };
+}
+
+// A replayed skeleton's transaction as the kit assembles it: the wallet
+// inputs among `refs` (every input of the skeleton, the fixed ones included),
+// the intent's requested outputs and fixed parts, the change, and for a script
+// spend the collateral the arm's rule chooses for those inputs at that fee.
+export function replayAssembler(T, { state, params, intent, collateralRule }) {
+  if (intent.collateral.required && !collateralRule) throw new Error('cjs-rrri: a script spend needs the arm\'s collateral rule');
+  const fixedRefs = new Set(intent.fixed ? intent.fixed.inputs.map((x) => x.ref) : []);
+  const walletCreds = new Set([...state.utxos.values()].map((u) => u.cred));
+  const observedFee = intent.observed ? intent.observed.fee : null;
+  const walletInputs = (refs) => recordsOf(state, refs.filter((r) => !fixedRefs.has(r)));
+  const collateralFor = (refs) => {
+    if (!intent.collateral.required) return () => null;
+    const eligible = eligibleCollateral(state, params, collateralRule, { exclude: new Set(refs), observedFee });
+    return collateralFrom(params, eligible, state.changeAddress);
+  };
+  // At a given fee: { ok, bytes, size, k } or the collateral failure.
+  const at = (refs, change, fee) => {
+    const co = collateralFor(refs)(fee);
+    if (co && !co.ok) return co;
+    const a = assembleReplayOnce(T, { intent, inputs: walletInputs(refs), change, collateral: co ? co.collateral : null, fee, walletCreds });
+    return { ok: true, bytes: a.bytes, size: inspectTx(a.bytes).size, k: a.k };
+  };
+  // At its least self-covering fee: { ok, fee, ... } or the collateral failure.
+  const atMinimumFee = (refs, change) => assembleReplayAtMinimumFee(T, params, { intent, inputs: walletInputs(refs), changeFor: () => ({ ok: true, change }), collateralFor: collateralFor(refs), walletCreds });
+  return { fixedRefs, walletInputs, at, atMinimumFee };
+}
+
 // The callbacks for one spend. `trace` collects what the checks read: every
-// cost the library was given and every bundle it asked about.
-export function exactConstraints(T, { state, params, intent, scriptFee = 0n, bundleCoin = SIM_SETTINGS.cjsBundleCoin, trace = null }) {
+// cost the library was given and every bundle it asked about. A replayed
+// intent's skeletons are assembled with its fixed parts and collateral
+// (replayAssembler, under collateralRule); a collateral the rule cannot
+// provide stops the selection with NoCollateral.
+export function exactConstraints(T, { state, params, intent, scriptFee = 0n, bundleCoin = SIM_SETTINGS.cjsBundleCoin, trace = null, collateralRule = null }) {
   if (bundleCoin !== 'widest') throw new Error(`cjs: bundle coin ${bundleCoin} is not implemented`);
   const C = T.CSL;
+  const replay = intent.source === 'replay' ? replayAssembler(T, { state, params, intent, collateralRule }) : null;
+  const refsOf = (sk) => [...sk.inputs].map(refOfUtxo);
   const requested = intent.requested.map((o) => ({ address: o.address, coin: o.coin, assets: o.assets }));
   const change = (txOut) => ({ address: state.changeAddress, coin: txOut.value.coins, assets: assetsOf(txOut.value.assets) });
   const outputsOf = (sk) => [...requested, ...sk.change.map(change)];
@@ -135,7 +276,8 @@ export function exactConstraints(T, { state, params, intent, scriptFee = 0n, bun
   const dataCost = C.DataCost.new_coins_per_byte(C.BigNum.from_str(params.coinsPerUtxoByte.toString()));
   return {
     computeMinimumCost: async (sk) => {
-      const r = assembleAtMinimumFee(T, params, inputsOf(sk), () => ({ ok: true, outputs: outputsOf(sk) }), { scriptFee });
+      const r = replay ? replay.atMinimumFee(refsOf(sk), sk.change.map(change)) : assembleAtMinimumFee(T, params, inputsOf(sk), () => ({ ok: true, outputs: outputsOf(sk) }), { scriptFee });
+      if (!r.ok) throw r.class === CLASSES.collateral ? new NoCollateral(r.detail) : new Error(r.detail);
       if (trace) trace.costs.push(r.fee);
       return { fee: r.fee };
     },
@@ -155,10 +297,17 @@ export function exactConstraints(T, { state, params, intent, scriptFee = 0n, bun
       return over;
     },
     computeSelectionLimit: async (sk) => {
-      const a = assembleOnce(T, inputsOf(sk), outputsOf(sk), sk.fee);
-      const size = inspectTx(a.bytes).size;
+      let size;
+      if (replay) {
+        const r = replay.at(refsOf(sk), sk.change.map(change), sk.fee);
+        if (!r.ok) throw new NoCollateral(r.detail);
+        size = r.size;
+      } else {
+        size = inspectTx(assembleOnce(T, inputsOf(sk), outputsOf(sk), sk.fee).bytes).size;
+      }
       return size <= params.maxTxSize ? sk.inputs.size : sk.inputs.size - 1;
     },
+    replay,
     free: () => dataCost.free()
   };
 }
@@ -171,37 +320,57 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
     deterministic: false,
     async build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.cjs, intent);
+      const replay = intent.source === 'replay';
+      if (replay) {
+        const refusal = replayRefusal(intent);
+        if (refusal) return { ok: false, class: NOT_REPLAYABLE, detail: refusal };
+      }
       let random = opts.random;
       if (!random) {
         if (!Number.isSafeInteger(opts.seed)) throw new Error(`${name}: a seed is required`);
         const rng = makeRng(opts.seed);
         random = () => rng.next();
       }
+      const collateralRule = opts.collateralRule || null;
       const trace = { costs: [], bundles: [] };
-      const constraints = exactConstraints(T, { state, params, intent, bundleCoin, trace });
+      const constraints = exactConstraints(T, { state, params, intent, bundleCoin, trace, collateralRule });
       const changeAddressResolver = { resolve: async (selection) => selection.change.map((c) => ({ ...c, address: state.changeAddress })) };
+      const preSelected = replay ? cjsPreSelected(intent) : [];
+      const fixedRefs = new Set(preSelected.map(refOfUtxo));
       let result;
       try {
         result = await roundRobinRandomImprove({ changeAddressResolver, random }).select({
-          preSelectedUtxo: new Set(),
-          utxo: new Set(inputOrder(state).map(cjsUtxo)),
+          preSelectedUtxo: new Set(preSelected),
+          utxo: new Set(inputOrder(state).filter((u) => !fixedRefs.has(u.ref)).map(cjsUtxo)),
           outputs: new Set(intent.requested.map(cjsTxOut)),
           constraints,
-          implicitValue: {}
+          implicitValue: replay ? cjsImplicitValue(intent.implicit) : {}
         });
       } catch (e) {
+        if (e instanceof NotReplayable) return { ok: false, class: NOT_REPLAYABLE, detail: e.message };
         return { ok: false, class: classOfCjsError(e), detail: `roundRobinRandomImprove: ${errorText(e)}` };
       } finally {
         constraints.free();
       }
       const sel = result.selection;
-      const inputs = recordsOf(state, [...sel.inputs].map(refOfUtxo));
+      const refs = [...sel.inputs].map(refOfUtxo);
+      const chosen = new Set(refs);
+      for (const r of fixedRefs) if (!chosen.has(r)) return { ok: false, class: CLASSES.other, detail: `the library left out the pre-selected input ${r}` };
+      const inputs = recordsOf(state, refs.filter((r) => !fixedRefs.has(r)));
       if (opts.changePolicy !== 'default') {
-        const r = buildWithChange(T, { state, params, inputs, intent, policy: opts.changePolicy });
+        const r = buildWithChange(T, { state, params, inputs, intent, policy: opts.changePolicy, collateralRule });
         if (!r.ok) return { ok: false, class: r.class, detail: `${opts.changePolicy} change on the library's inputs: ${r.detail}` };
         return { ok: true, kind: 'single', txs: [txRecord(r.bytes, inputs.map((u) => u.ref), r.fee, r.size, r.k)] };
       }
-      const outputs = [...intent.requested.map((o) => ({ address: o.address, coin: o.coin, assets: o.assets })), ...sel.change.map((c) => ({ address: c.address, coin: c.value.coins, assets: assetsOf(c.value.assets) }))];
+      const change = sel.change.map((c) => ({ address: c.address, coin: c.value.coins, assets: assetsOf(c.value.assets) }));
+      for (const o of change) if (o.coin < 0n) return { ok: false, class: CLASSES.other, detail: `the library returned an output with coin ${o.coin}` };
+      const library = (finalMinFee) => ({ fee: sel.fee, finalMinFee, costs: trace.costs, bundles: trace.bundles, change: sel.change.length });
+      if (replay) {
+        const a = constraints.replay.at(refs, change, sel.fee);
+        if (!a.ok) return { ok: false, class: a.class, detail: a.detail };
+        return { ok: true, kind: 'single', txs: [txRecord(a.bytes, inputs.map((u) => u.ref), sel.fee, a.size, a.k)], library: { ...library(minFee(params, a.size, intent.fixed ? intent.fixed.scriptFee : 0n)), preSelected: preSelected.length } };
+      }
+      const outputs = [...intent.requested.map((o) => ({ address: o.address, coin: o.coin, assets: o.assets })), ...change];
       for (const o of outputs) if (o.coin < 0n) return { ok: false, class: CLASSES.other, detail: `the library returned an output with coin ${o.coin}` };
       const a = assembleOnce(T, inputs, outputs, sel.fee);
       const size = inspectTx(a.bytes).size;
@@ -209,7 +378,7 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
         ok: true,
         kind: 'single',
         txs: [txRecord(a.bytes, inputs.map((u) => u.ref), sel.fee, size, a.k)],
-        library: { fee: sel.fee, finalMinFee: minFee(params, size), costs: trace.costs, bundles: trace.bundles, change: sel.change.length }
+        library: library(minFee(params, size))
       };
     }
   };

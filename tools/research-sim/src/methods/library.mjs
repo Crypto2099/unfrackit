@@ -56,12 +56,12 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   evo   evo-lf (and the survey's evo-unfrack): none yet
 //   mesh  the survey's Mesh subjects: none; Mesh is surveyed on battery spends
 //         only and never replays
-//   cjs   cjs-rrri: none yet
+//   cjs   cjs-rrri: every part (methods/cjs.mjs, its replay path)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze([]),
   evo: Object.freeze([]),
   mesh: Object.freeze([]),
-  cjs: Object.freeze([])
+  cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

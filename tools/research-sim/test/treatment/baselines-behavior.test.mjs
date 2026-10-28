@@ -10,8 +10,9 @@
 // lovelace-only order, its single change output over the limit, and its
 // unimplemented strategy names; cardano-js-sdk's change bundle per requested
 // output; C13's cases; one constructed failure per class per adapter; and the
-// adapters' refusal of replay intents, whose path is not built yet. Needs
-// RESEARCH_SIM_TREATMENT_DIR.
+// CSL and Evolution SDK adapters' refusal of replay intents, whose paths are
+// not built yet (cardano-js-sdk's replay path is tested in
+// test/unit/core/library-replay.test.mjs). Needs RESEARCH_SIM_TREATMENT_DIR.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -238,7 +239,7 @@ test('one constructed failure per class per adapter', { skip, timeout: 30 * 60 *
   t.diagnostic(JSON.stringify(seen));
 });
 
-test('replay intents (fixed parts, collateral) are refused until their path is built', { skip }, async (t) => {
+test('CSL and the Evolution SDK refuse replay intents (fixed parts, collateral) until their paths are built', { skip }, async (t) => {
   const s = constructState(T, [{ coin: 100n * ADA, txid: 'replay' }]);
   const base = payIntent(T, [{ coin: 2n * ADA }]);
   const cases = {
@@ -247,9 +248,9 @@ test('replay intents (fixed parts, collateral) are refused until their path is b
     T8: { ...base, type: 'T8', fixed: { inputs: [], referenceInputs: [], body: { 5: 'a0' }, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: 0n, fixedBytes: 1 }, implicit: { ...base.implicit, withdrawals: 1000000n } }
   };
   const out = {};
-  for (const m of [cslMethod(T, { strategy: 'lf' }), cslMethod(T, { strategy: 'ri' }), cjsMethod(T), evoMethod()]) {
+  for (const m of [cslMethod(T, { strategy: 'lf' }), cslMethod(T, { strategy: 'ri' }), evoMethod()]) {
     for (const [type, it] of Object.entries(cases)) {
-      await assert.rejects(async () => m.build(s, it, P, opts(m)), /replay path|fixed parts/);
+      await assert.rejects(async () => m.build(s, it, P, opts(m)), { message: `${m.name}: the replay path (fixed parts and collateral) is not built yet` });
       (out[m.name] = out[m.name] || []).push(type);
     }
   }

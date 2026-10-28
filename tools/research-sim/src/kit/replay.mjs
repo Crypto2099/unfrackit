@@ -155,13 +155,21 @@ function requiredSigners(fixed) {
   });
 }
 
+// Why the kit cannot assemble an intent's transaction, or null when it can.
+export function replayRefusal(intent) {
+  const fixed = intent.fixed;
+  if (fixed && fixed.body[6] !== undefined) return 'body field 6 (protocol parameter updates) cannot appear in a Conway transaction';
+  return null;
+}
+
 // parts: { intent, inputs [UTxO records], change [{ address, coin, assets }],
 // collateral null | { utxo, returnAddress, total }, fee, walletCreds (the
 // wallet's payment credentials, for required signers) }.
 export function assembleReplayOnce(T, parts) {
   const { intent, inputs, change, collateral, fee, walletCreds = null } = parts;
   const fixed = intent.fixed;
-  if (fixed && fixed.body[6] !== undefined) throw new NotReplayable('body field 6 (protocol parameter updates) cannot appear in a Conway transaction');
+  const refusal = replayRefusal(intent);
+  if (refusal) throw new NotReplayable(refusal);
   const allRefs = [...inputs.map((u) => u.ref), ...(fixed ? fixed.inputs.map((x) => x.ref) : [])];
   if (new Set(allRefs).size !== allRefs.length) throw new Error('replay: an input is given twice');
   const sorted = allRefs.slice().sort(cmpRef);
