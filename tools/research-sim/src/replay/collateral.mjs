@@ -85,7 +85,8 @@ export function eligibleCollateral(state, params, rule, { exclude = new Set(), o
 }
 
 // Whether any UTxO is eligible under each rule: the collateral availability
-// recorded at every script interaction, before the spend.
+// recorded at a phase-2-invalid spend's forfeit (a spend's is the engine's,
+// replay/engine.mjs spendCollateralAvailability).
 export function collateralAvailability(state, params, { exclude = new Set(), observedFee = null } = {}) {
   const out = {};
   for (const r of COLLATERAL_RULES) {

@@ -50,7 +50,11 @@
 // burst's intents in order from the state at its start without spending any
 // output created earlier in the burst (burst feasibility, H-5 and H-6's rescue
 // test), while the ordinary sequential replay continues for fees. At every
-// script interaction the collateral available under every rule is recorded.
+// script interaction the collateral available under every rule is recorded:
+// at a spend, whether the rule would set a UTxO aside and the payment can be
+// made without it (spendCollateralAvailability), so that a spend infeasible
+// for collateral counts as having none; at a forfeit, whether any UTxO is
+// eligible.
 // In the maintained-tidy arm under the decided thresholds, each plan that
 // proposes a pure-ADA-only transaction the never-propose setting would not is
 // an H-6 trigger, returned with its time for the rescue test.
@@ -72,7 +76,7 @@ import { checkResult, checkOptions, NOT_REPLAYABLE } from '../methods/contract.m
 import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
 import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
 import { replaySuffices } from './feasible.mjs';
-import { eligibleCollateral, collateralAvailability, checkRule, totalCollateralFor } from './collateral.mjs';
+import { eligibleCollateral, collateralAvailability, checkRule, totalCollateralFor, COLLATERAL_RULES } from './collateral.mjs';
 import { spendMeasures, stateMeasures, requestedIndexes, PolicyLock } from './measure.mjs';
 import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
@@ -113,6 +117,32 @@ export function setAside(T, params, state, intent, rule) {
   if (!u) return { ok: false, reason: 'none-eligible' };
   if (!replaySuffices(T, state, params, intent, { aside: u.ref }).suffices) return { ok: false, reason: 'payment' };
   return { ok: true, pool: removeSpent(state, [u.ref]), collateral: u };
+}
+
+// Whether collateral is available under each rule at a script spend, for
+// H-5 and H-6: the rule would set a UTxO aside and the payment can be made
+// without it, as setAside decides. When the balance does not suffice even
+// with it (`suffices` false, infeasible by balance), a UTxO to set aside is
+// enough. null under the ledger-minimum rule when the intent has no observed
+// fee.
+export function spendCollateralAvailability(T, params, state, intent, suffices) {
+  const observedFee = intent.observed ? intent.observed.fee : null;
+  const out = {};
+  const without = new Map();
+  for (const rule of COLLATERAL_RULES) {
+    if (rule === 'ledger-minimum' && observedFee === null) {
+      out[rule] = null;
+      continue;
+    }
+    const u = collateralToSetAside(params, state, intent, rule);
+    if (!u) out[rule] = false;
+    else if (!suffices) out[rule] = true;
+    else {
+      if (!without.has(u.ref)) without.set(u.ref, replaySuffices(T, state, params, intent, { aside: u.ref }).suffices);
+      out[rule] = without.get(u.ref);
+    }
+  }
+  return out;
 }
 
 // The number of the intent's fixed vkey witnesses that no fixed input's key
@@ -293,9 +323,8 @@ export async function replay(T, params, source, job) {
       out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts)) });
     }
 
-    if (intent.collateral.required) rec.collateralAvailable = collateralAvailability(state, params, { observedFee: intent.observed ? intent.observed.fee : null });
-
     if (intent.invalid) {
+      if (intent.collateral.required) rec.collateralAvailable = collateralAvailability(state, params, { observedFee: intent.observed ? intent.observed.fee : null });
       const f = forfeit(params, state, intent, opts.collateralRule);
       if (!f.ok) {
         counts.infeasibleCollateral++;
@@ -311,6 +340,7 @@ export async function replay(T, params, source, job) {
     }
 
     const feas = replaySuffices(T, state, params, intent);
+    if (intent.collateral.required) rec.collateralAvailable = spendCollateralAvailability(T, params, state, intent, feas.suffices);
     if (!feas.suffices) {
       counts.infeasible++;
       out.spends.push({ ...rec, outcome: 'infeasible', reason: !feas.assets ? 'assets' : !feas.coin ? 'coin' : 'one-transaction' });

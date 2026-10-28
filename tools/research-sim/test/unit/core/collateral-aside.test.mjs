@@ -155,3 +155,42 @@ test('every built script spend\'s collateral is the UTxO set aside, never among 
   assert.ok(checked >= 30, `${checked} script spends built`);
 });
 
+// The collateral available under each rule, recorded for H-5 and H-6, agrees
+// with the set-aside: none where a spend would be infeasible for collateral.
+test('collateral availability under each rule is the set-aside\'s', { skip }, async () => {
+  const f = fixture();
+  const m = makeMethod(T, 'test-largest-first');
+  const cases = [
+    [[f.pure(1, 5n * ADA), f.pure(2, 4n * ADA), f.pure(3, 4n * ADA)], { ledger: true, practice: true, 'token-bearing': true }],
+    [[f.pure(1, 4n * ADA), f.pure(2, 4n * ADA), f.pure(3, 4n * ADA)], { ledger: false, practice: false, 'token-bearing': true }],
+    [[f.pure(4, 5n * ADA)], { ledger: false, practice: false, 'token-bearing': false }],
+    // 25 ADA is eligible under the ledger rule but not the practice rule, and
+    // the payment can be made without it.
+    [[f.pure(5, 25n * ADA), f.pure(2, 4n * ADA)], { ledger: true, practice: false, 'token-bearing': true }]
+  ];
+  for (const [utxos, want] of cases) {
+    const r = await run(f.sourceOf(utxos, [f.t6]), m, 'ledger');
+    const got = r.spends[0].collateralAvailable;
+    for (const [rule, v] of Object.entries(want)) assert.equal(got[rule], v, `${rule} over ${utxos.map((u) => u.coin).join(', ')}`);
+    assert.equal(got.ledger === false, r.spends[0].outcome === INFEASIBLE_COLLATERAL);
+  }
+  // A spend infeasible by balance: a UTxO to set aside is enough.
+  const poor = { ...f.t6, requested: f.t6.requested.map((o) => ({ ...o, coin: 40n * ADA })) };
+  const r = await run(f.sourceOf([f.pure(1, 5n * ADA), f.pure(2, 4n * ADA)], [poor]), m, 'ledger');
+  assert.equal(r.spends[0].outcome, 'infeasible');
+  assert.equal(r.spends[0].collateralAvailable.ledger, true);
+  // On the synthetic streams, under every rule, the arm's own rule is
+  // unavailable exactly where the spend is infeasible for collateral.
+  for (const name of ['S1', 'S7', 'S8', 'M1', 'M7']) {
+    const source = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
+    const intents = source.events.filter((e) => e.kind === 'intent').map((e) => e.intent);
+    for (const rule of COLLATERAL_RULES) {
+      const x = await run(source, m, rule);
+      for (const s of x.spends) {
+        const it = intents[s.intent];
+        if (!it.collateral.required || it.invalid || s.outcome === 'infeasible') continue;
+        assert.equal(s.collateralAvailable[rule] === false, s.outcome === INFEASIBLE_COLLATERAL, `${name} ${rule}`);
+      }
+    }
+  }
+});
