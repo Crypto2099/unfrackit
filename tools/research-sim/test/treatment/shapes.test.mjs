@@ -4,7 +4,9 @@
 // Every transaction built on the 21 synthetic shapes builds with CSL and meets
 // the ledger kit's checks, and the four negative controls are caught on each
 // for its own reason; CSL reads each back to the same bytes, and the kit's
-// sizes are CSL's. The transactions: the planner's plan of every shape
+// sizes are CSL's. Every transaction the treatment builds pays exactly the
+// ledger's minimum fee on the ledger's size, as the kit's own do; the count
+// of any fee above the minimum is reported by form. The transactions: the planner's plan of every shape
 // under every settings variant; and every battery spend (the standard battery
 // and H-10's on the observed layout, H-10's on the tidy layout) by the H-12
 // rule with absorption on and off and by the test method under the
@@ -28,6 +30,7 @@ import { runSpend } from '../../src/battery/run.mjs';
 import { h12Method } from '../../src/methods/h12.mjs';
 import { testLargestMethod } from '../../src/methods/test-largest.mjs';
 import { settle } from '../../src/kit/heap.mjs';
+import { minFee } from '../../src/kit/fee.mjs';
 
 const T = await treatment();
 const P = SYNTHETIC_PARAMS;
@@ -36,7 +39,7 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
   const h12 = T && h12Method(T);
   const tm = T && testLargestMethod(T);
   const methods = T ? [[h12, { changePolicy: 'default', absorb: true }, 'h12-on'], [h12, { changePolicy: 'default', absorb: false }, 'h12-off'], [tm, { changePolicy: 'layout' }, 'test-layout'], [tm, { changePolicy: 'single' }, 'test-single'], [tm, { changePolicy: 'naive' }, 'test-naive']] : [];
-  const counts = { plans: 0, planTxs: 0, spends: 0, built: 0, chains: 0, failures: {}, kitFailures: 0, unsettled: {}, txs: { plan: 0, 'chain-plan': 0, payment: 0, kit: 0 }, controls: 0, suffices: 0, sufficesErrors: {} };
+  const counts = { plans: 0, planTxs: 0, spends: 0, built: 0, chains: 0, failures: {}, kitFailures: 0, unsettled: {}, raised: {}, txs: { plan: 0, 'chain-plan': 0, payment: 0, kit: 0 }, aboveMinimum: { plan: 0, 'chain-plan': 0, payment: 0, kit: 0 }, controls: 0, suffices: 0, sufficesErrors: {} };
   const bad = [];
   const control = (state, bytes, form) => {
     // CSL reads the transaction back to the same bytes, and the kit's sizes
@@ -47,6 +50,7 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
     const d = inspectTx(bytes);
     if (again !== bytes) bad.push(`${form}: CSL re-serializes the transaction differently`);
     if (d.serializedSize !== bytes.length / 2 || d.size !== d.serializedSize - 1) bad.push(`${form}: sizes ${d.size}/${d.serializedSize}`);
+    if (d.fee !== minFee(P, d.size)) counts.aboveMinimum[form]++;
     const r = negativeControls(state, P, bytes);
     for (const [k, v] of Object.entries(EXPECTED)) if (r[k] !== v) bad.push(`${form}: control ${k} gave '${r[k]}'`);
     counts.controls++;
@@ -77,6 +81,7 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
         counts.unsettled[it.unsettled] = (counts.unsettled[it.unsettled] || 0) + 1;
         continue;
       }
+      if (it.meta && it.meta.raised) counts.raised[it.meta.raised.rule] = (counts.raised[it.meta.raised.rule] || 0) + 1;
       const suf = balanceSuffices(T, state, P, it).suffices;
       for (const [m, opts, label] of methods) {
         const r = await runSpend(T, { state, params: P, intent: it, method: m, opts });
@@ -106,5 +111,6 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
   }
   assert.deepEqual(bad, []);
   assert.equal(counts.kitFailures, 0);
+  for (const form of ['plan', 'chain-plan', 'payment']) assert.equal(counts.aboveMinimum[form], 0, `a ${form} transaction of the treatment pays above the ledger's minimum`);
   t.diagnostic(JSON.stringify(counts));
 });

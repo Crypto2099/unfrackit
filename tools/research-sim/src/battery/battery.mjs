@@ -48,10 +48,16 @@
 // recent-window spends; for the synthetic shapes, which have no history,
 // SHAPE_POOLS below.
 //
+// A drawn ADA payment or an H-10 amount under its output's minimum UTxO is
+// raised to that minimum, as a wallet would have to pay it, and the spend
+// stays in the battery for every method; a fungible share or a payroll token
+// share that rounds down to zero units pays one unit, capped at the holding.
+// Each such spend's meta records the raise ({ rule, from, to }).
+//
 // A case the rules leave open is not built: the spend is returned as
-// { kind, unsettled } and reported. These are: a drawn ADA amount under the
-// minimum of its output; a fungible share or a payroll token share that
-// rounds down to zero units.
+// { kind, unsettled } and reported. One remains: a payroll token share that
+// rounds to zero when the wallet holds fewer units than there are
+// recipients, so that one unit each would pay more than the holding.
 
 import { createHash } from 'node:crypto';
 import { makeRng } from '../shapes/rng.mjs';
@@ -159,7 +165,7 @@ export function standardBattery(T, state, params, { pools }) {
   if (pools.t1.length) {
     const amount = BigInt(pools.t1[drawer(state.stakeCred, 'ada-payment')(pools.t1.length)]);
     const min = minCoinFor(adapter, ext, []);
-    if (amount < min) out.push({ kind: 'ada-payment', unsettled: 'ada-amount-below-minimum', meta: { amount, min } });
+    if (amount < min) add('ada-payment', [output(T, adapter, ext, min, [])], { amount: min, raised: { rule: 'ada-below-minimum', from: amount, to: min } });
     else add('ada-payment', [output(T, adapter, ext, amount, [])], { amount });
   }
   if (w.nfts.length) {
@@ -171,7 +177,7 @@ export function standardBattery(T, state, params, { pools }) {
     const h = w.fts[d(w.fts.length)];
     const [u, held] = pools.t5[d(pools.t5.length)].map(BigInt);
     const units = (h.qty * u) / held;
-    if (units === 0n) out.push({ kind: 'fungible-share', unsettled: 'share-rounds-to-zero', meta: { asset: key(h), share: [u, held] } });
+    if (units === 0n) add('fungible-share', [output(T, adapter, ext, null, [{ policy: h.policy, name: h.name, qty: 1n }])], { asset: key(h), share: [u, held], units: 1n, raised: { rule: 'zero-units', from: 0n, to: 1n } });
     else add('fungible-share', [output(T, adapter, ext, null, [{ policy: h.policy, name: h.name, qty: units }])], { asset: key(h), share: [u, held], units });
   }
   if (w.nfts.length) {
@@ -192,12 +198,17 @@ export function standardBattery(T, state, params, { pools }) {
     const kind = `payroll-${k}`;
     const addrs = Array.from({ length: k }, (_, i) => recipientAddress(state.network, i));
     if (f) {
-      const each = f.qty / 2n / BigInt(k);
+      let each = f.qty / 2n / BigInt(k);
+      let raised = null;
       if (each === 0n) {
-        out.push({ kind, unsettled: 'payroll-share-rounds-to-zero', meta: { asset: key(f), k } });
-        continue;
+        if (f.qty < BigInt(k)) {
+          out.push({ kind, unsettled: 'payroll-holding-below-recipients', meta: { asset: key(f), k, held: f.qty } });
+          continue;
+        }
+        each = 1n;
+        raised = { rule: 'zero-units', from: 0n, to: 1n };
       }
-      add(kind, addrs.map((a) => output(T, adapter, a, null, [{ policy: f.policy, name: f.name, qty: each }])), { asset: key(f), k, each });
+      add(kind, addrs.map((a) => output(T, adapter, a, null, [{ policy: f.policy, name: f.name, qty: each }])), { asset: key(f), k, each, ...(raised ? { raised } : {}) });
     } else {
       const share = w.coin / 2n / BigInt(k);
       add(kind, addrs.map((a) => {
@@ -220,9 +231,10 @@ export function h10Battery(T, state, params, { observed = state } = {}) {
   const ext = recipientAddress(state.network, 0);
   const min = minCoinFor(adapter, ext, []);
   return P_GRID.map((p) => {
-    const amount = (o.coin * p[0]) / p[1];
+    const drawn = (o.coin * p[0]) / p[1];
     const kind = `h10-${pLabel(p)}`;
-    if (amount < min) return { kind, unsettled: 'ada-amount-below-minimum', meta: { amount, min } };
-    return batteryIntent({ id: kind, source: 'h10', type: 'h10', requested: [output(T, adapter, ext, amount, [])], meta: { p: p.map(String), amount, tokenLaden: w.pureCoin < amount } });
+    const amount = drawn < min ? min : drawn;
+    const raised = drawn < min ? { raised: { rule: 'ada-below-minimum', from: drawn, to: min } } : {};
+    return batteryIntent({ id: kind, source: 'h10', type: 'h10', requested: [output(T, adapter, ext, amount, [])], meta: { p: p.map(String), amount, tokenLaden: w.pureCoin < amount, ...raised } });
   });
 }
