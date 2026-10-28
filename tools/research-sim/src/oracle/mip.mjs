@@ -65,8 +65,10 @@ const key = (a) => `${a.policy}.${a.name}`;
 const ADA = 1e6;
 
 let solver = null;
-export async function loadSolver() {
-  if (solver) return solver;
+// The solver, one instance per thread; { fresh: true } replaces an instance
+// that has aborted.
+export async function loadSolver({ fresh = false } = {}) {
+  if (solver && !fresh) return solver;
   const req = createRequire(import.meta.url);
   // The package exports no package.json; its entry is build/highs.js.
   const manifest = JSON.parse(readFileSync(join(dirname(req.resolve(SOLVER_PACKAGE)), '..', 'package.json'), 'utf8'));
@@ -263,12 +265,21 @@ export function buildProgram(highs, M, pool) {
 
 // The loop. pool: UTxO records; evaluate(S): policies.mjs, resolving to an
 // evaluation; best: the incumbent evaluation or null. Resolves to { proven,
-// best, iterations, rejections, cols, rows, solverMs }.
+// best, iterations, rejections, solverErrors, cols, rows, solverMs }.
+//
+// HiGHS 1.15.4's presolve aborts on some of these programs once enough cuts
+// have been added (a RuntimeError from the WebAssembly runtime, which leaves
+// that solver instance unusable; reproduced deterministically, and never with
+// presolve off). On any solver failure the loop takes a fresh solver
+// instance, rebuilds the program with every cut so far and the cutoff, turns
+// presolve off for the rest of the run, and goes on; a second failure ends
+// the run, unproven. Every failure is recorded.
 export async function mipSearch({ highs, model: M, pool, evaluate, best = null, deadline = Infinity, iterationMs = 6000, onImprove = () => {} }) {
-  const prog = buildProgram(highs, M, pool);
+  let H = highs;
+  const prog = buildProgram(H, M, pool);
   // feeBelow counts exact fees under the program's value, which would mean
   // the relaxation is not a lower bound; the checks require it to stay 0.
-  const out = { proven: false, best, iterations: 0, rejections: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
+  const out = { proven: false, best, iterations: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
   if (!prog) {
     out.proven = true;
     return out;
@@ -276,28 +287,63 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
   out.cols = prog.cols;
   out.rows = prog.rows;
   out.strict = prog.strict;
-  const model = highs.createModel(prog.data);
-  const ms = highs.constants.modelStatus;
+  const cuts = [];
+  let presolve = 'on';
+  let model = null;
+  const open = () => {
+    model = H.createModel(prog.data);
+    // The WebAssembly build is single-threaded and refuses the threads and
+    // parallel options.
+    model.options.set({ output_flag: false, mip_rel_gap: 0, mip_abs_gap: 1e-7, mip_feasibility_tolerance: 1e-9, primal_feasibility_tolerance: 1e-9, presolve });
+    for (const c of cuts) model.addRow(-H.infinity, c.upper, c.entries);
+    if (out.best) model.changeRowBounds(prog.cutoffRow, -H.infinity, (Number(out.best.fee) - 1) / ADA);
+  };
+  const close = () => {
+    if (!model) return;
+    try {
+      model.dispose();
+    } catch {
+      // a solver instance that aborted cannot dispose its models
+    }
+    model = null;
+  };
   try {
-    // The WebAssembly build is single-threaded and refuses the threads and parallel options.
-    model.options.set({ output_flag: false, mip_rel_gap: 0, mip_abs_gap: 1e-7, mip_feasibility_tolerance: 1e-9, primal_feasibility_tolerance: 1e-9, presolve: 'on' });
-    const setCutoff = () => {
-      if (out.best) model.changeRowBounds(prog.cutoffRow, -highs.infinity, (Number(out.best.fee) - 1) / ADA);
-    };
-    setCutoff();
+    try {
+      open();
+    } catch (e) {
+      // An instance an earlier run left aborted.
+      out.solverErrors.push({ iteration: 0, cuts: 0, presolve, error: String(e && (e.message || e)).split('\n')[0] });
+      H = await loadSolver({ fresh: true });
+      open();
+    }
     let uncapped = false;
     for (;;) {
       const left = deadline - performance.now();
       if (left <= 0) break;
-      model.zeroAllClocks();
-      // Each solve is capped, so that a program whose optimum is slow to
-      // prove still yields sets to rebuild.
-      model.options.set({ time_limit: Math.max(0.01, Math.min(left, uncapped ? left : iterationMs) / 1000) });
       const t0 = performance.now();
-      model.run();
+      let st;
+      try {
+        model.zeroAllClocks();
+        // Each solve is capped, so that a program whose optimum is slow to
+        // prove still yields sets to rebuild.
+        model.options.set({ time_limit: Math.max(0.01, Math.min(left, uncapped ? left : iterationMs) / 1000) });
+        model.run();
+        st = model.getModelStatus();
+      } catch (e) {
+        out.solverMs += performance.now() - t0;
+        out.solverErrors.push({ iteration: out.iterations, cuts: cuts.length, presolve, error: String(e && (e.message || e)).split('\n')[0] });
+        close();
+        // The instance is replaced either way, so that later runs in this
+        // thread start from a working solver.
+        H = await loadSolver({ fresh: true });
+        if (out.solverErrors.length > 1) break;
+        presolve = 'off';
+        open();
+        continue;
+      }
       out.solverMs += performance.now() - t0;
       out.iterations++;
-      const st = model.getModelStatus();
+      const ms = H.constants.modelStatus;
       out.statuses[st] = (out.statuses[st] || 0) + 1;
       if (st === ms.infeasible) {
         out.proven = true;
@@ -305,8 +351,8 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       }
       let sol = null;
       if ((st === ms.optimal || st === ms.timeLimit || st === ms.objectiveBound) && model.info.get('primal_solution_status') === 2) {
-        const s = model.getSolution();
-        if (s && s.colValue && s.colValue.length) sol = s.colValue;
+        const sv = model.getSolution();
+        if (sv && sv.colValue && sv.colValue.length) sol = sv.colValue;
       }
       if (!sol) {
         // No set yet within the cap: the next solve takes the time left.
@@ -340,15 +386,16 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       if (ev.ok && (!out.best || ev.fee < out.best.fee)) {
         out.best = ev;
         onImprove(ev);
-        setCutoff();
+        model.changeRowBounds(prog.cutoffRow, -H.infinity, (Number(out.best.fee) - 1) / ADA);
       }
       // The no-good cut on the set.
       const inSet = new Set(idx);
-      const entries = prog.x.map((j, i) => [j, inSet.has(i) ? 1 : -1]);
-      model.addRow(-highs.infinity, idx.length - 1, { indices: entries.map((e) => e[0]), values: entries.map((e) => e[1]) });
+      const cut = { upper: idx.length - 1, entries: { indices: prog.x, values: prog.x.map((_, i) => (inSet.has(i) ? 1 : -1)) } };
+      cuts.push(cut);
+      model.addRow(-H.infinity, cut.upper, cut.entries);
     }
   } finally {
-    model.dispose();
+    close();
   }
   return out;
 }

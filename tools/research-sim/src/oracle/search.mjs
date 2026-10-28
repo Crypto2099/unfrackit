@@ -147,7 +147,7 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
 }
 
 function mipDetail(m) {
-  return { iterations: m.iterations, strict: m.strict, rejections: m.rejections, feeDiffers: m.feeDiffers, maxFeeAbove: m.maxFeeAbove, feeBelow: m.feeBelow, cols: m.cols, rows: m.rows, solverMs: Math.round(m.solverMs), statuses: m.statuses };
+  return { iterations: m.iterations, strict: m.strict, rejections: m.rejections, solverErrors: m.solverErrors, feeDiffers: m.feeDiffers, maxFeeAbove: m.maxFeeAbove, feeBelow: m.feeBelow, cols: m.cols, rows: m.rows, solverMs: Math.round(m.solverMs), statuses: m.statuses };
 }
 
 // Whether a method's transaction carries the same change outputs, byte for

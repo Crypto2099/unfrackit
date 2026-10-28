@@ -76,10 +76,22 @@ export async function runBatteryOracle(opts) {
           const incumbents = incumbentsOf(answers);
           jobs.push(
             (async () => {
-              const [seeded, unseeded] = await Promise.all([
-                oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents }),
-                oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents: [] })
-              ]);
+              let seeded;
+              let unseeded;
+              try {
+                [seeded, unseeded] = await Promise.all([
+                  oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents }),
+                  oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents: [] })
+                ]);
+              } catch (e) {
+                // A call that fails is recorded and the run goes on; the
+                // checks require there to be none.
+                const rec = { shape: name, spend: spend.id, type: spend.type, policy, limitMs, error: String(e && (e.message || e)).slice(0, 2000) };
+                appendFileSync(file, json(rec) + '\n', { mode: 0o600 });
+                records.push(rec);
+                log(`${name} ${spend.id} ${policy}: error ${rec.error.split('\n')[0]}`);
+                return;
+              }
               const rec = { shape: name, spend: spend.id, type: spend.type, policy, limitMs, methods: answers.map((a) => ({ name: a.name, ok: a.ok, kitOk: a.kitOk ?? null, fee: a.fee ?? null, class: a.class ?? null, inputs: a.walletInputs ? a.walletInputs.length : null })), seeded: slim(seeded), unseeded: slim(unseeded) };
               // Check 4: where the exhaustive path ran, the mixed-integer
               // path over the same candidates, unseeded.

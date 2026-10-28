@@ -64,7 +64,9 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
     log: (line) => t.diagnostic(line)
   });
   const c = { records: records.length, file, check1: { references: 0, bad: [] }, check4: { compared: 0, equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: [] }, check5: { compared: 0, violations: [], missing: [] }, check6: { compared: 0, same: 0, differ: [] }, status: {} };
+  const errors = records.filter((r) => r.error).map((r) => `${r.shape} ${r.spend} ${r.policy}: ${r.error.split('\n')[0]}`);
   for (const r of records) {
+    if (r.error) continue;
     const tag = `${r.shape} ${r.spend} ${r.policy}`;
     for (const [k, v] of Object.entries(r.check1)) {
       c.check1.references++;
@@ -93,7 +95,9 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
       c.status[key][o.status] = (c.status[key][o.status] || 0) + 1;
     }
   }
+  c.errors = errors;
   t.diagnostic(JSON.stringify(c));
+  assert.deepEqual(errors, []);
   assert.deepEqual(c.check1.bad, []);
   assert.deepEqual(c.check4.bad, []);
   assert.deepEqual(c.check5.violations, []);
