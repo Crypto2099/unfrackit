@@ -82,7 +82,13 @@ export const SIM_SETTINGS = Object.freeze({
   // Held UTxOs and the treatment. 'flagged': they are given to the planner
   // and the H-12 rule marked held, which neither ever spends, so that asset
   // classification counts them as the study's rules require.
-  heldToTreatment: 'flagged'
+  heldToTreatment: 'flagged',
+  // cardano-js-sdk's tokenBundleSizeExceedsLimit callback is given a token
+  // bundle without its coin. 'widest': the bundle's Value is measured with its
+  // coin at the widest encoding (9 bytes), as the library's own default
+  // constraint measures it, so a bundle it accepts fits whatever coin the
+  // change output then carries.
+  cjsBundleCoin: 'widest'
 });
 
 const IMPLEMENTED = {
@@ -102,7 +108,8 @@ const IMPLEMENTED = {
   policyRecord: ['per-spend-and-window'],
   heldBytes: ['ledger'],
   treatmentOrder: ['ref'],
-  heldToTreatment: ['flagged']
+  heldToTreatment: ['flagged'],
+  cjsBundleCoin: ['widest']
 };
 
 export function simSettings(overrides = {}) {
