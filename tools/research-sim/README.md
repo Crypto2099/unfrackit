@@ -23,7 +23,7 @@ npm test
 node src/cli.mjs help
 ```
 
-The tool has its own `package.json` and lockfile. Its one runtime dependency is `pg` (node-postgres) 8.23.0, pinned with its npm integrity.
+The tool has its own `package.json` and lockfile. Its runtime dependencies are `pg` (node-postgres) 8.23.0 and the baseline libraries listed under Baselines, each pinned with its npm integrity. `npm ci --ignore-scripts` installs the same tree without compiling `chacha-native`, an optional native dependency of `chacha` (which `@cardano-sdk/key-management` uses), and `chacha` then loads its JavaScript implementation; no adapter calls it.
 
 cardano-serialization-lib (CSL) comes only through the treatment's `cslkit.mjs`, so that the reader, the treatment and every adapter share one CSL instance. `--treatment <dir>` names the directory holding the treatment's files, and `--treatment-pins <file>` a list of their SHA-256 digests, one `<64 hex><two spaces><file name>` per line. Before anything is imported, every listed file's digest is compared with the file in that directory, and any difference refuses the load, naming the file. The `history` and `census` commands need both options.
 
@@ -197,6 +197,74 @@ At the snapshot, from the observed layout: an ADA payment drawn from the pooled 
 
 The 17 shapes of the preprod seeder (byte for byte the treatment harness's) and the claim and merchant shapes CL1, CL3, E1 and E2 are generated deterministically with mulberry32. Each shape has a synthetic intent stream of fixed test values for the engine's tests, over 75 days: payments of each type T1 to T8 that its holdings allow, a deposit with a held datum UTxO, a parallel burst, a Plutus spend with a script input, redeemer, script and datum, a phase-2-invalid forfeit, a payment with a validity interval, a message and a held fixed input, a self-reorganization, a native-script mint, a stake registration with its deposit, and two 30-day marks.
 
+## Baselines
+
+The baselines are external selectors run at their libraries' defaults, each through an adapter in `src/methods/` that implements the simulator's method contract (`src/methods/contract.mjs`):
+
+| Method | Library | What runs |
+|---|---|---|
+| `csl-lf` | cardano-serialization-lib 13.2.1 | `TransactionBuilder.add_inputs_from` with `LargestFirstMultiAsset`, then `add_change_if_needed` |
+| `csl-ri` | cardano-serialization-lib 13.2.1 | the same with `RandomImproveMultiAsset`, which draws from an unseedable generator |
+| `csl-lf-pure`, `csl-ri-pure` | cardano-serialization-lib 13.2.1 | the two above with `prefer_pure_change` set |
+| `cjs-rrri` | `@cardano-sdk/input-selection` 0.14.35 | `roundRobinRandomImprove`, seeded with mulberry32 |
+| `evo-lf` | `@evolution-sdk/evolution` 0.6.0 | its transaction builder at its defaults: largest-first selection, no `unfrack` option |
+
+cardano-serialization-lib (CSL) is the treatment's instance, loaded through its `cslkit.mjs`; no other CSL build is installed. Every adapter receives the spendable UTxOs in transaction id then index order, runs its library with the run's protocol parameters, and maps the library's errors to the failure classes. The engine runs the ledger kit's checks on what it returns; no adapter checks, retries or repairs its library's output. Each adapter's source comments cite the library code it relies on, by repository, commit, file and line.
+
+Serialization and witnesses. A library that returns a transaction keeps its own encoding. CSL's witness set is filled with one synthetic vkey witness per distinct payment key among the inputs (the treatment's `build.mjs` witnesses), and the Evolution SDK's transaction is taken with its own fake witnesses, one per payment key. cardano-js-sdk selects inputs and computes change only, so the kit assembles its transaction, and its four constraint callbacks are computed with the kit on the transaction as it will be assembled, at the wallet's change address:
+
+- `computeMinimumCost`: the ledger's minimum fee for the skeleton's transaction, its fee field at that fee;
+- `computeMinimumCoinQuantity`: CSL's `min_ada_for_output` for the output;
+- `tokenBundleSizeExceedsLimit`: the bundle's Value, its coin at the widest encoding, against `maxValSize` (the library passes the bundle without its coin; setting `cjsBundleCoin` in `src/settings.mjs`);
+- `computeSelectionLimit`: the skeleton's input count when its transaction fits `maxTxSize`, one fewer when it does not.
+
+Failure classes:
+
+| Library | Error | Class |
+|---|---|---|
+| CSL | "Not enough ADA leftover to include non-ADA assets in a change address" | `change-minimum` |
+| CSL | "UTxO Balance Insufficient", "Insufficient input in transaction", "No inputs to add" | `balance` |
+| CSL | "Maximum transaction size of ... exceeded" | `tx-size` |
+| CSL | "Maximum value size of ... exceeded" | `value-size` |
+| cardano-js-sdk | `UtxoBalanceInsufficient` | `balance` |
+| cardano-js-sdk | `UtxoFullyDepleted` | `change-minimum` |
+| cardano-js-sdk | `MaximumInputCountExceeded` | `max-inputs` |
+| Evolution SDK | a `CoinSelectionError` | `balance` |
+| Evolution SDK | "Cannot balance transaction: Native assets present in leftover ...", "Cannot create valid change: Insufficient funds ..." | `change-minimum` |
+| Evolution SDK | "Transaction size (...) exceeds protocol maximum" | `tx-size` |
+
+Any other error takes class `other` with its text.
+
+Change substitution. With a change policy other than `default` (`layout`, `single` or `naive`), `csl-lf`, `csl-ri` and `cjs-rrri` keep only the inputs their library chose, and the simulator's policy (`src/methods/change.mjs`) builds the change, the kit assembling the transaction at its exact fee. When those inputs cannot fund the change, the spend fails with class `change-minimum`. `evo-lf` takes no substitution.
+
+Not built yet: the replay path. An intent with fixed parts, or one that needs collateral, is refused with an error rather than built in part.
+
+### Builder survey
+
+`src/survey/` holds the library part of the builder survey. Its fixture (`fixture.mjs`) is a wallet of k UTxOs, k from 1 to 5, each with 141 one-unit tokens of its own test policy under 32-byte names (a 4,974-byte Value) and 100 ADA. The wallet comes with and without two pure-ADA UTxOs of 2k × 100 ADA each, which alone cover the payment: 75% of the wallet's ADA to an external key address. Both variants, for k from 1 to 5, together hold 9,000 ADA, within one 10,000 tADA preprod faucet request. Names, policies and transaction ids are BLAKE2b hashes of fixed texts. These values are the settings in `SURVEY_SETTINGS`.
+
+The subjects are the baselines above, Mesh (`@meshsdk/transaction` 1.9.1) at its default selector and with its `LargestFirstInputSelector`, driven through `MeshTxBuilder` offline with Mesh's own constraint callbacks (`src/methods/mesh.mjs`), and the Evolution SDK with its `unfrack` option at the option's defaults. A random subject runs 30 times (seeds 1 to 30 where it takes one). Every transaction a subject builds goes through the kit's checks; one the kit rejects is recorded as built but invalid, with the reason. `mesh-compare.mjs` compares Mesh's default with `cjs-rrri` on the shapes' battery spends, both given the same seeded draws.
+
+### Dependencies
+
+Direct dependencies, pinned exactly:
+
+| Package | Version | Integrity |
+|---|---|---|
+| `pg` | 8.23.0 | `sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==` |
+| `@cardano-sdk/input-selection` | 0.14.35 | `sha512-Qd+/lVUSn5wUpTZDm5CaRW3fpiFXn1hSJTfPnR03TAsjvcCvSysidDI2v+yfg7p+fqp+4FCIIW0RTiIaSNRv3g==` |
+| `@evolution-sdk/evolution` | 0.6.0 | `sha512-4vyDsTSQHq/9FuFSU1Yss8ep8tvkAKFMWQT90CKUPUzqDF1lQBIMXbab3BRv9etz5OyiuGrzPdsZcR277Xmp5A==` |
+| `@meshsdk/transaction` | 1.9.1 | `sha512-FjKSoUi2xFaKJPI1ObQ13UkrCJu+iPW6THP//ZD/f5I1NciaUz3bcoQ7xWcc7El4TCcDunBPp9di6w9JitBR6Q==` |
+
+`@cardano-sdk/input-selection` 0.14.35 was published from `input-output-hk/cardano-js-sdk` commit 48019e49c826ea77d81be0e2d2907f94406f5e04. Its `@cardano-sdk` dependencies resolve to the versions that commit holds: core 0.47.1, util 0.17.2, key-management 0.29.19, crypto 0.4.7 and dapp-connector 0.13.31. The Evolution SDK 0.6.0 is the tag `@evolution-sdk/evolution@0.6.0` of `IntersectMBO/evolution-sdk`, commit c4139df12e099dbd4742d3e2c10dc52f50a4bd41; `overrides` in `package.json` pin its caret dependencies to the versions that commit's `pnpm-lock.yaml` holds, with the same integrities: effect 3.22.2 (with @standard-schema/spec 1.1.0, fast-check 3.23.2 and pure-rand 6.1.0), @noble/curves 2.4.0, @noble/hashes 2.4.0, @scure/base 2.4.0, @scure/bip32 2.4.0 and @scure/bip39 2.4.0. Mesh 1.9.1, the npm release built from `MeshJS/mesh` commit c0b183eccd0c20a465778f204f8c9caf73294bd8, pins `@cardano-sdk/input-selection` 0.14.28, core 0.46.12 and util 0.17.1, which npm installs as nested copies under `@meshsdk/transaction` and `@meshsdk/core-cst`. Every other package is the version the lockfile recorded when these were installed on 2026-10-27; `npm run hash` prints each with its integrity.
+
+<details>
+<summary>Every package in the lockfile (205)</summary>
+
+@biglup/is-cid 1.0.3, @cardano-ogmios/client 6.9.0, @cardano-ogmios/schema 6.9.0, @cardano-sdk/core 0.47.1, @cardano-sdk/core 0.46.12 (under @meshsdk/core-cst), @cardano-sdk/core 0.46.12 (under @meshsdk/transaction), @cardano-sdk/crypto 0.4.7, @cardano-sdk/crypto 0.4.5 (under @meshsdk/core-cst), @cardano-sdk/dapp-connector 0.13.31, @cardano-sdk/input-selection 0.14.35, @cardano-sdk/input-selection 0.14.28 (under @meshsdk/core-cst), @cardano-sdk/input-selection 0.14.28 (under @meshsdk/transaction), @cardano-sdk/key-management 0.29.19, @cardano-sdk/util 0.17.2, @cardano-sdk/util 0.17.1 (under @meshsdk/core-cst), @cardano-sdk/util 0.17.1 (under @meshsdk/transaction), @cardanosolutions/json-bigint 1.1.0, @chainsafe/is-ip 2.1.0, @chainsafe/netmask 2.0.0, @dnsquery/dns-packet 6.1.1, @emurgo/cardano-message-signing-nodejs 1.1.0, @evolution-sdk/evolution 0.6.0, @foxglove/crc 0.0.3, @harmoniclabs/bigint-utils 1.0.0, @harmoniclabs/biguint 1.0.0, @harmoniclabs/bitstream 1.0.0, @harmoniclabs/bytestring 1.0.0, @harmoniclabs/cbor 1.6.0, @harmoniclabs/crypto 0.3.1, @harmoniclabs/crypto 0.2.5 (under @harmoniclabs/plutus-data), @harmoniclabs/obj-utils 1.0.0, @harmoniclabs/pair 1.0.0, @harmoniclabs/plutus-data 1.2.6, @harmoniclabs/uint8array-utils 1.0.4, @harmoniclabs/uplc 1.4.1, @leichtgewicht/ip-codec 2.0.5, @libp2p/interface 3.4.0, @meshsdk/common 1.9.1, @meshsdk/core-cst 1.9.1, @meshsdk/transaction 1.9.1, @multiformats/dns 1.0.15, @multiformats/mafmt 12.1.6, @multiformats/multiaddr 12.5.1, @multiformats/multiaddr 13.0.3 (under @libp2p/interface), @noble/curves 2.4.0, @noble/hashes 2.4.0, @noble/hashes 1.8.0 (under @meshsdk/common), @noble/hashes 1.8.0 (under bip39), @scure/base 1.2.6, @scure/base 2.4.0 (under @evolution-sdk/evolution), @scure/base 2.4.0 (under @scure/bip32), @scure/bip32 2.4.0, @scure/bip39 2.4.0, @standard-schema/spec 1.1.0, @types/base32-encoding 1.0.2, @types/json-bigint 1.0.4, @types/node 26.6.5, @zxing/text-encoding 0.9.0 (optional), abort-error 1.0.2, available-typed-arrays 1.0.7, b4a 1.9.0, base32-encoding 1.0.0, bech32 2.0.0, bignumber.js 9.3.1, bindings 1.5.0 (optional), bip39 3.1.2, bip39 3.1.0 (under @meshsdk/common), blake2b 2.1.4, blake2b-wasm 2.4.0, blakejs 1.2.1, bn.js 5.2.5, call-bind 1.0.9, call-bind-apply-helpers 1.0.2, call-bound 1.0.4, chacha 2.1.0, chacha-native 2.0.3 (optional), cipher-base 1.0.7, core-util-is 1.0.3, create-hash 1.2.0, create-hmac 1.1.7, cross-fetch 3.2.0, define-data-property 1.1.4, dom-walk 0.1.2, dunder-proto 1.0.1, effect 3.22.2 (under @evolution-sdk/evolution), es-define-property 1.0.1, es-errors 1.3.0, es-object-atoms 1.1.2, eventemitter3 5.0.4, fast-check 3.23.2, fastq 1.20.3, file-uri-to-path 1.0.0 (optional), for-each 0.3.5, fraction.js 4.0.1, function-bind 1.1.2, generator-function 2.0.1, get-intrinsic 1.3.0, get-proto 1.0.1, get-random-values 2.1.0, global 4.4.0, gopd 1.2.0, has-property-descriptors 1.0.2, has-symbols 1.1.0, has-tostringtag 1.0.2, hash-base 3.1.2, hash.js 1.1.7, hashlru 2.3.0, hasown 2.0.4, i 0.3.7, inherits 2.0.4, ip-address 10.7.5, ip-address 9.0.5 (under @meshsdk/core-cst), ip-address 9.0.5 (under @meshsdk/transaction), is-arguments 1.2.0, is-callable 1.2.7, is-generator-function 1.1.2, is-regex 1.2.1, is-typed-array 1.1.15, isarray 0.0.1, isarray 1.0.0 (under hash-base), isarray 2.0.5 (under to-buffer), iso-url 1.2.1, isomorphic-ws 4.0.1, jsbn 1.1.0, json-bigint 1.0.0, libsodium-sumo 0.8.4, libsodium-sumo 0.7.16 (under @meshsdk/core-cst), libsodium-wrappers-sumo 0.8.4, libsodium-wrappers-sumo 0.7.10 (under @meshsdk/core-cst), lodash 4.18.1, main-event 1.0.5, math-intrinsics 1.1.0, md5.js 1.3.5, min-document 2.19.2, minimalistic-assert 1.0.1, multiformats 13.4.2, multiformats 14.0.5 (under @libp2p/interface), multiformats 14.0.5 (under @multiformats/dns), multiformats 14.0.5 (under uint8arraylist), nan 2.30.0 (optional), nanoassert 2.0.0, nanoid 3.3.20, node-fetch 2.7.0, p-queue 9.3.5, p-timeout 7.0.2, pbkdf2 3.1.7, pg 8.23.0, pg-cloudflare 1.4.1 (optional), pg-connection-string 2.14.1, pg-int8 1.0.1, pg-pool 3.14.0, pg-protocol 1.16.1, pg-types 2.2.0, pgpass 1.0.5, possible-typed-array-names 1.1.0, postgres-array 2.0.0, postgres-bytea 1.0.1, postgres-date 1.0.7, postgres-interval 1.2.0, process 0.11.10, process-nextick-args 2.0.1, progress-events 1.1.0, pure-rand 6.1.0, readable-stream 1.1.14, readable-stream 2.3.8 (under hash-base), reusify 1.1.0, ripemd160 2.0.3, rxjs 7.8.2, safe-buffer 5.2.1, safe-buffer 5.1.2 (under hash-base > readable-stream), safe-buffer 5.1.2 (under hash-base > string_decoder), safe-regex-test 1.1.0, serialize-error 8.1.0, set-function-length 1.2.2, sha.js 2.4.12, split2 4.2.0, sprintf-js 1.1.3, string_decoder 0.10.31, string_decoder 1.1.1 (under hash-base), to-buffer 1.2.2, tr46 0.0.3, ts-custom-error 3.3.1, ts-log 2.2.7, tslib 2.8.1, type-fest 0.20.2, typed-array-buffer 1.0.3, uint8-varint 2.0.5, uint8-varint 3.0.0 (under @libp2p/interface), uint8arraylist 3.0.2, uint8arraylist 2.4.9 (under uint8-varint), uint8arrays 5.1.1, uint8arrays 6.1.1 (under @libp2p/interface), uint8arrays 6.1.1 (under @multiformats/dns), uint8arrays 6.1.1 (under uint8arraylist), undici-types 8.9.0, utf8-codec 1.0.0, util 0.12.5, util-deprecate 1.0.2, web-encoding 1.1.5, webextension-polyfill 0.8.0, webidl-conversions 3.0.1, whatwg-url 5.0.0, which-typed-array 1.1.24, ws 7.5.13, xtend 4.0.2
+
+</details>
+
 ## Settings
 
 Where a rule admits more than one reading, the reading is a named setting whose default is the reading this code uses; `--set` changes it, and the value is recorded in every history file's header. A value that is not implemented is refused.
@@ -261,6 +329,8 @@ The intent tests and the kit's CSL tests build transactions with CSL, so they ru
 - the battery runner with its H-12 records and the oracle hook;
 - the time limits, forced (shortened to 2 seconds by default; `RESEARCH_SIM_REAL_LIMITS=1` runs them at 300 and 60 seconds);
 - timing and memory of a plan, a battery and a replay on M2, M3 and E1.
+
+`npm run test:treatment` runs the tests that need the treatment (`RESEARCH_SIM_TREATMENT_DIR`, with `RESEARCH_SIM_TREATMENT_PINS` naming a digest list other than `data/treatment-pins.txt`): the bridge and the shapes, and the baselines. `baselines-behavior.test.mjs` checks the library behaviors the adapters rely on, each on a constructed case, and one failure of each class per adapter. `baselines-battery.test.mjs` runs every baseline, at its default change and under each substituted policy, on the battery spends of the 21 synthetic shapes (the 17 seeded shapes plus CL1, CL3, E1 and E2): each transaction meets the kit's checks or fails one with its class, and the kit's negative controls are caught on each in its library's encoding. The same test measures cardano-js-sdk's callbacks against the assembled transactions, the build times on the largest shapes, M2 and M3 (3,005 UTxOs each) and E1 (405 UTxOs), and determinism by seed and by run. `survey.test.mjs` runs the builder survey and the Mesh comparison. With `RESEARCH_SIM_OUT` naming a directory, these write their records there as JSON.
 
 `npm run test:preprod` runs the integration tests against a preprod database, as of one snapshot block (`RESEARCH_SIM_SNAPSHOT`), since db-sync keeps following the chain while they run; their environment is described in `test/integration/history/env.mjs`. They cover:
 
