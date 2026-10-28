@@ -62,7 +62,8 @@ export const SIM_SETTINGS = Object.freeze({
   // and covers the collateral of the largest fee the spend can have, ties by
   // txid#index, set aside before selection so that no method spends it as an
   // input, always with a collateral return output and the total-collateral
-  // field.
+  // field. The Evolution SDK's methods have nothing set aside: their library
+  // chooses its own collateral (methods/contract.mjs choosesOwnCollateral).
   collateralChoice: 'smallest',
   // Where the in-burst constraint applies. 'separate': only in a separate
   // pass at each parallel burst, from the state at its start, for burst
