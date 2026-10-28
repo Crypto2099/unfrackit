@@ -21,7 +21,7 @@
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createOracle } from '../../src/oracle/oracle.mjs';
-import { AVAILABLE_POLICIES } from '../../src/oracle/policies.mjs';
+import { availablePolicies } from '../../src/oracle/policies.mjs';
 import { shapeState } from '../../src/shapes/shapes.mjs';
 import { standardBattery, SHAPE_POOLS } from '../../src/battery/battery.mjs';
 import { settle } from '../../src/kit/heap.mjs';
@@ -59,7 +59,7 @@ function slim(o) {
 // workers, outDir, log }
 export async function runBatteryOracle(opts) {
   const { T, params: P, shapes, limitMs, outDir, log = () => {} } = opts;
-  const policies = opts.policies || AVAILABLE_POLICIES;
+  const policies = opts.policies || (await availablePolicies());
   mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const file = join(outDir, 'oracle-battery.jsonl');
   const oracle = createOracle({ treatmentDir: opts.treatmentDir, pinsText: opts.pinsText, workers: opts.workers || 4 });

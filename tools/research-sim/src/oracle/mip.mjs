@@ -261,10 +261,10 @@ export function buildProgram(highs, M, pool) {
   };
 }
 
-// The loop. pool: UTxO records; evaluate(S): policies.mjs; best: the
-// incumbent evaluation or null. Returns { proven, best, iterations,
-// rejections, cols, rows, solverMs }.
-export function mipSearch({ highs, model: M, pool, evaluate, best = null, deadline = Infinity, iterationMs = 6000, onImprove = () => {} }) {
+// The loop. pool: UTxO records; evaluate(S): policies.mjs, resolving to an
+// evaluation; best: the incumbent evaluation or null. Resolves to { proven,
+// best, iterations, rejections, cols, rows, solverMs }.
+export async function mipSearch({ highs, model: M, pool, evaluate, best = null, deadline = Infinity, iterationMs = 6000, onImprove = () => {} }) {
   const prog = buildProgram(highs, M, pool);
   // feeBelow counts exact fees under the program's value, which would mean
   // the relaxation is not a lower bound; the checks require it to stay 0.
@@ -327,7 +327,7 @@ export function mipSearch({ highs, model: M, pool, evaluate, best = null, deadli
       // or of the coin; the bound's exact conditions catch it before the
       // rebuild.
       const bd = boundOf(M, S);
-      const ev = bd.feasible ? evaluate(S) : { ok: false, class: 'tolerance', detail: !bd.covers ? 'a requested asset is not covered' : bd.coinIn < bd.need ? 'the coin falls short' : 'the bytes pass the size limit' };
+      const ev = bd.feasible ? await evaluate(S) : { ok: false, class: 'tolerance', detail: !bd.covers ? 'a requested asset is not covered' : bd.coinIn < bd.need ? 'the coin falls short' : 'the bytes pass the size limit' };
       if (!ev.ok) out.rejections.push({ inputs: S.length, reason: ev.class, detail: ev.detail, relaxedFee: Math.round(relaxed) });
       else {
         const d = Number(ev.fee) - relaxed;

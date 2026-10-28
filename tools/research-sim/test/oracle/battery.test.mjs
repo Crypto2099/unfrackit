@@ -20,8 +20,9 @@
 //      policy.
 //
 // Needs RESEARCH_SIM_TREATMENT_DIR. RESEARCH_SIM_ORACLE_WORKERS (4),
-// RESEARCH_SIM_ORACLE_LIMIT_MS (60000) and RESEARCH_SIM_ORACLE_SHAPES (all 21)
-// narrow a run.
+// RESEARCH_SIM_ORACLE_LIMIT_MS (60000), RESEARCH_SIM_ORACLE_SHAPES (all 21) and
+// RESEARCH_SIM_ORACLE_POLICIES (every policy this build evaluates) narrow a
+// run.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,6 +57,7 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
     pinsText,
     params: SYNTHETIC_PARAMS,
     shapes,
+    policies: process.env.RESEARCH_SIM_ORACLE_POLICIES ? process.env.RESEARCH_SIM_ORACLE_POLICIES.split(',') : undefined,
     limitMs: envNumber('RESEARCH_SIM_ORACLE_LIMIT_MS', 60000),
     workers: envNumber('RESEARCH_SIM_ORACLE_WORKERS', 4),
     outDir: oracleOutDir(),

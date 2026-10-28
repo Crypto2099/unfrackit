@@ -14,7 +14,7 @@ import { SYNTHETIC_PARAMS as P } from '../../src/kit/params.mjs';
 import { standardBattery, SHAPE_POOLS } from '../../src/battery/battery.mjs';
 import { makeState, spendable } from '../../src/state/state.mjs';
 import { makeRng } from '../../src/shapes/rng.mjs';
-import { makeEvaluator, setKey } from '../../src/oracle/policies.mjs';
+import { makeEvaluator, setKey, loadLibraryPolicies } from '../../src/oracle/policies.mjs';
 import { makeBoundModel, boundOf } from '../../src/oracle/bound.mjs';
 import { candidateSet } from '../../src/oracle/spend.mjs';
 import { oracleSettings } from '../../src/oracle/settings.mjs';
@@ -23,6 +23,7 @@ import { settle } from '../../src/kit/heap.mjs';
 
 const T = await loadTreatment(workerData.treatmentDir, workerData.pinsText || undefined);
 const settings = oracleSettings();
+const lib = await loadLibraryPolicies();
 
 // A sub-wallet of k spendable UTxOs, 8 <= k <= 12, drawn with mulberry32.
 function subWallet(state, seed) {
@@ -49,7 +50,7 @@ parentPort.on('message', async (job) => {
     for (const spend of spends) {
       for (const policy of job.policies) {
         const M = makeBoundModel(state, spend, P, settings);
-        const ev = makeEvaluator(T, { state, spend, params: P, policy, settings });
+        const ev = makeEvaluator(T, { state, spend, params: P, policy, settings, lib });
         const cs = candidateSet(state, spend);
         const candKeys = new Set(cs.all.map((u) => u.ref));
         const rec = { shape: job.shape, seed: job.seed, utxos: pool.length, spend: spend.id, policy, candidates: cs.all.length, subsets: 0, feasible: 0, boundAbove: 0, boundInfeasibleButBuilt: 0, minBoundGap: null, maxBoundGap: null };
@@ -60,7 +61,7 @@ parentPort.on('message', async (job) => {
         for (let mask = 1; mask < 1 << n; mask++) {
           const S = [];
           for (let i = 0; i < n; i++) if (mask & (1 << i)) S.push(pool[i]);
-          const e = ev.evaluate(S);
+          const e = await ev.evaluate(S);
           const bd = boundOf(M, S);
           rec.subsets++;
           if (e.ok) {

@@ -28,7 +28,7 @@
 
 import { checkSpend, candidateSet, OracleRefusal } from './spend.mjs';
 import { makeBoundModel } from './bound.mjs';
-import { makeEvaluator, setKey } from './policies.mjs';
+import { makeEvaluator, setKey, loadLibraryPolicies, BUILT_IN_POLICIES } from './policies.mjs';
 import { exhaustiveSearch } from './exhaustive.mjs';
 import { mipSearch, loadSolver, SOLVER_VERSION } from './mip.mjs';
 import { oracleSettings, TIME_LIMIT_MS } from './settings.mjs';
@@ -55,7 +55,8 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
   checkSpend(spend);
   const highs = path === 'exhaustive' ? null : await loadSolver();
   const model = makeBoundModel(state, spend, params, settings);
-  const ev = makeEvaluator(T, { state, spend, params, policy, settings });
+  const lib = BUILT_IN_POLICIES.includes(policy) ? null : await loadLibraryPolicies();
+  const ev = makeEvaluator(T, { state, spend, params, policy, settings, lib });
   try {
     let best = null;
     let bestFrom = null;
@@ -76,7 +77,7 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
         incumbents.push(rec);
         continue;
       }
-      const e = ev.evaluate(S);
+      const e = await ev.evaluate(S);
       rec.result = e.ok ? 'feasible' : e.class;
       if (e.ok) {
         rec.oracleFee = e.fee;
@@ -95,13 +96,13 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
     if (chosen === 'exhaustive') {
       candidates = cs.all.length;
       scope = 'candidates';
-      const r = exhaustiveSearch({ model, candidates: cs.all, evaluate: ev.evaluate, best, deadline, onImprove: improve });
+      const r = await exhaustiveSearch({ model, candidates: cs.all, evaluate: ev.evaluate, best, deadline, onImprove: improve });
       best = r.best;
       detail = { nodes: r.nodes, popped: r.popped, evaluated: r.evaluated, pruned: r.pruned };
       status = r.complete ? (best ? 'optimal' : 'infeasible') : best ? 'best-at-limit' : 'undecided';
       if (r.complete && !best && settings.exhaustiveEmpty === 'mip' && path === 'auto') {
         const pool = spendable(state);
-        const m = mipSearch({ highs: highs || (await loadSolver()), model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
+        const m = await mipSearch({ highs: highs || (await loadSolver()), model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
         best = m.best;
         detail.fallback = mipDetail(m);
         candidates = pool.length;
@@ -112,7 +113,7 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
       const pool = opts.mipSpace === 'candidates' ? cs.all : spendable(state);
       candidates = pool.length;
       scope = opts.mipSpace === 'candidates' ? 'candidates' : 'spendable';
-      const m = mipSearch({ highs, model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
+      const m = await mipSearch({ highs, model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
       best = m.best;
       detail = mipDetail(m);
       status = m.proven ? (best ? 'optimal' : 'infeasible') : best ? 'best-at-limit' : 'undecided';

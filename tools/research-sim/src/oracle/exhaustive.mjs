@@ -84,10 +84,10 @@ function leastCount(values, need) {
 }
 
 // model: bound.mjs makeBoundModel; candidates: UTxO records; evaluate(S):
-// policies.mjs; best: the incumbent evaluation or null; deadline: a
-// performance.now() time. Returns { complete, best, nodes, popped,
-// evaluated, pruned }.
-export function exhaustiveSearch({ model: M, candidates, evaluate, best = null, deadline = Infinity, onImprove = () => {} }) {
+// policies.mjs, resolving to an evaluation; best: the incumbent evaluation or
+// null; deadline: a performance.now() time. Resolves to { complete, best,
+// nodes, popped, evaluated, pruned }.
+export async function exhaustiveSearch({ model: M, candidates, evaluate, best = null, deadline = Infinity, onImprove = () => {} }) {
   const C = candidates;
   const n = C.length;
   if (n > 30) throw new Error(`the exhaustive path takes at most 30 candidates, not ${n}`);
@@ -146,7 +146,7 @@ export function exhaustiveSearch({ model: M, candidates, evaluate, best = null, 
     stats.popped++;
     if (best && nd.bound >= best.fee) break;
     if (nd.evaluable) {
-      const ev = evaluate(nd.idx.map((i) => C[i]));
+      const ev = await evaluate(nd.idx.map((i) => C[i]));
       stats.evaluated++;
       if (ev.ok && (!best || ev.fee < best.fee)) {
         best = ev;
@@ -168,21 +168,4 @@ export function exhaustiveSearch({ model: M, candidates, evaluate, best = null, 
     }
   }
   return { complete, best, ...stats };
-}
-
-// Every subset of the candidates evaluated exactly, for the checks: the
-// minimum fee, and every set's bound beside its exact result.
-export function bruteForce({ model: M, candidates, evaluate, each = () => {} }) {
-  const n = candidates.length;
-  if (n > 16) throw new Error(`brute force over ${n} UTxOs`);
-  let best = null;
-  for (let mask = 1; mask < 1 << n; mask++) {
-    const S = [];
-    for (let i = 0; i < n; i++) if (mask & (1 << i)) S.push(candidates[i]);
-    const ev = evaluate(S);
-    const bd = boundOf(M, S);
-    each(S, ev, bd);
-    if (ev.ok && (!best || ev.fee < best.fee)) best = ev;
-  }
-  return best;
 }

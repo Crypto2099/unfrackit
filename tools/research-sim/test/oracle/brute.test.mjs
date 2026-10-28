@@ -29,7 +29,7 @@ import { join } from 'node:path';
 import { skip, TREATMENT_DIR } from '../lib/treatment.mjs';
 import { runJobs } from '../lib/workers.mjs';
 import { oracleOutDir, envNumber } from '../lib/outdir.mjs';
-import { AVAILABLE_POLICIES } from '../../src/oracle/policies.mjs';
+import { availablePolicies } from '../../src/oracle/policies.mjs';
 
 const SMALL = ['S1', 'S2b', 'S8', 'M1', 'M7'];
 const LARGE = ['S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S9', 'M2', 'M3', 'M4', 'M5', 'M8', 'CL1', 'CL3', 'E1', 'E2'];
@@ -39,10 +39,12 @@ test('the oracle equals brute force on small wallets, and its bound is sound', {
   const pinsText = process.env.RESEARCH_SIM_TREATMENT_PINS ? readFileSync(process.env.RESEARCH_SIM_TREATMENT_PINS, 'utf8') : undefined;
   const limitMs = envNumber('RESEARCH_SIM_ORACLE_LIMIT_MS', 60000);
   const only = process.env.RESEARCH_SIM_ORACLE_SHAPES ? new Set(process.env.RESEARCH_SIM_ORACLE_SHAPES.split(',')) : null;
+  const policies = process.env.RESEARCH_SIM_ORACLE_POLICIES ? process.env.RESEARCH_SIM_ORACLE_POLICIES.split(',') : await availablePolicies();
+  t.diagnostic(`policies: ${policies.join(', ')}`);
   const jobs = [];
-  for (const shape of SMALL) if (!only || only.has(shape)) jobs.push({ shape, seed: null, policies: AVAILABLE_POLICIES, limitMs });
+  for (const shape of SMALL) if (!only || only.has(shape)) jobs.push({ shape, seed: null, policies, limitMs });
   LARGE.forEach((shape, i) => {
-    if (!only || only.has(shape)) for (const seed of SUB_SEEDS(i)) jobs.push({ shape, seed, policies: AVAILABLE_POLICIES, limitMs });
+    if (!only || only.has(shape)) for (const seed of SUB_SEEDS(i)) jobs.push({ shape, seed, policies, limitMs });
   });
   const out = join(oracleOutDir(), 'oracle-brute.jsonl');
   const script = new URL('./brute-worker.mjs', import.meta.url);

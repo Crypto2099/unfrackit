@@ -2,23 +2,28 @@
 // Copyright 2026 Adam K. Dean
 
 // The methods whose transactions seed the oracle in its tests, per change
-// policy, until the baseline adapters exist: for the layout-preserving
-// change, the H-12 rule with absorption on and off (its single-transaction
-// answers) and the test method; for cardano-serialization-lib's change, the
-// library selecting on its own (test/lib/csl-select.mjs) with both of its
-// multi-asset strategies, with and without prefer_pure_change. Every answer
-// is checked by the ledger kit; only those that pass are incumbents.
+// policy: for the layout-preserving change, the H-12 rule with absorption on
+// and off (its single-transaction answers) and the test method; for
+// cardano-serialization-lib's change, the csl-lf and csl-ri adapters (with
+// prefer_pure_change for csl-ppc) when their module is present, or else the
+// library selecting on its own (test/lib/csl-select.mjs); for cardano-js-sdk's
+// change, the cjs-rrri adapter at seeds 1 to 3; for the Evolution SDK's, the
+// evo-lf adapter. Every answer is checked by the ledger kit; only those that
+// pass are incumbents.
 
 import { h12Method } from '../../src/methods/h12.mjs';
 import { testLargestMethod } from '../../src/methods/test-largest.mjs';
 import { checkAndApply } from '../../src/kit/apply.mjs';
 import { cslSelect } from './csl-select.mjs';
 
-export const POLICY_METHODS = Object.freeze({
-  layout: ['h12-on', 'h12-off', 'test-largest'],
-  csl: ['csl-lf', 'csl-ri'],
-  'csl-ppc': ['csl-lf-pure', 'csl-ri-pure']
-});
+const optional = async (path) => {
+  try {
+    return await import(path);
+  } catch {
+    return null;
+  }
+};
+const CJS_SEEDS = [1, 2, 3];
 
 export async function methodAnswers(T, state, spend, params, policy) {
   const out = [];
@@ -41,9 +46,27 @@ export async function methodAnswers(T, state, spend, params, policy) {
     const tm = testLargestMethod(T);
     const r = await tm.build(state, spend, params, { changePolicy: 'layout' });
     add('test-largest', r.ok ? { ok: true, bytes: r.txs[0].bytes, walletInputs: r.txs[0].walletInputs, fee: r.txs[0].fee } : r);
-  } else {
+  } else if (policy === 'csl' || policy === 'csl-ppc') {
     const preferPure = policy === 'csl-ppc';
-    for (const strategy of ['lf', 'ri']) add(`csl-${strategy}${preferPure ? '-pure' : ''}`, cslSelect(T, state, spend, params, { strategy, preferPure }));
+    const csl = await optional('../../src/methods/csl.mjs');
+    for (const strategy of ['lf', 'ri']) {
+      const name = `csl-${strategy}${preferPure ? '-pure' : ''}`;
+      if (csl) {
+        const r = await csl.cslMethod(T, { strategy, preferPureChange: preferPure }).build(state, spend, params, { changePolicy: 'default' });
+        add(name, r.ok ? { ok: true, bytes: r.txs[0].bytes, walletInputs: r.txs[0].walletInputs, fee: r.txs[0].fee } : r);
+      } else add(`${name}-standin`, cslSelect(T, state, spend, params, { strategy, preferPure }));
+    }
+  } else if (policy === 'cjs') {
+    const { cjsMethod } = await import('../../src/methods/cjs.mjs');
+    const m = cjsMethod(T);
+    for (const seed of CJS_SEEDS) {
+      const r = await m.build(state, spend, params, { changePolicy: 'default', seed });
+      add(`cjs-rrri-${seed}`, r.ok ? { ok: true, bytes: r.txs[0].bytes, walletInputs: r.txs[0].walletInputs, fee: r.txs[0].fee } : r);
+    }
+  } else if (policy === 'evo') {
+    const { evoMethod } = await import('../../src/methods/evo.mjs');
+    const r = await evoMethod().build(state, spend, params, { changePolicy: 'default' });
+    add('evo-lf', r.ok ? { ok: true, bytes: r.txs[0].bytes, walletInputs: r.txs[0].walletInputs, fee: r.txs[0].fee } : r);
   }
   return out;
 }

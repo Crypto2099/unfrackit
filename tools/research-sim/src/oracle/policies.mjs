@@ -27,16 +27,37 @@
 //   layout   the layout-preserving change of the H-12 rule and H-9, the
 //            simulator's own policy (methods/change.mjs buildWithChange),
 //            assembled by the kit at the ledger minimum.
-//   cjs      cardano-js-sdk's change (roundRobinRandomImprove with the set as
-//            preSelectedUtxo and no other UTxO available) and
-//   evo      the Evolution SDK's (the set through collectFrom, no available
-//            UTxOs): both are reached through the baseline adapters' own
-//            library calls, which are not part of this build yet, so either
-//            name is refused.
+//   cjs      cardano-js-sdk's change, the change of the cjs-rrri baseline:
+//            roundRobinRandomImprove of @cardano-sdk/input-selection 0.14.35
+//            (input-output-hk/cardano-js-sdk at
+//            48019e49c826ea77d81be0e2d2907f94406f5e04,
+//            packages/input-selection/src/) with the set as preSelectedUtxo
+//            and no other UTxO available, so the selection must cover from
+//            the set alone and the library's own computeChangeBundles
+//            (change.ts) makes the change, under the baseline adapter's exact
+//            constraint callbacks (methods/cjs.mjs exactConstraints); the kit
+//            assembles the transaction at the library's fee, as the adapter
+//            does. No UTxO is available to draw, so the random source is a
+//            fixed one that is never called upon to choose.
+//   evo      the Evolution SDK's change, the change of the evo-lf baseline:
+//            @evolution-sdk/evolution 0.6.0's builder (IntersectMBO/
+//            evolution-sdk at c4139df12e099dbd4742d3e2c10dc52f50a4bd41,
+//            packages/evolution/src/sdk/builders/) given the set through
+//            collectFrom, in the order its largest-first selection holds a
+//            selection (it writes a change output's assets in the order its
+//            inputs brought them), and no available UTxOs, so its change
+//            creation (phases/ChangeCreation.ts:261-379) runs on the set
+//            alone; the transaction is the library's own, with its own fake
+//            witnesses, as the adapter takes it (methods/evo.mjs).
+//
+// The cjs and evo policies reach their libraries through the baseline
+// adapters' modules, loaded when first needed (loadLibraryPolicies); without
+// those modules either name is refused.
 //
 // Each evaluation is cached by its set (the references in txid#index order).
 
 import { buildWithChange } from '../methods/change.mjs';
+import { assembleOnce } from '../kit/assemble.mjs';
 import { checkTx, CLASSES } from '../kit/check.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { cmpRef } from '../state/state.mjs';
@@ -44,7 +65,39 @@ import { parseAddress, addressBytes } from '../history/address.mjs';
 import { OracleRefusal } from './spend.mjs';
 
 export const ORACLE_POLICIES = Object.freeze(['csl', 'csl-ppc', 'cjs', 'evo', 'layout']);
-export const AVAILABLE_POLICIES = Object.freeze(['csl', 'csl-ppc', 'layout']);
+export const BUILT_IN_POLICIES = Object.freeze(['csl', 'csl-ppc', 'layout']);
+
+let libraries = null;
+
+// The library policies' modules: { cjs, evo, errors }, each null when its
+// adapter or library cannot be loaded.
+export async function loadLibraryPolicies() {
+  if (libraries) return libraries;
+  const out = { cjs: null, evo: null, errors: {} };
+  try {
+    const adapter = await import('../methods/cjs.mjs');
+    const lib = await import('@cardano-sdk/input-selection');
+    out.cjs = { adapter, roundRobinRandomImprove: lib.roundRobinRandomImprove };
+  } catch (e) {
+    out.errors.cjs = String(e && (e.message || e));
+  }
+  try {
+    const adapter = await import('../methods/evo.mjs');
+    const E = await import('@evolution-sdk/evolution');
+    const tb = await import('@evolution-sdk/evolution/sdk/builders/TransactionBuilder');
+    out.evo = { adapter, E, makeTxBuilder: tb.makeTxBuilder };
+  } catch (e) {
+    out.errors.evo = String(e && (e.message || e));
+  }
+  libraries = out;
+  return out;
+}
+
+// The policies this build can evaluate.
+export async function availablePolicies() {
+  const lib = await loadLibraryPolicies();
+  return ORACLE_POLICIES.filter((p) => BUILT_IN_POLICIES.includes(p) || lib[p]);
+}
 
 // The oracle policy of a method's change: the baseline adapters' default
 // change, or a simulator-owned policy put on any selector.
@@ -106,11 +159,12 @@ export function cslConfig(CSL, params, preferPure) {
 const hex = (b) => Buffer.from(b).toString('hex');
 
 // An evaluator for one (state, spend, params, policy). evaluate(S) takes UTxO
-// records and returns { ok, fee, size, minFee, bytes, k, change, hash } or
-// { ok: false, class, detail }; dispose() frees its CSL objects.
-export function makeEvaluator(T, { state, spend, params, policy, settings }) {
+// records and resolves to { ok, fee, size, minFee, bytes, k, change, hash }
+// or { ok: false, class, detail }; dispose() frees its CSL objects. `lib` is
+// loadLibraryPolicies()'s result, needed for cjs and evo.
+export function makeEvaluator(T, { state, spend, params, policy, settings, lib = null }) {
   if (!ORACLE_POLICIES.includes(policy)) throw new OracleRefusal(`unknown change policy ${policy}`);
-  if (!AVAILABLE_POLICIES.includes(policy)) throw new OracleRefusal(`change policy ${policy} is reached through its baseline adapter, which this build does not have yet`);
+  if (!BUILT_IN_POLICIES.includes(policy) && !(lib && lib[policy])) throw new OracleRefusal(`change policy ${policy} is reached through its baseline adapter, which cannot be loaded${lib && lib.errors[policy] ? ` (${lib.errors[policy]})` : ''}`);
   const CSL = T.CSL;
   const nReq = spend.requested.length;
   const requestedIdx = new Set(spend.requested.map((_, i) => i));
@@ -163,9 +217,11 @@ export function makeEvaluator(T, { state, spend, params, policy, settings }) {
     };
   }
 
-  function build(S) {
+  async function build(S) {
     const inputs = [...S].sort((x, y) => cmpRef(x.ref, y.ref));
     const k = new Set(inputs.map((u) => u.cred)).size;
+    if (policy === 'cjs') return buildCjs(inputs);
+    if (policy === 'evo') return buildEvo(inputs);
     if (policy === 'layout') {
       const r = buildWithChange(T, { state, params, inputs, intent: spend, policy: 'layout' });
       if (!r.ok) return { ok: false, class: r.class, detail: r.detail };
@@ -191,7 +247,64 @@ export function makeEvaluator(T, { state, spend, params, policy, settings }) {
     }
   }
 
-  function evaluate(S) {
+  const same = (inputs, refs) => refs.length === inputs.length && [...refs].sort(cmpRef).every((r, i) => r === inputs[i].ref);
+
+  async function buildCjs(inputs) {
+    const L = lib.cjs;
+    const constraints = L.adapter.exactConstraints(T, { state, params, intent: spend });
+    const changeAddressResolver = { resolve: async (selection) => selection.change.map((c) => ({ ...c, address: state.changeAddress })) };
+    const random = () => 0;
+    let result;
+    try {
+      result = await L.roundRobinRandomImprove({ changeAddressResolver, random }).select({
+        preSelectedUtxo: new Set(inputs.map(L.adapter.cjsUtxo)),
+        utxo: new Set(),
+        outputs: new Set(spend.requested.map(L.adapter.cjsTxOut)),
+        constraints,
+        implicitValue: {}
+      });
+    } catch (e) {
+      return { ok: false, class: L.adapter.classOfCjsError(e), detail: `roundRobinRandomImprove: ${String(e && (e.message || e))}` };
+    } finally {
+      constraints.free();
+    }
+    const sel = result.selection;
+    const refs = [...sel.inputs].map(([i]) => `${i.txId}#${i.index}`);
+    if (!same(inputs, refs)) throw new Error('cjs: the library selected other inputs than the forced set');
+    const outputs = [...spend.requested.map((o) => ({ address: o.address, coin: o.coin, assets: o.assets })), ...sel.change.map((c) => ({ address: c.address, coin: c.value.coins, assets: L.adapter.assetsOf(c.value.assets) }))];
+    for (const o of outputs) if (o.coin < 0n) return { ok: false, class: CLASSES.other, detail: `the library returned an output with coin ${o.coin}` };
+    const a = assembleOnce(T, inputs, outputs, sel.fee);
+    return { ok: true, bytes: a.bytes, k: a.k };
+  }
+
+  async function buildEvo(inputs) {
+    const L = lib.evo;
+    const E = L.E;
+    let b = L.makeTxBuilder({ chain: state.network === 'preprod' ? E.preprod : E.mainnet });
+    for (const o of spend.requested) {
+      const out = E.TxOut.fromCBORHex(o.cbor);
+      b = b.payToAddress({ address: out.address, assets: out.assets });
+    }
+    // The library writes a change output's assets in the order its inputs
+    // brought them, so the set is given in the order its own largest-first
+    // selection holds a selection: lovelace descending, the given txid#index
+    // order among equals (CoinSelection.ts:67-113).
+    const ordered = [...inputs].sort((x, y) => (x.coin > y.coin ? -1 : x.coin < y.coin ? 1 : cmpRef(x.ref, y.ref)));
+    b = b.collectFrom({ inputs: ordered.map(L.adapter.evoUtxo) });
+    let r;
+    try {
+      r = await b.buildEither({ changeAddress: E.Address.fromBech32(state.changeAddress), availableUtxos: [], protocolParameters: L.adapter.evoProtocolParameters(params) });
+    } catch (e) {
+      return { ok: false, class: L.adapter.classOfEvoError(e), detail: `build: ${String(e && (e.message || e))}` };
+    }
+    if (r._tag === 'Left') return { ok: false, class: L.adapter.classOfEvoError(r.left), detail: `build: ${String((r.left && r.left.message) || r.left).split('\n')[0]}` };
+    const tx = await r.right.toTransactionWithFakeWitnesses();
+    const refs = tx.body.inputs.map((i) => `${E.TransactionHash.toHex(i.transactionId)}#${i.index}`);
+    if (!same(inputs, refs)) throw new Error('evo: the library selected other inputs than the forced set');
+    return { ok: true, bytes: E.Transaction.toCBORHex(tx), k: new Set(inputs.map((u) => u.cred)).size };
+  }
+
+  async function evaluate(S) {
     const key = setKey(S);
     const hit = cache.get(key);
     if (hit) {
@@ -200,7 +313,7 @@ export function makeEvaluator(T, { state, spend, params, policy, settings }) {
     }
     const t0 = performance.now();
     stats.evaluations++;
-    let r = build(S);
+    let r = await build(S);
     if (r.ok) {
       const chk = checkTx(r.bytes, { params, resolve, requested: requestedIdx });
       if (!chk.ok) r = { ok: false, class: chk.failures[0].cls, detail: `kit: ${chk.failures[0].check}: ${chk.failures[0].detail}`, bytes: r.bytes };
