@@ -146,7 +146,7 @@ test('output sizes, Values and minimums against CSL on every UTxO of the 21 shap
   assert.equal(n, 8337 + 75 + 221 + 405 + 105);
 });
 
-test('transaction sizes: the ledger size is the serialized length less the validity flag, and CSL\'s fee counts the flag', { skip }, () => {
+test('transaction sizes: the ledger size is the serialized length less the validity flag; the treatment pays the ledger\'s minimum, and CSL\'s fee counts the flag', { skip }, () => {
   const CSL = T.CSL;
   const p = planState(T, shapeState(T, 'S3').state, P, {});
   const t = p.txs[0];
@@ -156,8 +156,8 @@ test('transaction sizes: the ledger size is the serialized length less the valid
   assert.equal(t.serializedSize, tx.to_bytes().length);
   assert.equal(t.size, t.serializedSize - 1);
   assert.equal(cslMin, minFee(P, t.serializedSize));
-  assert.equal(t.fee, cslMin, 'the treatment pays CSL\'s minimum');
-  assert.equal(t.fee - minFee(P, t.size), 44n, 'one byte above the ledger\'s minimum');
+  assert.equal(t.fee, minFee(P, t.size), 'the treatment pays the ledger\'s minimum');
+  assert.equal(cslMin - t.fee, P.minFeeA, 'CSL\'s minimum is one byte above it');
   tx.free();
   lf.free();
 });
