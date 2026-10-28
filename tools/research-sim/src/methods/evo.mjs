@@ -100,7 +100,8 @@
 // wallet's payment keys (its inputs, its held fixed inputs and required
 // signers among its keys) and the intent's other vkey witnesses as observed:
 // the signatures the wallet and the other parties add to the library's
-// transaction.
+// transaction. When the transaction then carries more vkey witnesses than the
+// library priced, library.unpriced names the observed ones.
 //
 // A part the library's builder can neither write nor price (unpricedParts) is
 // written on the transaction it built, through the library's own types, as
@@ -646,11 +647,16 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   const bytes = E.Transaction.toCBORHex(new E.Transaction.Transaction({ body, witnessSet, isValid: tx.isValid, auxiliaryData }));
   const size = inspectTx(bytes).size;
   const scriptFee = intent.fixed ? intent.fixed.scriptFee : 0n;
+  // The intent's other vkey witnesses as observed, written after the library
+  // priced the transaction, are unpriced when the transaction carries more
+  // vkey witnesses than the fake witness set the library priced (it counts no
+  // DRep or committee key).
+  const observedUnpriced = !!(others && others.vkeyWitnesses && others.vkeyWitnesses.length) && witnessSet.vkeyWitnesses.length > (fake.witnessSet.vkeyWitnesses || []).length;
   return {
     ok: true,
     kind: 'single',
     txs: [txRecord(bytes, walletRefs, tx.body.fee, size, keys.size)],
-    library: { fee: tx.body.fee, finalMinFee: minFee(params, size, scriptFee), collateral: collateralRefs, implicit: evoImplicit(intent, params), unpriced }
+    library: { fee: tx.body.fee, finalMinFee: minFee(params, size, scriptFee), collateral: collateralRefs, implicit: evoImplicit(intent, params), unpriced: observedUnpriced ? [...unpriced, 'observed vkey witnesses'] : unpriced }
   };
 }
 

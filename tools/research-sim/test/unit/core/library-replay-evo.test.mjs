@@ -189,13 +189,14 @@ const payTo = (i, coin, extra = {}) => {
 
 const sourceOf = (state, intents, params = SYNTHETIC_PARAMS) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 1000, params });
 
-test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output, a required signer and payments without their network id and empty auxiliary data, writes the parts it cannot price on its transaction, and refuses a body field 6', { skip }, async (t) => {
+test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output, a required signer and payments without their network id and empty auxiliary data, writes the parts it cannot price on its transaction and names them when it fails, and refuses a body field 6', { skip }, async (t) => {
   const shape = shapeState(T, 'S8');
   const state = shape.state;
   const P = SYNTHETIC_PARAMS;
   const held = holdings(spendable(state));
   const burnt = [...held.assets.values()].sort((a, b) => (a.policy + a.name < b.policy + b.name ? -1 : 1))[0];
   const stakeKey = Buffer.alloc(32, 0x73);
+  const coldKey = Buffer.alloc(32, 0x63);
   const witness = (k) => encArray([encArray([encBytes(k), encBytes(Buffer.alloc(64, 0x77))])]).toString('hex');
   const mintKey = Buffer.alloc(32, 0x6b);
   const nativeScript = encArray([encUint(0), encBytes(blake2b224(mintKey))]);
@@ -256,7 +257,10 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
     // a script stake credential with no redeemer, which the stake operations
     // refuse.
     replayIntent('c0', 100, { type: 'T1', requested: [payTo(7, 2n * ADA)], fixed: { witnesses: { 4: encArray([Buffer.from('d87980', 'hex')]).toString('hex') } } }),
-    replayIntent('c1', 110, { type: 'T7', requested: [payTo(8, 2n * ADA)], fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(1), encBytes(Buffer.alloc(28, 0x5c))])])]).toString('hex') } }, implicit: { deposits: P.keyDeposit } })
+    replayIntent('c1', 110, { type: 'T7', requested: [payTo(8, 2n * ADA)], fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(1), encBytes(Buffer.alloc(28, 0x5c))])])]).toString('hex') } }, implicit: { deposits: P.keyDeposit } }),
+    // A committee hot-key authorization with the cold key's witness, which
+    // the library does not count.
+    replayIntent('c2', 120, { type: 'T7', requested: [payTo(9, 2n * ADA)], fixed: { body: { 4: encArray([encArray([encUint(14), encArray([encUint(0), encBytes(blake2b224(coldKey))]), encArray([encUint(0), encBytes(Buffer.alloc(28, 0x68))])])]).toString('hex') }, witnesses: { 0: witness(coldKey) } } })
   ];
   const source = sourceOf(state, intents);
   const r = await replayEvo(source);
@@ -283,13 +287,13 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
   // library did not balance fails conservation, and a part it did not price
   // leaves its fee under the minimum.
   // Each failure names the part the library did not price.
-  for (const [id, cls, part] of [['b6', CLASSES.balance, 'treasury donation'], ['c1', CLASSES.balance, 'certificates'], ['c0', CLASSES.feeMinimum, 'witness-set datums']]) {
+  for (const [id, cls, part] of [['b6', CLASSES.balance, 'treasury donation'], ['c1', CLASSES.balance, 'certificates'], ['c0', CLASSES.feeMinimum, 'witness-set datums'], ['c2', CLASSES.feeMinimum, 'observed vkey witnesses']]) {
     assert.equal(at(id).outcome, 'failed', `${id}: ${at(id).outcome}`);
     assert.equal(at(id).class, cls, `${id}: ${at(id).detail}`);
     assert.ok(at(id).detail.startsWith('kit: ') && at(id).detail.endsWith(`; parts the library did not price: ${part}`), `${id}: ${at(id).detail}`);
   }
   const unpriced = {};
-  for (const [id, part, field] of [['b6', 'treasury donation', 22], ['c0', 'witness-set datums', 11], ['c1', 'certificates', 4]]) {
+  for (const [id, part, field] of [['b6', 'treasury donation', 22], ['c0', 'witness-set datums', 11], ['c1', 'certificates', 4], ['c2', 'observed vkey witnesses', 4]]) {
     const it = intents.find((i) => i.id.startsWith(id));
     const built = await buildEvo(state, it, P, { changePolicy: 'default', seed: 1 });
     assert.equal(built.ok, true, built.detail);
