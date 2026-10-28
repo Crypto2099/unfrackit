@@ -19,6 +19,19 @@
     "hash": "node src/cli.mjs hash"
   },
   "dependencies": {
+    "@cardano-sdk/input-selection": "0.14.35",
+    "@evolution-sdk/evolution": "0.6.0",
+    "@meshsdk/transaction": "1.9.1",
     "pg": "8.23.0"
+  },
+  "overrides": {
+    "@evolution-sdk/evolution": {
+      "effect": "3.22.2",
+      "@noble/curves": "2.4.0",
+      "@noble/hashes": "2.4.0",
+      "@scure/base": "2.4.0",
+      "@scure/bip32": "2.4.0",
+      "@scure/bip39": "2.4.0"
+    }
   }
 }
