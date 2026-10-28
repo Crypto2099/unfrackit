@@ -55,13 +55,16 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 // The parts each adapter's replay path covers, by adapter module:
 //   csl   csl-lf, csl-ri, csl-lf-pure, csl-ri-pure: every part
 //         (methods/csl.mjs, its replay path)
-//   evo   evo-lf (and the survey's evo-unfrack): none yet
+//   evo   evo-lf (and the survey's evo-unfrack): fixed parts, implicit
+//         values and output data, not collateral: the library chooses its
+//         own collateral and cannot be given the UTxO the engine sets aside
+//         (methods/evo.mjs)
 //   mesh  the survey's Mesh subjects: none; Mesh is surveyed on battery spends
 //         only and never replays
 //   cjs   cjs-rrri: every part (methods/cjs.mjs, its replay path)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  evo: Object.freeze([]),
+  evo: Object.freeze(['fixed', 'implicit', 'outputData']),
   mesh: Object.freeze([]),
   cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });

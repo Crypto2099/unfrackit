@@ -69,8 +69,8 @@ test('cardano-js-sdk covers every replay part', () => {
   for (const [c, [it]] of Object.entries(CASES)) assert.doesNotThrow(() => refuseUncovered('cjs-rrri', REPLAY_COVERAGE.cjs, it), c);
 });
 
-test('the Evolution SDK and Mesh cover no replay part and refuse each with the messages they have always given', () => {
-  for (const [mod, name] of [['evo', 'evo-lf'], ['mesh', 'mesh-default']]) {
+test('Mesh covers no replay part and refuses each with the messages it has always given', () => {
+  for (const [mod, name] of [['mesh', 'mesh-default']]) {
     assert.deepEqual(REPLAY_COVERAGE[mod], []);
     const msg = MESSAGES(name);
     for (const [c, [it, want]] of Object.entries(CASES)) {
