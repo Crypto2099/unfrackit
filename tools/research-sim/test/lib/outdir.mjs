@@ -2,23 +2,21 @@
 // Copyright 2026 Adam K. Dean
 
 // Where the oracle's checks write their records, and the settings they run
-// under. Records go to RESEARCH_SIM_ORACLE_OUT, or
-// the simulator's private run directory,
-// ${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/sim/synthetic/
-// oracle-checks-<time>/, directories 0700 and files 0600, never the
-// repository.
+// under. Records go to RESEARCH_SIM_ORACLE_OUT, or else to the simulator's
+// private run directory, <home>/synthetic/oracle-checks-<time>/ with <home>
+// as src/history/paths.mjs homeDir gives it (RESEARCH_SIM_HOME, or
+// ${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/sim), directories
+// 0700 and files 0600, never the repository.
 
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { runDir } from '../../src/history/paths.mjs';
 
 export function oracleOutDir() {
   if (process.env.RESEARCH_SIM_ORACLE_OUT) {
     mkdirSync(process.env.RESEARCH_SIM_ORACLE_OUT, { recursive: true, mode: 0o700 });
     return process.env.RESEARCH_SIM_ORACLE_OUT;
   }
-  const base = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
-  const d = join(base, 'unfrackit-research', 'sim', 'synthetic', `oracle-checks-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  const d = runDir('synthetic', `oracle-checks-${new Date().toISOString().replace(/[:.]/g, '-')}`);
   mkdirSync(d, { recursive: true, mode: 0o700 });
   return d;
 }

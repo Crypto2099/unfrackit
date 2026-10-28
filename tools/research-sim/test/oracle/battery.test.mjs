@@ -12,7 +12,7 @@
 //      higher one (or none) only at the limit;
 //   5  the seeded reference fee is at most the fee of every method with the
 //      same policy whose transaction passed the kit;
-//   6  every method's change equals the policy's change on its own inputs,
+//   6  (asserted) every method's change equals the policy's change on its own inputs,
 //      byte for byte (the layout-preserving change against the H-12 rule and
 //      the test method; cardano-serialization-lib's change against the
 //      library selecting on its own);
@@ -123,5 +123,6 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
   assert.deepEqual(c.check4.bad, []);
   assert.deepEqual(c.check5.violations, []);
   assert.deepEqual(c.check5.missing, []);
+  assert.deepEqual(c.check6.differ, []);
   assert.deepEqual(c.provenOverCandidates, []);
 });
