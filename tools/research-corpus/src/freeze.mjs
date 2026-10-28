@@ -87,7 +87,8 @@
 // records the readings of Koios and Blockfrost; the run refuses if N has not
 // started or any reading differs.
 // Its 32 bytes take the place of the block hash in the draw's byte encoding
-// (X5): SHA-256("draw" || nonce || 28-byte credential).
+// (the default reading of the setting x5_reward29): SHA-256("draw" || nonce ||
+// 28-byte credential).
 //
 // The record body is the byte concatenation of the label-309 chunks db-sync
 // stores in tx_metadata.bytes (db-sync re-encodes the outer metadata map; the

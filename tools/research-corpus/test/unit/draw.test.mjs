@@ -135,8 +135,8 @@ test('stages, flow, draw order, samples and split on the fixture', async () => {
 
   await db.exec(`CREATE TABLE study.sample_frame_dummy (x int)`);
   await runBlock('split', p);
-  // One label per credential: every sampled credential ranked once by its
-  // split key, the first floor(N / 5) exploration (X16 as decided).
+  // One label per credential: every sampled credential ranked once by its split
+  // key, the first floor(N / 5) exploration (the one-label rule of split.sql).
   const all = await rows(`SELECT DISTINCT s.sa_id, encode(f.split_key, 'hex') AS k FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id ORDER BY k`);
   const nExp = Math.floor(all.length / 5);
   const want = new Map(all.map((r, i) => [Number(r.sa_id), i < nExp ? 'exploration' : 'confirmation']));

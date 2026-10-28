@@ -41,13 +41,13 @@
 -- with no holders gives no stratum.
 --
 -- The NFT query: a policy counts only if no asset of it ever had a running
--- supply above one (X11 as decided on 2026-10-21): mints minus burns of each
--- asset, summed in chain order (ma_tx_mint by transaction id, which the order
--- check shows is chain order), must never exceed 1. A CIP-25 re-mint after a
--- burn stays an NFT (CIP-25, "Update metadata link for a specific token");
--- an asset ever outstanding in two or more units does not. db-sync inserts no
--- ma_tx_mint rows for phase-2-invalid transactions, so no validity filter is
--- needed. Inside the surviving policies the per-wallet class of the
+-- supply above one (the reading decided on 2026-10-21): mints minus burns of
+-- each asset, summed in chain order (ma_tx_mint by transaction id, which the
+-- order check shows is chain order), must never exceed 1. A CIP-25 re-mint
+-- after a burn stays an NFT (CIP-25, "Update metadata link for a specific
+-- token"); an asset ever outstanding in two or more units does not. db-sync
+-- inserts no ma_tx_mint rows for phase-2-invalid transactions, so no validity
+-- filter is needed. Inside the surviving policies the per-wallet class of the
 -- classification rule applies (study.is_fungible_l): per eligible recent-frame
 -- wallet and asset, the total quantity held at the snapshot including held
 -- UTxOs. Count the distinct wallets per policy holding at least one
