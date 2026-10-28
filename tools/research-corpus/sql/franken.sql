@@ -55,4 +55,4 @@ SELECT count(DISTINCT f.sa_id) AS n_wallets,
        count(*) FILTER (WHERE f.flagged) AS n_creds_flagged,
        count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2 AND NOT f.any_cospend) AS n_multi_cred_no_cospend
   FROM study.franken f JOIN study.sample_wallet w ON w.sa_id = f.sa_id AND w.in_sample
- WHERE NOT EXISTS (SELECT 1 FROM study.check_61 k WHERE k.sa_id = f.sa_id AND NOT k.agree);
+ WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree);

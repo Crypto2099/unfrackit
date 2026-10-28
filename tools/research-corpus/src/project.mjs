@@ -33,7 +33,7 @@ export const DRIVER = {
   unfrackit_tx: 'tx_metadata',
   prior_flags: 'sample',
   franken: 'sample',
-  check_61_table: 'sample',
+  reconstruction_check_table: 'sample',
   script_tx: 'redeemer',
   profile: 'sample'
 };

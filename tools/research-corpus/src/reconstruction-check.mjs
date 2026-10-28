@@ -13,11 +13,11 @@ export async function digests(client, blocks, which, saIds, params) {
   return new Map(rows.map((r) => [String(r.sa_id), { n: Number(r.n), d: r.digest }]));
 }
 
-export async function check61({ client, blocks, run, params, log = () => {}, batch = 500 }) {
+export async function reconstructionCheck({ client, blocks, run, params, log = () => {}, batch = 500 }) {
   const ids = (await q(client, blocks, 'sample_wallet_ids')).map((r) => String(r.sa_id));
   const tip = (await q(client, blocks, 'tip_block'))[0];
   const directValid = Number(tip.id) === run.snapshot.id;
-  if (!directValid) log(`check 6.1: database tip ${tip.block_no} is not the snapshot block ${run.snapshot.block_no}; the direct read is skipped`);
+  if (!directValid) log(`reconstruction check: database tip ${tip.block_no} is not the snapshot block ${run.snapshot.block_no}; the direct read is skipped`);
   const out = [];
   for (let i = 0; i < ids.length; i += batch) {
     const part = ids.slice(i, i + batch);
@@ -31,8 +31,8 @@ export async function check61({ client, blocks, run, params, log = () => {}, bat
       const agree = r.d === l.d && r.n === l.n && (!d || (d.d === l.d && d.n === l.n));
       out.push({ sa_id: Number(id), n_ref: r.n, d_ref: r.d, n_life: l.n, d_life: l.d, n_direct: d ? d.n : null, d_direct: d ? d.d : null, direct_valid: directValid, agree });
     }
-    log(`check 6.1: ${Math.min(i + batch, ids.length)}/${ids.length} wallets`);
+    log(`reconstruction check: ${Math.min(i + batch, ids.length)}/${ids.length} wallets`);
   }
-  await qBound(client, blocks, 'check_61_load', [JSON.stringify(out)]);
+  await qBound(client, blocks, 'reconstruction_check_load', [JSON.stringify(out)]);
   return { wallets: ids.length, direct_valid: directValid, tip_block_no: Number(tip.block_no), disagree: out.filter((x) => !x.agree).map((x) => x.sa_id) };
 }

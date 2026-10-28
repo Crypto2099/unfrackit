@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { db, blocks, record, RUN_B } from './env.mjs';
 import { q } from '../../src/db.mjs';
-import { digests } from '../../src/check61.mjs';
+import { digests } from '../../src/reconstruction-check.mjs';
 
 const SALT = 'research-corpus T8';
 

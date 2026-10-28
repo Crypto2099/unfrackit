@@ -29,7 +29,7 @@ import { sqlParams, defaultSettings, applyOverrides, FROZEN_PEAK } from './param
 import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { codeVersion, hashList, TOOL_DIR } from './hash.mjs';
 import { buildManifest } from './manifest.mjs';
-import { check61 } from './check61.mjs';
+import { reconstructionCheck } from './reconstruction-check.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
 import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, studyKeyFor } from './guards.mjs';
 import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog, SIM_KEPT } from './checklog.mjs';
@@ -120,7 +120,7 @@ function functionalChecks(report) {
   if (report.order_check) c.order_check = report.order_check.passed;
   if (report.cred_checks) c.credential_checks = true;
   if (report.peak_vs_frozen) c.peak_rule_reproduces_frozen = report.peak_vs_frozen.agrees;
-  if (report.check_61) c.check_6_1_all_agree = report.check_61.n_excluded === 0;
+  if (report.reconstruction_check) c.reconstruction_check_all_agree = report.reconstruction_check.n_excluded === 0;
   if (report.scam_screen) {
     c.scam_screen_applied = report.scam_screen.applied;
     if (report.scam_screen.fingerprints_agree !== undefined) c.scam_fingerprints_agree = report.scam_screen.fingerprints_agree;
@@ -497,11 +497,11 @@ export async function runPipeline(opts) {
     report.case_wallets = { listed: caseViews.length, matched: num((await client.query('SELECT count(*) AS n FROM study.case_wallet')).rows[0].n) };
 
     // Section 6.1 check, before anything that counts the sample.
-    await runner.run('check_61_table', {}, async (c) => {
-      report.check_61_run = await check61({ client: c, blocks, run, params: runner.params, log, batch: opts.batch || 500 });
-      await q(c, blocks, 'check_61_mark');
+    await runner.run('reconstruction_check_table', {}, async (c) => {
+      report.reconstruction_check_run = await reconstructionCheck({ client: c, blocks, run, params: runner.params, log, batch: opts.batch || 500 });
+      await q(c, blocks, 'reconstruction_check_mark');
     });
-    report.check_61 = numRow((await q(client, blocks, 'check_61_counts'))[0], ['direct_valid']);
+    report.reconstruction_check = numRow((await q(client, blocks, 'reconstruction_check_counts'))[0], ['direct_valid']);
     report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'stratum']));
     report.split_overall = numRow((await q(client, blocks, 'split_overall'))[0]);
     report.sample_bounds = (await q(client, blocks, 'sample_bounds')).map((r) => ({ ...r, n: num(r.n) }));

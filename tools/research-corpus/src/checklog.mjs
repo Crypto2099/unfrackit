@@ -49,9 +49,8 @@ const JOINED = /(?<![\w])\w*_\w*(?![\w])/g;
 // whole; a unit test keeps the list complete. A setting such as x5_reward29
 // needs no entry, since none of its parts begins with a digit.
 export const CODE_NAMES = new Set([
-  'check_61', 'check_61_agree', 'check_61_counts', 'check_61_load', 'check_61_mark', 'check_61_run', 'check_61_table',
-  'check_6_1', 'check_6_1_all_agree', 'crc8_2', 'eligible_over_5000_tx', 'excluded_6_1', 'label_309_from', 'label_309_record',
-  'label_674_is_document_digest', 'metadata_674', 'n_674', 'n_674_json_null', 'n_674_msg_array', 'n_excluded_6_1'
+  'crc8_2', 'eligible_over_5000_tx', 'label_309_from', 'label_309_record',
+  'label_674_is_document_digest', 'metadata_674', 'n_674', 'n_674_json_null', 'n_674_msg_array'
 ]);
 const joined = (w) => (CODE_NAMES.has(w) ? w : w.split('_').map((p) => (/^\d/.test(p) ? '#' : p)).join('_'));
 export function sanitize(message, { refusal = false } = {}) {

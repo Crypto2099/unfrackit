@@ -43,7 +43,7 @@ test('append, chain, tamper detection, kept outputs', () => {
 });
 
 test('sanitize replaces counts, addresses and hashes; a refusal keeps its own numbers', () => {
-  assert.equal(sanitize('step check_61_table: 12 rows, 3,400 wallets, 0.05 share'), 'step check_61_table: # rows, # wallets, # share');
+  assert.equal(sanitize('step reconstruction_check_table: 12 rows, 3,400 wallets, 0.05 share'), 'step reconstruction_check_table: # rows, # wallets, # share');
   assert.equal(sanitize('Key (tx_out_id)=(123456) already exists'), 'Key (tx_out_id)=(#) already exists');
   // A word holding a digit is replaced whole; a snake_case name is kept.
   assert.equal(sanitize('transaction 0183bce3b177 not found; x5_reward29'), 'transaction # not found; x5_reward29');
@@ -65,7 +65,7 @@ test('sanitize replaces counts, addresses and hashes; a refusal keeps its own nu
   // the code's own names; a setting's parts begin with letters.
   assert.equal(sanitize('rows_37 left, n_12345 wallets in x_1500ms, id _37'), 'rows_# left, n_# wallets in x_#, id _#');
   assert.equal(sanitize('tx_out_id_99 and pg_temp_3 at a_1e5'), 'tx_out_id_# and pg_temp_# at a_#');
-  assert.equal(sanitize('study.check_61_table and excluded_6_1 under x5_reward29, txo_sa_created'), 'study.check_61_table and excluded_6_1 under x5_reward29, txo_sa_created');
+  assert.equal(sanitize('check label_309_record and n_674_json_null under x5_reward29, txo_sa_created'), 'check label_309_record and n_674_json_null under x5_reward29, txo_sa_created');
 });
 
 // CODE_NAMES holds exactly the names in sql/ and src/ that have an

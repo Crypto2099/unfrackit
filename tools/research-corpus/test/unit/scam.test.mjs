@@ -127,7 +127,7 @@ async function screenDb(fingerprints) {
     CREATE TABLE study.txo_asset (tx_out_id bigint, ident bigint, quantity numeric);
     CREATE TABLE study.asset (ident bigint PRIMARY KEY, policy bytea, name bytea, label integer);
     CREATE TABLE study.draw_order (frame text, sa_id bigint, k bigint);
-    CREATE TABLE study.sample (frame text, kind text, stratum text, sa_id bigint, draw_rank bigint, prevalence_member boolean, split text, excluded_6_1 boolean, fragmented boolean,
+    CREATE TABLE study.sample (frame text, kind text, stratum text, sa_id bigint, draw_rank bigint, prevalence_member boolean, split text, reconstruction_excluded boolean, fragmented boolean,
                                PRIMARY KEY (frame, kind, stratum, sa_id));
   `);
   for (let w = 1; w <= 6; w++) await db.query(`INSERT INTO study.frame VALUES ('recent', $1, true)`, [w]);

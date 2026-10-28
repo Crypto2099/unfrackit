@@ -23,8 +23,8 @@
 -- within the guard.
 --
 -- study.sample(frame, kind, stratum, sa_id, draw_rank, prevalence_member,
--- split, excluded_6_1, fragmented); draw_rank is the 1-based position in the
--- frame's draw order; excluded_6_1 is set by the section 6.1 check.
+-- split, reconstruction_excluded, fragmented); draw_rank is the 1-based position in the
+-- frame's draw order; reconstruction_excluded is set by the section 6.1 check.
 
 -- @step draw
 -- @outputs study.draw_order study.draw_summary study.sample
@@ -77,7 +77,7 @@ CREATE TABLE study.sample (
   draw_rank bigint NOT NULL,
   prevalence_member boolean NOT NULL,
   split text,
-  excluded_6_1 boolean,
+  reconstruction_excluded boolean,
   fragmented boolean,
   PRIMARY KEY (frame, kind, stratum, sa_id)
 );

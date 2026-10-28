@@ -28,7 +28,7 @@ import { captureStrata } from './strata-capture.mjs';
 const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync database.
 
   init-secret                     make secret/hmac.key (32 random bytes) once; prints its path, never the key
-  run [options]                   frames, draw, samples, split, flags, the 6.1 check and the manifest
+  run [options]                   frames, draw, samples, split, flags, the reconstruction check and the manifest
       --run-id <id>               required; a rerun with the same id resumes
       --snapshot tip|rule|<hash> the snapshot block: on the final freeze always the rule (the last block of
                                   epoch N - 1 before its randomness stabilization cutoff, with the first block of

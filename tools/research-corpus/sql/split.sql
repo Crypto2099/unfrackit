@@ -77,7 +77,7 @@ SELECT frame, kind, stratum, count(*) AS n,
        count(*) FILTER (WHERE split = 'exploration') AS n_exploration,
        count(*) FILTER (WHERE split = 'confirmation') AS n_confirmation,
        count(*) FILTER (WHERE split IS NULL) AS n_unassigned,
-       count(*) FILTER (WHERE excluded_6_1) AS n_excluded_6_1,
+       count(*) FILTER (WHERE reconstruction_excluded) AS n_reconstruction_excluded,
        count(*) FILTER (WHERE fragmented) AS n_fragmented
   FROM study.sample GROUP BY frame, kind, stratum ORDER BY frame DESC, kind, stratum;
 

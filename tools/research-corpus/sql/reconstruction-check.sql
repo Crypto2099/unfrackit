@@ -5,7 +5,7 @@
 -- the snapshot, the set from the reference query, the set from the life table
 -- and the set read directly are compared as sets of (transaction hash, index,
 -- lovelace, sorted assets). A wallet whose sets differ is excluded and
--- counted: study.sample.excluded_6_1 is set for every sample row, and every
+-- counted: study.sample.reconstruction_excluded is set for every sample row, and every
 -- count over the sample after this step leaves excluded wallets out.
 --
 -- The driver runs the three digest queries of utxo-at-block.sql over the
@@ -14,10 +14,10 @@
 -- when the database tip is the snapshot block, which holds when db-sync is
 -- stopped there for the run; direct_valid records whether it was.
 
--- @step check_61_table
--- @outputs study.check_61
-DROP TABLE IF EXISTS study.check_61;
-CREATE TABLE study.check_61 (
+-- @step reconstruction_check_table
+-- @outputs study.reconstruction_check
+DROP TABLE IF EXISTS study.reconstruction_check;
+CREATE TABLE study.reconstruction_check (
   sa_id bigint PRIMARY KEY,
   n_ref bigint NOT NULL,
   d_ref text NOT NULL,
@@ -29,14 +29,14 @@ CREATE TABLE study.check_61 (
   agree boolean NOT NULL
 );
 
--- @query check_61_load
-INSERT INTO study.check_61 (sa_id, n_ref, d_ref, n_life, d_life, n_direct, d_direct, direct_valid, agree)
+-- @query reconstruction_check_load
+INSERT INTO study.reconstruction_check (sa_id, n_ref, d_ref, n_life, d_life, n_direct, d_direct, direct_valid, agree)
 SELECT x.sa_id, x.n_ref, x.d_ref, x.n_life, x.d_life, x.n_direct, x.d_direct, x.direct_valid, x.agree
   FROM json_to_recordset($1::json) AS x(sa_id bigint, n_ref bigint, d_ref text, n_life bigint, d_life text,
                                         n_direct bigint, d_direct text, direct_valid boolean, agree boolean);
 
--- @query check_61_mark
-UPDATE study.sample s SET excluded_6_1 = NOT k.agree FROM study.check_61 k WHERE k.sa_id = s.sa_id;
+-- @query reconstruction_check_mark
+UPDATE study.sample s SET reconstruction_excluded = NOT k.agree FROM study.reconstruction_check k WHERE k.sa_id = s.sa_id;
 
 -- Sampled wallets with any output at a pointer address (CIP-19 header types 4
 -- and 5, which bech32-encode as addr1g / addr12, or addr_test1g /
@@ -51,7 +51,7 @@ SELECT count(DISTINCT t.sa_id) AS n_wallets_with_pointer_outputs
   JOIN public.tx_out o ON o.id = t.tx_out_id
  WHERE o.address ~ '^addr(_test)?1[g2]';
 
--- @query check_61_counts
+-- @query reconstruction_check_counts
 SELECT count(*) FILTER (WHERE w.in_sample) AS n_wallets,
        count(*) FILTER (WHERE w.in_sample AND k.agree) AS n_agree,
        count(*) FILTER (WHERE w.in_sample AND NOT k.agree) AS n_excluded,
@@ -61,7 +61,7 @@ SELECT count(*) FILTER (WHERE w.in_sample) AS n_wallets,
        sum(k.n_life) FILTER (WHERE w.in_sample) AS n_utxo_total,
        count(*) FILTER (WHERE NOT w.in_sample) AS n_case_wallets,
        count(*) FILTER (WHERE NOT w.in_sample AND NOT k.agree) AS n_case_disagree
-  FROM study.check_61 k JOIN study.sample_wallet w ON w.sa_id = k.sa_id;
+  FROM study.reconstruction_check k JOIN study.sample_wallet w ON w.sa_id = k.sa_id;
 
 -- @query sample_wallet_ids
 SELECT sa_id FROM study.sample_wallet ORDER BY sa_id;

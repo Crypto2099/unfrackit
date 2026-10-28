@@ -23,23 +23,23 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
   const rows = (
     await client.query(`
       SELECT s.frame, s.kind, s.stratum, s.sa_id, s.draw_rank, s.prevalence_member, s.split, coalesce(s.fragmented, false) AS fragmented,
-             c.hash_raw, c.view, coalesce(k.agree, false) AS check_61_agree,
+             c.hash_raw, c.view, coalesce(k.agree, false) AS reconstruction_agree,
              coalesce(fr.any_flag, false) AS franken_any
         FROM study.sample s
         JOIN study.cred c ON c.sa_id = s.sa_id
-        LEFT JOIN study.check_61 k ON k.sa_id = s.sa_id
+        LEFT JOIN study.reconstruction_check k ON k.sa_id = s.sa_id
         LEFT JOIN (SELECT sa_id, bool_or(flagged) AS any_flag FROM study.franken GROUP BY sa_id) fr ON fr.sa_id = s.sa_id
        ORDER BY s.frame DESC, s.kind, s.stratum, s.draw_rank`)
   ).rows;
   const byInput = (r) => (run.settings.x15_bech32 ? r.view : r.hash_raw);
   const samples = new Map();
-  const raw = ['frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any,fragmented'];
+  const raw = ['frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,reconstruction_agree,franken_any,fragmented'];
   for (const r of rows) {
     const id = identifier(key, byInput(r));
     const k = `${r.frame}|${r.kind}|${r.stratum}`;
     if (!samples.has(k)) samples.set(k, { frame: r.frame, kind: r.kind, stratum: r.stratum, ids: [] });
-    samples.get(k).ids.push({ id, split: r.split, excluded_6_1: !r.check_61_agree, prevalence_member: r.prevalence_member });
-    raw.push([r.frame, r.kind, JSON.stringify(r.stratum), r.sa_id, r.view, r.draw_rank, r.prevalence_member, r.split, r.check_61_agree, r.franken_any, r.fragmented].join(','));
+    samples.get(k).ids.push({ id, split: r.split, reconstruction_excluded: !r.reconstruction_agree, prevalence_member: r.prevalence_member });
+    raw.push([r.frame, r.kind, JSON.stringify(r.stratum), r.sa_id, r.view, r.draw_rank, r.prevalence_member, r.split, r.reconstruction_agree, r.franken_any, r.fragmented].join(','));
   }
   writePrivate(join(dir, 'raw', 'sample.csv'), raw.join('\n') + '\n');
   const list = [...samples.values()].map((s) => {
@@ -51,7 +51,7 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
       n: s.ids.length,
       n_exploration: s.ids.filter((x) => x.split === 'exploration').length,
       n_confirmation: s.ids.filter((x) => x.split === 'confirmation').length,
-      n_excluded_6_1: s.ids.filter((x) => x.excluded_6_1).length,
+      n_reconstruction_excluded: s.ids.filter((x) => x.reconstruction_excluded).length,
       ids: s.ids
     };
   });
@@ -84,7 +84,7 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     split: report.split_overall,
     // The case-wallet counts stay in report.json: case wallets can be drawn,
     // so with the number named they would say how many were.
-    check_6_1: (({ n_case_wallets, n_case_disagree, ...rest }) => rest)(report.check_61 || {}),
+    reconstruction_check: (({ n_case_wallets, n_case_disagree, ...rest }) => rest)(report.reconstruction_check || {}),
     code_version: report.code_version,
     samples: list
   };

@@ -161,7 +161,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(own.listed, 3);
     assert.deepEqual(readdirSync(b.dir).sort(), filesBefore);
     // The raw list carries no published identifier.
-    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,check_61_agree,franken_any,fragmented');
+    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,reconstruction_agree,franken_any,fragmented');
 
     // h is the epoch nonce of the stand-in's epoch rule, read twice.
     const dk = b.report.freeze.draw;
@@ -240,9 +240,9 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     for (const f of franken) assert.equal(f.f, false, `no franken flag on ${f.sa_id}`);
 
     // The 6.1 check ran with the direct read, for the sample and the case wallets.
-    assert.equal(b.report.check_61.direct_valid, true);
-    assert.equal(b.report.check_61.n_excluded, 0);
-    assert.equal(b.report.check_61.n_case_disagree, 0);
+    assert.equal(b.report.reconstruction_check.direct_valid, true);
+    assert.equal(b.report.reconstruction_check.n_excluded, 0);
+    assert.equal(b.report.reconstruction_check.n_case_disagree, 0);
 
     // The profile features: f1 agrees with the frame's spend count, f5 is a
     // subset of the window's receipts, and f8 is the frame's UTxO count at
@@ -307,7 +307,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       era_coverage: b.report.era_coverage,
       prior: b.report.prior,
       franken: b.report.franken,
-      check_61: b.report.check_61,
+      reconstruction_check: b.report.reconstruction_check,
       profiles: b.report.profiles,
       shapes: {
         S1: { recent: { tok: s1.tok, eligible: s1.eligible, draw_rank: Number(s1Rank.k), n_tx: Number(s1.n_tx), n_spends_any: Number(s1.n_spends_any), samples: s1Samples } },

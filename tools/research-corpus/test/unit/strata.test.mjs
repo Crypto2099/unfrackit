@@ -36,7 +36,7 @@ async function tables(db) {
     CREATE TABLE study.asset (ident bigint PRIMARY KEY, policy bytea, name bytea, label integer);
     CREATE TABLE public.ma_tx_mint (id serial PRIMARY KEY, ident bigint, quantity numeric, tx_id bigint);
     CREATE TABLE study.draw_order (frame text, sa_id bigint, k bigint);
-    CREATE TABLE study.sample (frame text, kind text, stratum text, sa_id bigint, draw_rank bigint, prevalence_member boolean, split text, excluded_6_1 boolean,
+    CREATE TABLE study.sample (frame text, kind text, stratum text, sa_id bigint, draw_rank bigint, prevalence_member boolean, split text, reconstruction_excluded boolean,
                                PRIMARY KEY (frame, kind, stratum, sa_id));
     CREATE TABLE study.scam_policy (policy bytea PRIMARY KEY);
   `);

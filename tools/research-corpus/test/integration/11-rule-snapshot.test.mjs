@@ -49,10 +49,10 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
     assert.equal(Number(r.report.windows.recent.hi), Number(t));
     // The reconstruction check: two implementations, every sampled wallet
     // agreeing; the published counts carry no case-wallet figure.
-    assert.equal(r.report.check_61.direct_valid, false);
-    assert.equal(r.report.check_61.n_excluded, 0);
-    assert.ok('n_case_wallets' in r.report.check_61);
-    assert.ok(!('n_case_wallets' in r.manifest.check_6_1) && !('n_case_disagree' in r.manifest.check_6_1));
+    assert.equal(r.report.reconstruction_check.direct_valid, false);
+    assert.equal(r.report.reconstruction_check.n_excluded, 0);
+    assert.ok('n_case_wallets' in r.report.reconstruction_check);
+    assert.ok(!('n_case_wallets' in r.manifest.reconstruction_check) && !('n_case_disagree' in r.manifest.reconstruction_check));
     // The shapes seeded before the snapshot.
     const row = async (id) => (await c.query(`SELECT tok, ge100 FROM study.frame WHERE frame = 'recent' AND sa_id = $1`, [id])).rows[0];
     const s3 = await row(await saIdOf(c, views.S3));
@@ -62,7 +62,7 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
     // own-drawn on the finished run.
     const own = await ownDrawn(c, RUN_C, [views.funder, views.S1]);
     assert.equal(own.listed, 2);
-    record('T15', { run_dir: r.dir, snapshot: snap, tip_block_no: Number(tip.block_no), windows: r.report.windows, check_61: r.report.check_61, draw: r.report.draw, own_drawn: own });
+    record('T15', { run_dir: r.dir, snapshot: snap, tip_block_no: Number(tip.block_no), windows: r.report.windows, reconstruction_check: r.report.reconstruction_check, draw: r.report.draw, own_drawn: own });
   } finally {
     await c.end();
   }

@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { db, blocks, record, resultsDir, RUN_B, SHAPES, seederAddress, specOf, stakeOf, saIdOf } from './env.mjs';
 import { q } from '../../src/db.mjs';
 import { ensureDir } from '../../src/paths.mjs';
-import { digests } from '../../src/check61.mjs';
+import { digests } from '../../src/reconstruction-check.mjs';
 import { parseLine, matchSpec } from '../lib/spec.mjs';
 import { history } from '../lib/history.mjs';
 
