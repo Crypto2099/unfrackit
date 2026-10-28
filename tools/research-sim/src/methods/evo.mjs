@@ -98,18 +98,22 @@
 // the signatures the wallet and the other parties add to the library's
 // transaction.
 //
-// A part the library has no way to write makes the intent not replayable
-// (evoRefusal): body field 6, as for every adapter (kit/replay.mjs
-// replayRefusal); body fields 15 (network id), 21 (current treasury value) and
-// 22 (treasury donation), which its transaction body never carries
-// (internal/txBuilder.ts:1009-1027); bootstrap witnesses and witness-set
-// datums, which its witness set never carries (:851-863, :1030-1039); a
-// Byron address on a fixed or reference input; auxiliary data carrying
-// scripts or no metadata, which attachMetadata cannot write; the pre-Conway
-// genesis-delegation and MIR certificates; and a certificate or withdrawal of
-// a script stake credential without a redeemer, which the stake operations
-// refuse (operations/Stake.ts:43-50, :119-126, :717-724, and each other stake
-// operation's isScriptControlled check).
+// A part the library's builder can neither write nor price (unpricedParts) is
+// written on the transaction it built, through the library's own types, as
+// every library's replay does: the network id and the treasury fields
+// (TransactionBody.ts; no operation sets them, internal/txBuilder.ts:
+// 1009-1027), auxiliary data attachMetadata cannot write (none or with
+// scripts), witness-set datums (:851-863) with the script-data hash from the
+// library's Redeemers.toScriptDataHash, bootstrap witnesses (:1030-1039), and
+// the certificates or withdrawals when one is a script stake credential's
+// with no redeemer, which the stake operations refuse (operations/Stake.ts:
+// 43-50, :119-126, :717-724). The library's fee does not count such a part,
+// and a value it did not balance (a donation, a deposit) stays unbalanced;
+// the kit's checks say which (library.unpriced names the parts). Only what the
+// library's types cannot hold makes the intent not replayable (evoRefusal):
+// body field 6, as for every adapter (kit/replay.mjs replayRefusal), a Byron
+// address on a fixed or reference input, and the pre-Conway
+// genesis-delegation and MIR certificates.
 //
 // Collateral: the library chooses its own (phases/Collateral.ts:116-317): the
 // UTxOs among availableUtxos without a reference script, pure ADA first and
@@ -126,6 +130,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as E from '@evolution-sdk/evolution';
 import { makeTxBuilder, voterToKey } from '@evolution-sdk/evolution/sdk/builders/TransactionBuilder';
+import * as CostModel from '@evolution-sdk/evolution/CostModel';
 import { CLASSES } from '../kit/check.mjs';
 import { unspentOutputParts, inspectTx } from '../kit/inspect.mjs';
 import { replayRefusal } from '../kit/replay.mjs';
@@ -208,6 +213,7 @@ export const evoFullProtocolParameters = (params) => ({
   costModels: { PlutusV1: {}, PlutusV2: {}, PlutusV3: {} }
 });
 
+const EMPTY_COST_MODELS = new CostModel.CostModels({ PlutusV1: new CostModel.CostModel({ costs: [] }), PlutusV2: new CostModel.CostModel({ costs: [] }), PlutusV3: new CostModel.CostModel({ costs: [] }) });
 const refOfInput = (i) => `${E.TransactionHash.toHex(i.transactionId)}#${i.index}`;
 const hexOf = (b) => Buffer.from(b).toString('hex');
 
@@ -246,6 +252,10 @@ function scriptStakeWithoutRedeemer(fixed) {
       if (Number(asUint(n.items[1].items[0], 'credential kind')) === 1 && !has(2, (t) => t.index === i)) return 'a certificate';
     }
   }
+  return scriptWithdrawalWithoutRedeemer(fixed);
+}
+function scriptWithdrawalWithoutRedeemer(fixed) {
+  const has = (tag, pred) => fixed.redeemers.some((r) => r.tag === tag && pred(r.target));
   if (fixed.body[5] !== undefined) {
     const b = Buffer.from(fixed.body[5], 'hex');
     for (const [k] of decode(b).entries) {
@@ -273,19 +283,34 @@ export function evoRefusal(intent) {
   if (kit) return kit;
   const f = intent.fixed;
   if (!f) return null;
-  const body = { 15: 'body field 15 (network id)', 21: 'body field 21 (current treasury value)', 22: 'body field 22 (treasury donation)' };
-  for (const [k, what] of Object.entries(body)) if (f.body[k] !== undefined) return `${what}: the library's transaction body has no such field (internal/txBuilder.ts:1009-1027)`;
-  if (f.witnesses[2] !== undefined) return 'bootstrap witnesses: the library\'s witness set carries none (internal/txBuilder.ts:1030-1039)';
-  if (f.witnesses[4] !== undefined) return 'witness-set datums: the library\'s witness set carries none (internal/txBuilder.ts:851-863)';
   for (const x of [...f.inputs, ...f.referenceInputs]) if (unspentOutputParts(x.cbor).addr.type === 8) return `a Byron address on ${x.ref}: the library reads a payment credential from every input (internal/txBuilder.ts:1102-1108)`;
-  if (certificateKinds(f).some((k) => k === 5 || k === 6)) return 'a genesis-delegation or MIR certificate: no operation writes it';
-  const unredeemed = scriptStakeWithoutRedeemer(f);
-  if (unredeemed) return `${unredeemed} of a script stake credential without a redeemer: the library's stake operations require one for every script credential (operations/Stake.ts:43-50, :119-126, :717-724)`;
-  if (f.auxiliaryData) {
-    const m = metadataOf(f);
-    if (m.refusal) return m.refusal;
-  }
+  if (certificateKinds(f).some((k) => k === 5 || k === 6)) return 'a genesis-delegation or MIR certificate: the library\'s certificate type has none';
   return null;
+}
+
+// The parts of the intent the library's builder can neither write nor price,
+// which go on the transaction it built through its own types (unpriced): the
+// network id and the treasury fields, which its transaction body carries
+// (TransactionBody.ts) but no operation sets (internal/txBuilder.ts:
+// 1009-1027); auxiliary data attachMetadata cannot write (without metadata, or
+// with scripts); witness-set datums (:851-863) and bootstrap witnesses
+// (:1030-1039); and the certificates or withdrawals when one of them is a
+// script stake credential's with no redeemer, which the stake operations
+// refuse (operations/Stake.ts:43-50, :119-126, :717-724).
+export function unpricedParts(intent) {
+  const f = intent.fixed;
+  if (!f) return [];
+  const out = [];
+  if (f.body[15] !== undefined) out.push('network id');
+  if (f.body[21] !== undefined) out.push('current treasury value');
+  if (f.body[22] !== undefined) out.push('treasury donation');
+  if (f.auxiliaryData && metadataOf(f).refusal) out.push('auxiliary data');
+  if (f.witnesses[4] !== undefined) out.push('witness-set datums');
+  if (f.witnesses[2] !== undefined) out.push('bootstrap witnesses');
+  const unredeemed = scriptStakeWithoutRedeemer(f);
+  if (unredeemed === 'a certificate') out.push('certificates');
+  if (unredeemed === 'a withdrawal') out.push('withdrawals');
+  return out;
 }
 
 // The intent's redeemer data and observed units for one target.
@@ -381,7 +406,7 @@ export function evoImplicit(intent, params) {
 }
 
 // The intent's fixed parts as the library's operations on builder b.
-function withFixedParts(b, intent, params, chain) {
+function withFixedParts(b, intent, params, chain, unpriced) {
   const f = intent.fixed;
   const red = redeemerFinder(f);
   const ws = witnessesOf(f, [1, 3, 6, 7]);
@@ -398,12 +423,12 @@ function withFixedParts(b, intent, params, chain) {
     for (const a of intent.implicit.burn) add(a, -a.qty);
     for (const [policy, record] of byPolicy) b = b.mintAssets({ assets: E.Assets.fromRecord(record), ...red.policy(policy) });
   }
-  if (f.body[4] !== undefined) {
+  if (f.body[4] !== undefined && !unpriced.includes('certificates')) {
     itemsOf(f.body[4]).forEach((bytes, i) => {
       b = withCertificate(b, E.Certificate.fromCBORHex(hexOf(bytes)), red.certificate(i), params);
     });
   }
-  if (f.body[5] !== undefined) {
+  if (f.body[5] !== undefined && !unpriced.includes('certificates') && !unpriced.includes('withdrawals')) {
     for (const [account, amount] of E.Withdrawals.fromCBORHex(f.body[5]).withdrawals) {
       if (account.networkId !== chain.id) throw new Error(`a withdrawal from network ${account.networkId} on chain ${chain.id}`);
       b = b.withdraw({ stakeCredential: account.stakeCredential, amount, ...red.withdrawal(hexOf(account.stakeCredential.hash)) });
@@ -426,7 +451,7 @@ function withFixedParts(b, intent, params, chain) {
     const time = (k) => (f.body[k] === undefined ? undefined : E.Time.slotToUnixTime(asUint(decode(Buffer.from(f.body[k], 'hex')), 'slot'), chain.slotConfig));
     b = b.setValidity({ from: time(8), to: time(3) });
   }
-  if (f.auxiliaryData) for (const [label, metadata] of metadataOf(f).entries) b = b.attachMetadata({ label, metadata });
+  if (f.auxiliaryData && !unpriced.includes('auxiliary data')) for (const [label, metadata] of metadataOf(f).entries) b = b.attachMetadata({ label, metadata });
   return b;
 }
 
@@ -504,6 +529,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   }
   const chain = chainOf(state.network);
   const fixedRefs = new Set(replay && intent.fixed ? intent.fixed.inputs.map((x) => x.ref) : []);
+  const unpriced = replay ? unpricedParts(intent) : [];
   let b = makeTxBuilder({ chain });
   let options;
   try {
@@ -512,7 +538,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
       const extra = replay ? { ...(out.datumOption ? { datum: out.datumOption } : {}), ...(out.scriptRef ? { script: scriptOf(out.scriptRef) } : {}) } : {};
       b = b.payToAddress({ address: out.address, assets: out.assets, ...extra });
     }
-    if (replay && intent.fixed) b = withFixedParts(b, intent, params, chain);
+    if (replay && intent.fixed) b = withFixedParts(b, intent, params, chain, unpriced);
     const available = inputOrder(state).filter((u) => !fixedRefs.has(u.ref)).map(evoUtxo);
     options = { changeAddress: E.Address.fromBech32(state.changeAddress), availableUtxos: available };
     if (replay) {
@@ -562,26 +588,49 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   const keys = walletKeysOf(state, intent, inputs, collateralRefs);
   const mine = (fake.witnessSet.vkeyWitnesses || []).filter((w) => keys.has(hexOf(w.vkey.bytes).slice(0, 56)));
   if (mine.length !== keys.size) throw new Error(`${name}: the library's fake witness set has ${mine.length} of the wallet's ${keys.size} payment keys`);
-  const others = intent.fixed ? witnessesOf(intent.fixed, [0]) : null;
+  const f = intent.fixed;
+  const others = f ? witnessesOf(f, [0, 2, 4]) : null;
   const ws = tx.witnessSet;
+  const after = (part) => unpriced.includes(part);
   const witnessSet = new E.TransactionWitnessSet.TransactionWitnessSet({
-    vkeyWitnesses: [...mine, ...(others ? others.vkeyWitnesses : [])],
+    vkeyWitnesses: [...mine, ...(others && others.vkeyWitnesses ? others.vkeyWitnesses : [])],
     nativeScripts: ws.nativeScripts,
-    bootstrapWitnesses: ws.bootstrapWitnesses,
+    bootstrapWitnesses: after('bootstrap witnesses') ? others.bootstrapWitnesses : ws.bootstrapWitnesses,
     plutusV1Scripts: ws.plutusV1Scripts,
-    plutusData: ws.plutusData,
+    plutusData: after('witness-set datums') ? others.plutusData : ws.plutusData,
     redeemers: ws.redeemers,
     plutusV2Scripts: ws.plutusV2Scripts,
     plutusV3Scripts: ws.plutusV3Scripts
   });
-  const bytes = E.Transaction.toCBORHex(new E.Transaction.Transaction({ body: tx.body, witnessSet, isValid: tx.isValid, auxiliaryData: tx.auxiliaryData }));
+  // The parts the builder could not write, on the transaction it built.
+  let body = tx.body;
+  let auxiliaryData = tx.auxiliaryData;
+  if (unpriced.length) {
+    const set = { ...body };
+    const uint = (k) => asUint(decode(Buffer.from(f.body[k], 'hex')), `body field ${k}`);
+    if (after('network id')) set.networkId = Number(uint(15));
+    if (after('current treasury value')) set.currentTreasuryValue = uint(21);
+    if (after('treasury donation')) set.donation = uint(22);
+    if (after('certificates')) set.certificates = itemsOf(f.body[4]).map((x) => E.Certificate.fromCBORHex(hexOf(x)));
+    if ((after('certificates') || after('withdrawals')) && f.body[5] !== undefined) set.withdrawals = E.Withdrawals.fromCBORHex(f.body[5]);
+    if (after('auxiliary data')) {
+      auxiliaryData = E.AuxiliaryData.fromCBORHex(f.auxiliaryData);
+      set.auxiliaryDataHash = E.AuxiliaryData.toHash(auxiliaryData);
+    }
+    // With witness-set datums, the script-data hash by the library's own
+    // function (Redeemers.ts:585-622) over its redeemers, those datums and
+    // the empty cost models the run holds.
+    if (after('witness-set datums')) set.scriptDataHash = E.Redeemers.toScriptDataHash(ws.redeemers ?? E.Redeemers.makeRedeemerMap([]), EMPTY_COST_MODELS, others.plutusData);
+    body = new E.TransactionBody.TransactionBody(set);
+  }
+  const bytes = E.Transaction.toCBORHex(new E.Transaction.Transaction({ body, witnessSet, isValid: tx.isValid, auxiliaryData }));
   const size = inspectTx(bytes).size;
   const scriptFee = intent.fixed ? intent.fixed.scriptFee : 0n;
   return {
     ok: true,
     kind: 'single',
     txs: [txRecord(bytes, walletRefs, tx.body.fee, size, keys.size)],
-    library: { fee: tx.body.fee, finalMinFee: minFee(params, size, scriptFee), collateral: collateralRefs, implicit: evoImplicit(intent, params) }
+    library: { fee: tx.body.fee, finalMinFee: minFee(params, size, scriptFee), collateral: collateralRefs, implicit: evoImplicit(intent, params), unpriced }
   };
 }
 

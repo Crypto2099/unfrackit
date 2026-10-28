@@ -98,7 +98,7 @@ function tally(source, r) {
 
 // Every built transaction's fixed inputs are present and none is the
 // selector's; it carries no collateral; the library's fee is at least the
-// final transaction's minimum.
+// final transaction's minimum unless a part was written after it priced it.
 function checkBuilt(source, r) {
   const intents = source.events.filter((e) => e.kind === 'intent').map((e) => e.intent);
   for (const s of r.spends) {
@@ -113,7 +113,7 @@ function checkBuilt(source, r) {
       assert.ok(!s.built.txs[0].walletInputs.includes(x.ref));
     }
   }
-  for (const f of r.fees) assert.ok(f.fee >= f.finalMinFee, `${f.type}: fee ${f.fee} under the minimum ${f.finalMinFee}`);
+  for (const f of r.fees) if (!f.unpriced.length) assert.ok(f.fee >= f.finalMinFee, `${f.type}: fee ${f.fee} under the minimum ${f.finalMinFee}`);
 }
 
 test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, refuses their script spends, and miscounts a legacy registration\'s deposit', { skip }, async (t) => {
@@ -176,7 +176,7 @@ const payTo = (i, coin, extra = {}) => {
 
 const sourceOf = (state, intents, params = SYNTHETIC_PARAMS) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 1000, params });
 
-test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output and a required signer, and refuses what it cannot write as not replayable', { skip }, async (t) => {
+test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output and a required signer, writes the parts it cannot price on its transaction, and refuses a body field 6', { skip }, async (t) => {
   const shape = shapeState(T, 'S8');
   const state = shape.state;
   const P = SYNTHETIC_PARAMS;
@@ -228,11 +228,20 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
       requested: [payTo(2, 3n * ADA, { cbor: encodeOutput({ address: addressBytes(recipientAddress('synthetic', 302)), coin: 3n * ADA, assets: [], datum: { kind: 'inline', cbor: 'd87980' } }, 'map').toString('hex'), datum: { kind: 'inline', cbor: 'd87980' } })],
       fixed: { body: { 3: encUint(5000).toString('hex'), 8: encUint(100).toString('hex'), 14: encArray([encBytes(Buffer.from(walletKey, 'hex'))]).toString('hex') } }
     }),
-    // A payment with a treasury donation: no operation writes it.
+    // A payment with a treasury donation, which no operation writes: it goes
+    // on the built transaction, which the library balanced without it.
     replayIntent('b6', 60, { type: 'T1', requested: [payTo(3, 3n * ADA)], fixed: { body: { 22: encUint(ADA).toString('hex') } }, implicit: { donation: ADA } }),
     // A body field 6 (protocol parameter updates): no Conway transaction
     // carries it.
-    replayIntent('b7', 70, { type: 'T7', requested: [payTo(4, 2n * ADA)], fixed: { body: { 6: encArray([encMap([]), encUint(0)]).toString('hex') } } })
+    replayIntent('b7', 70, { type: 'T7', requested: [payTo(4, 2n * ADA)], fixed: { body: { 6: encArray([encMap([]), encUint(0)]).toString('hex') } } }),
+    // Parts the library's builder can neither write nor price, written on the
+    // transaction it built: a network id, auxiliary data without metadata, a
+    // witness-set datum; and a legacy registration of a script stake
+    // credential with no redeemer, which the stake operations refuse.
+    replayIntent('b8', 80, { type: 'T1', requested: [payTo(5, 2n * ADA)], fixed: { body: { 15: encUint(0).toString('hex') } } }),
+    replayIntent('b9', 90, { type: 'T1', requested: [payTo(6, 2n * ADA)], fixed: { auxiliaryData: 'd90103a0' } }),
+    replayIntent('c0', 100, { type: 'T1', requested: [payTo(7, 2n * ADA)], fixed: { witnesses: { 4: encArray([Buffer.from('d87980', 'hex')]).toString('hex') } } }),
+    replayIntent('c1', 110, { type: 'T7', requested: [payTo(8, 2n * ADA)], fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(1), encBytes(Buffer.alloc(28, 0x5c))])])]).toString('hex') } }, implicit: { deposits: P.keyDeposit } })
   ];
   const source = sourceOf(state, intents);
   const r = await replayEvo(source);
@@ -244,10 +253,26 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
   assert.equal(at('b4').outcome, 'failed');
   assert.equal(at('b4').class, CLASSES.balance);
   assert.deepEqual(evoImplicit(intents[3], P), { deposits: 0n, refunds: 0n });
-  for (const id of ['b6', 'b7']) assert.equal(at(id).outcome, 'not-replayable');
-  assert.match(at('b6').detail, /body field 22/);
+  assert.equal(at('b7').outcome, 'not-replayable');
   assert.match(at('b7').detail, /body field 6/);
-  assert.equal(r.summary.counts.notReplayable, 2);
+  assert.equal(r.summary.counts.notReplayable, 1);
+  // The unpriced parts are on the transaction: a donation or a deposit the
+  // library did not balance fails conservation, and a part it did not price
+  // leaves its fee under the minimum.
+  for (const [id, cls] of [['b6', CLASSES.balance], ['c1', CLASSES.balance], ['b8', CLASSES.feeMinimum], ['b9', CLASSES.feeMinimum], ['c0', CLASSES.feeMinimum]]) {
+    assert.equal(at(id).outcome, 'failed', `${id}: ${at(id).outcome}`);
+    assert.equal(at(id).class, cls, `${id}: ${at(id).detail}`);
+  }
+  const unpriced = {};
+  for (const [id, part, field] of [['b6', 'treasury donation', 22], ['b8', 'network id', 15], ['b9', 'auxiliary data', 7], ['c0', 'witness-set datums', 11], ['c1', 'certificates', 4]]) {
+    const it = intents.find((i) => i.id.startsWith(id));
+    const built = await buildEvo(state, it, P, { changePolicy: 'default', seed: 1 });
+    assert.equal(built.ok, true, built.detail);
+    assert.deepEqual(built.library.unpriced, [part]);
+    assert.ok(inspectTx(built.txs[0].bytes).bodyFields.includes(field), `${id}: body field ${field}`);
+    unpriced[id] = built.library.fee - built.library.finalMinFee;
+  }
+  t.diagnostic(JSON.stringify(unpriced, (k, v) => (typeof v === 'bigint' ? String(v) : v)));
   const tx = (id) => inspectTx(at(id).built.txs[0].bytes);
   assert.deepEqual(tx('b1').mint, [{ policy: burnt.policy, name: burnt.name, qty: -1n }]);
   assert.equal(tx('b3').withdrawals.reduce((s, w) => s + w.coin, 0n), 5n * ADA);
