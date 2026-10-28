@@ -50,6 +50,26 @@ export const SIM_SETTINGS = Object.freeze({
   // Random sources. 'mulberry32': seeded with the seed number for a
   // selector; random layouts seeded with the repetition number.
   rng: 'mulberry32',
+  // Which collateral a replayed script spend uses. 'smallest': the smallest
+  // UTxO eligible under the arm's rule that is not an input of the spend,
+  // ties by txid#index, always with a collateral return output and the
+  // total-collateral field.
+  collateralChoice: 'smallest',
+  // A phase-2-invalid transaction in a window. 'forfeit': replayed as an
+  // intent whose only effect is the forfeit of the observed total collateral,
+  // from collateral chosen under the arm's rule, its return output coming
+  // back to the wallet.
+  phase2Invalid: 'forfeit',
+  // Where the in-burst constraint applies. 'separate': only in a separate
+  // pass at each parallel burst, from the state at its start, for burst
+  // feasibility and H-6's rescue test; the sequential replay continues for
+  // fees.
+  burstPass: 'separate',
+  // What H-3's replay records per policy. 'per-spend-and-window': per spend
+  // and policy, the bytes and fee of the policy's tokens recreated in change;
+  // per window, the time-averaged minimum ADA of the outputs holding it,
+  // shared pro rata by its bytes in mixed outputs.
+  policyRecord: 'per-spend-and-window',
   // Minimum and value bytes of UTxOs already held. 'ledger': value bytes by
   // the ledger's re-serialization of the Value, the minimum by CSL on the
   // output.
@@ -76,6 +96,10 @@ const IMPLEMENTED = {
   unclassified: ['other'],
   substitutedChange: ['fail'],
   rng: ['mulberry32'],
+  collateralChoice: ['smallest'],
+  phase2Invalid: ['forfeit'],
+  burstPass: ['separate'],
+  policyRecord: ['per-spend-and-window'],
   heldBytes: ['ledger'],
   treatmentOrder: ['ref'],
   heldToTreatment: ['flagged']

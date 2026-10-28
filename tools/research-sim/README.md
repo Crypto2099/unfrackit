@@ -1,6 +1,10 @@
 # research-sim
 
-The downstream simulator of the UnFrack.It UTxO-management research. This folder holds its history reader: a command-line tool that turns a cardano-db-sync database into the simulator's inputs, for given wallets and windows. For each wallet (a stake credential) and window it writes one history file. The file holds the wallet's UTxO set at the window's start, then every event of the window in chain order: deposits, held UTxOs consumed, spends with their intents, self-reorganizations, and 30-day marks. The tool also writes a wallet's state at the snapshot block, and computes the census, near-cap and collateral quantities and the battery pools as separate commands.
+The downstream simulator of the UnFrack.It UTxO-management research. This folder holds two parts of it.
+
+The history reader turns a cardano-db-sync database into the simulator's inputs, for given wallets and windows. For each wallet (a stake credential) and window it writes one history file. The file holds the wallet's UTxO set at the window's start, then every event of the window in chain order: deposits, held UTxOs consumed, spends with their intents, self-reorganizations, and 30-day marks. The reader also writes a wallet's state at the snapshot block, and computes the census, near-cap and collateral quantities and the battery pools as separate commands.
+
+The simulator core replays those histories and builds the batteries, offline: a ledger kit that assembles and checks transactions exactly, wallet states, a bridge to the treatment, the method contract every selector implements, the arms and their run plans, the replay engine, the batteries, and the synthetic shapes with their intent streams. It reads no database and no chain.
 
 A few terms recur below. The extraction is the study's sampling tool in this repository, `tools/research-corpus`; it builds its tables in a database schema named `study`. A frame is the window a wallet was sampled for: `recent` (the 365 days ending at the snapshot block) or `peak` (the busiest 73 epochs since the Mary hard fork). Every sampled wallet is in one split: exploration, which may be read at any time, or confirmation, which is read only after the study's analysis scripts are frozen on chain. The treatment is the code under test, UnFrack.It's planner and selection rule; its files are published with the study's archive, not in this repository.
 
@@ -49,6 +53,8 @@ Every transaction read from either source must hash to db-sync's transaction has
 | `near-cap --run-id <id> (--wallets <file> \| --from-study \| --all-wallets)` | Per epoch boundary from the Mary hard fork to the snapshot: how many wallets have a largest UTxO above 50, 80 and 90 percent of the value-size limit in force. |
 | `collateral --run-id <id>` | Over the recent window's script-executing transactions whose collateral inputs all sit at key addresses: the share under 20 ADA of collateral, the distribution of collateral coin, the share with a collateral return, the share of collateral inputs carrying tokens. On a test network, `--days <n>` measures the last n days instead of the recent window. |
 | `battery-pools --run-id <id> --network <n>` | From a run's recent-window history files, the amounts of the pure-ADA payments (spend type T1) and the shares of a fungible's holding sent in fungible-token spends (T5). |
+| `replay --treatment <dir> (--history <file or dir>... \| --shapes <names\|all>) --plan recent\|peak\|test` | A run plan's arms replayed over history files, or over the shapes' synthetic streams. `--workers <n>` (default 1), `--limit-ms` (default 300,000 per replay), `--reps-h1`, `--reps-variants`, `--test-reps`, `--run-id`, `--analysis-freeze-tx`. |
+| `battery --treatment <dir> (--history <snapshot file or dir>... --pools <file> \| --shapes <names\|all>)` | The standard battery and H-10's at the snapshot, under the battery's selectors (`--methods study`, the default) or the test methods (`--methods test`). `--reps <n>` (default 30), `--answer-limit-ms` (default 60,000 per method answer), `--workers`, `--run-id`. A wallet's draws come from the frozen pools `--pools` names; the shapes use fixed test values. |
 | `hash` | SHA-256 of every hashed file, the pinned dependencies and the Node version. Also `npm run hash`. |
 
 Common options: `--expect-network <name>` refuses any other database; `--snapshot tip|<block hash>|<block id>` (default `tip`); `--extraction-run <params.json>` takes the snapshot and the windows from an extraction run of `tools/research-corpus` and checks them against the database; `--bytes`, `--immutable-dir`, `--immutable-host`; `--treatment`, `--treatment-pins`; `--set <name>=<value>` changes one of the settings listed under Settings; `--explain` keeps the plain `EXPLAIN` plan of the census and collateral queries; `--analysis-freeze-tx <hash>`, the mainnet transaction whose signed record freezes the analysis scripts; without it a confirmation-split wallet is refused, and with it the run records the hash.
@@ -69,6 +75,25 @@ battery-pools.json                the T1 amounts and T5 shares
 ```
 
 Files name wallets by db-sync's stake-credential id (`stake_address.id`); no stake address appears in them.
+
+The `replay` and `battery` commands write, under the same root:
+
+```
+run.json         the command, its plan, the settings, the treatment's digests, the Node version and the code manifest
+records.jsonl    the records, one JSON object per line
+timings.jsonl    wall-clock times, kept apart so that a run repeated with the same seeds writes byte-identical records
+log.jsonl        start, each time-out or error, end
+```
+
+Every record names its wallet (the stake-credential id, or a shape's name), window, arm, variant, method, change policy, collateral rule and repetition, and an intent by its position in the wallet's stream. A record that would carry an address, a stake address, a transaction hash or a credential is refused, and free-text fields (a failure's detail, a refusal's reason) have them replaced by placeholders. The kinds:
+
+- `spend`: one replayed intent: its outcome (built, failed with its class, infeasible by balance, not replayable, or forfeit), the fee and the wallet-controlled fee, size, inputs, signing keys, assets dragged, change outputs with their bytes and largest Value, the drag bytes of H-2, the bytes and fee per policy recreated in change for H-3, the collateral used, the collateral available under every rule at a script interaction, and the UTxO count and largest Value after it;
+- `plan`: a tidy plan an arm applied, at the start or at a 30-day mark, with its fee, transaction count and UTxOs after;
+- `burst`: a parallel burst's separate pass, and whether it was feasible;
+- `trigger`: an H-6 trigger, with its rescue outcome under each confirmatory collateral rule;
+- `wallet-arm`: per wallet and arm over the window: counts by outcome and class, failures per 100 attempted spends, spend, wallet-controlled, plan and forfeit fees, burst feasibility, the end state's UTxO count, locked ADA and locked ADA per token, the largest Value's trajectory, the end state's conformity to the arm's layout, and H-3's time-averaged locked ADA per policy where the arm records it;
+- `battery` and `h12`: one battery run by one method, its outcome, fees, the "balance suffices" flag, the plan after the spend, and for the H-12 rule its completion, chain length and whole-chain fees; the oracle's reference, when an oracle is given;
+- `timeout` and `refused`: a replay that ran past its limit, and one the rules do not settle (a wallet with no change address, a start plan the planner refuses).
 
 ### History files
 
@@ -128,6 +153,50 @@ For every asset held at a window's start, the arrival table names the transactio
 
 The census measures value bytes as the ledger's serialization of the Value (`eras/alonzo/impl/src/Cardano/Ledger/Alonzo/Rules/Utxo.hs:425-447`) and a UTxO's minimum with CSL on the output re-encoded from db-sync's columns. The value-size limit in force is `max_val_size` from Alonzo on, and the Mary era's 4,000-byte constant before it (`eras/allegra/impl/src/Cardano/Ledger/Allegra/Rules/Utxo.hs:249-264`).
 
+## The simulator core
+
+### The ledger kit
+
+Every size is the ledger's size of the transaction's bytes, never an estimate, and every fee is `minFeeA * size + minFeeB`, plus for a replayed script spend the intent's script fee (`eras/alonzo/impl/src/Cardano/Ledger/Alonzo/Tx.hs:498-508`; `eras/conway/impl/src/Cardano/Ledger/Conway/Tx.hs:105-145`). The wallet-controlled fee, which every fee comparison uses, is that fee less the script fee and less `minFeeA` times the bytes of the intent's fixed parts.
+
+Every built transaction is checked from its bytes, without CSL, so that the checks are a second implementation beside the treatment's and the libraries' own: the size limit (`eras/shelley/impl/src/Cardano/Ledger/Shelley/Rules/Utxo.hs:570-585`); every output's Value, the collateral return's included, at most `maxValSize` (`eras/alonzo/impl/src/Cardano/Ledger/Alonzo/Rules/Utxo.hs:425-447`); every output's coin at least `coinsPerUtxoByte * (160 + its bytes)` (`eras/babbage/impl/src/Cardano/Ledger/Babbage/TxOut.hs:678-702`); every input resolving; coin and every asset conserved with the withdrawals, refunds, mints, deposits, burns and treasury donation (`Shelley/Rules/Utxo.hs:513-529`; `eras/conway/impl/src/Cardano/Ledger/Conway/UTxO.hs:107-145`); the fee at least the minimum (`eras/babbage/impl/src/Cardano/Ledger/Babbage/Rules/Utxo.hs:183-212`); one vkey witness per distinct key payment credential among the inputs and collateral inputs, plus the intent's other witnesses (`eras/alonzo/impl/src/Cardano/Ledger/Alonzo/TxBody.hs:307-313`; `eras/shelley/impl/src/Cardano/Ledger/Shelley/UTxO.hs:205-227`); the auxiliary-data hash present exactly with auxiliary data; and, with redeemers, collateral: one to `maxCollateralInputs` inputs at key addresses, the balance less the return ADA only, at least `collateralPercent` of the fee, and equal to the total-collateral field (`Babbage/Rules/Utxo.hs:231-308`; `eras/babbage/impl/src/Cardano/Ledger/Babbage/Collateral.hs:30-39`). A failed check is a build failure of one class: transaction size, value size, change minimum, maximum input count, balance, collateral, time limit or other.
+
+A selection-only method's transaction is assembled with CSL: its inputs sorted by transaction id then index, its outputs, and synthetic vkey witnesses, one per distinct payment key, of the size real ones have, at the minimum fee found as a fixed point (the fee's and the change coin's encodings are part of the size). A replayed intent's transaction is assembled from its parts: the requested outputs and every fixed part as their original bytes, the arm's inputs and change, spend redeemers re-indexed to their inputs' places, the auxiliary-data hash recomputed, and collateral under the arm's rule with its return output and total. The script-data hash is a 32-byte stand-in over the redeemers and datums: the ledger's also covers the cost models' language views, which a history file does not carry, and no check reads it. Four negative controls are caught on every form of transaction, each by its own check: the fee one lovelace short, the size one byte over, a Value one byte over, and one witness short.
+
+### States, the treatment and the methods
+
+A state holds the wallet's UTxO records (in `txid#index` order), its stake credential, its franken-flagged credentials and its change address: the address of its most recently created UTxO at the arm's start at a key payment credential and a base address, by creating transaction then index, passing over franken-flagged credentials. Applying a transaction removes its wallet inputs and adds its outputs that carry the wallet's stake credential; payments to other stake credentials leave the wallet.
+
+The treatment is loaded from the directory the operator names, every file's digest checked against `data/treatment-pins.txt` first. Its planner and its H-12 selection rule run on states, given the UTxOs in `txid#index` order with held UTxOs marked held, and every transaction they build must pass both the treatment's own checks and the kit's; a disagreement stops the run. Protocol parameters reach it as its parameters object, and a parameter it would read differently from the run's is refused.
+
+A method is `{ name, version, deterministic, build(state, intent, params, opts) }`, `opts` naming a seed, a change policy, the arm's collateral rule and H-12's absorption. Methods are made by name (`src/methods/registry.mjs`), so that a worker thread can make the one its job names. The H-12 method serves the batteries only, since its request carries only requested outputs. Two test methods exist only to test the engine and never appear in a study run: `test-largest-first` (largest coin first, with a simulator-owned change policy) and `test-stall`, which blocks its thread to force the time limits. The simulator's change policies, put on a baseline's input selection, are built from the treatment's own functions: `layout` (H-9's layout-preserving change), `single` (one change output, failing at the value-size limit) and `naive` (the naive-tidy control's rule applied to change).
+
+### Arms and run plans
+
+An arm is a starting layout at the window start and how it is kept: `observed`; `tidy-once` (the planner's full plan applied, its fees charged); `maintained-tidy` (as tidy-once, then re-planned at every 30-day mark, any plan applied and charged); and H-1's two controls, `naive-tidy` and `random-tidy`, each applied once. Plan fees are recorded apart from spend fees. A variant is the planner's settings varied as one hypothesis names, every other setting at its default: H-2's groupings by arrival, by policy then arrival and at random, and byte-optimal packing; H-3's bundle sizes 1, 5, 10, 30, 60 and no count cap; H-4's isolation per asset and per policy; H-5's reserve rules R0 to R6; and H-6's never-propose arm, 1 ADA dust threshold and 3-to-6 and 5-to-20 ADA collateral bands.
+
+A run plan lists which arms run in which window under which selectors and change policies: H-1's arms under the three baselines and its controls under the primary selector, the Evolution SDK's observed arm, H-2 to H-4's variants (tidy-once) and H-6's (maintained-tidy) in the recent window, H-5's reserve rules in both windows, H-9's tidy-once arm with the default and the layout-preserving change, and H-11's factorial in the peak window. A random selector runs 30 repetitions in H-1's arms and at the snapshot and 10 in the variants and H-11; a deterministic one runs once. Repetition r runs a seeded selector with seed r and any random layout with seed r, so compared arms share one seed sequence. Each arm runs under the ledger and the practice collateral rule, with the ledger minimum and token-bearing collateral as sensitivity arms, when its window holds a script interaction.
+
+### The replay engine
+
+Each (wallet, arm, variant, selector, change policy, collateral rule, repetition) replay runs in a worker thread, at most 300 seconds of wall-clock time; CSL's calls are synchronous, so a replay past its limit is stopped by terminating its thread, recorded as a time-out, and the pool starts a fresh worker. Workers are also replaced after 40 jobs, since CSL's asm.js heap only grows to the largest wallet a worker has built for; a worker on the 3,005-UTxO shapes holds about 0.8 GiB, so `--workers` should leave that much memory per worker. Deposits enter every arm when they occurred; held UTxOs leave every arm when anything consumes them; self-reorganizations are counted and not replayed; at a mark the maintained-tidy arm re-plans. Every arm replays the same intents in the same order:
+
+- A phase-2-invalid intent forfeits the observed total collateral from collateral chosen under the arm's rule, its return output coming back to the wallet.
+- An intent the arm's balance cannot fund, by the H-12 rule's exact test with the intent's implicit values and fixed inputs counted, is recorded as infeasible by balance and is not a selector failure.
+- Otherwise the method builds it, the kit checks it, and it is applied; a failure leaves the state as it was and the replay continues.
+
+Collateral is the smallest UTxO eligible under the arm's rule that is not an input of the spend and can carry the total collateral with a return output at its minimum, ties by `txid#index`. At every script interaction the engine records whether collateral is available under each rule. At each parallel burst's first spend, a separate pass builds the burst's spends from the state at its start without spending any output created earlier in the burst, for burst feasibility; the sequential replay continues for fees. In the maintained-tidy arm, a plan that proposes a pure-ADA-only transaction the never-propose setting would not is an H-6 trigger, and a trigger rescues when, within 30 days of block time, the never-propose arm lacks eligible collateral at a script interaction or cannot build a parallel burst that the rule's arm can.
+
+### The batteries
+
+At the snapshot, from the observed layout: an ADA payment drawn from the pooled T1 amounts, one NFT, a share of one fungible drawn from the pooled T5 shares, all NFTs of one policy, p of the most spread fungible's balance for p in {0.25, 0.5, 0.75, 0.9}, and payrolls to 10 and 100 recipients; and H-10's payments of p of the ADA balance from the observed and the tidy layout. Draws come from one mulberry32 generator per wallet and spend kind, seeded from SHA-256 of the stake credential and the kind's name. A drawn ADA amount under its output's minimum is raised to that minimum, and a fungible share or payroll share that rounds to zero units pays one unit; a payroll whose wallet holds fewer units than it has recipients is left unbuilt and reported. Recipients are synthetic base addresses whose stake part is no wallet's.
+
+"The balance suffices" (the H-12 rule's exact test) is evaluated once per wallet and spend on the layout the spend is made from, the observed layout for the standard battery and H-12, and is the infeasible-by-balance rule of every battery. Every method's answer must come within 60 seconds of wall-clock time; one that does not has returned an error with the reason "time limit", and the wallet's remaining spends continue in a fresh worker. After every spend the frozen planner plans the resulting state at its defaults. When an oracle is given, it is called once per wallet, observed-layout spend and distinct oracle change policy, so that two selectors whose change the oracle builds the same way share one reference, with every method's single transaction under that policy as an incumbent.
+
+### Synthetic shapes and streams
+
+The 17 shapes of the preprod seeder (byte for byte the treatment harness's) and the claim and merchant shapes CL1, CL3, E1 and E2 are generated deterministically with mulberry32. Each shape has a synthetic intent stream of fixed test values for the engine's tests, over 75 days: payments of each type T1 to T8 that its holdings allow, a deposit with a held datum UTxO, a parallel burst, a Plutus spend with a script input, redeemer, script and datum, a phase-2-invalid forfeit, a payment with a validity interval, a message and a held fixed input, a self-reorganization, a native-script mint, a stake registration with its deposit, and two 30-day marks.
+
 ## Settings
 
 Where a rule admits more than one reading, the reading is a named setting whose default is the reading this code uses; `--set` changes it, and the value is recorded in every history file's header. A value that is not implemented is refused.
@@ -151,6 +220,28 @@ Where a rule admits more than one reading, the reading is a named setting whose 
 | `outputForm` | `auto` | A UTxO re-encoded from db-sync's columns takes the map form when an inline datum or a reference script needs it, the array form otherwise. |
 | `chunkSlots` | `21600` | ImmutableDB chunk size in slots. |
 
+The simulator core's readings (`src/settings.mjs`), recorded in every run's `run.json`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `changeAddress` | `latest-key-base` | The change address of every arm and method, as above. |
+| `serialization` | `own` | A method that returns whole transactions keeps its own serialization; a selection-only method is assembled by the kit. |
+| `batteryDraws` | `pool` | Battery draws from frozen pools, one generator per wallet and spend kind. |
+| `recipients` | `synthetic-base` | External recipients are synthetic base addresses. |
+| `oversizeRequest` | `split` | A requested token output over the value-size limit is split into outputs at their minimum. |
+| `infeasible` | `exact` | The H-12 rule's exact test decides infeasibility by balance in every battery and replay. |
+| `h10Amount` | `observed` | H-10's tidy-layout payments are p of the observed layout's balance. |
+| `unclassified` | `other` | A failure that fits no class is class `other`, with its text. |
+| `substitutedChange` | `fail` | Substituted change the selector's inputs cannot fund fails with class change minimum. |
+| `rng` | `mulberry32` | Seeds: the seed number for a selector, the repetition number for a random layout. |
+| `collateralChoice` | `smallest` | The smallest eligible collateral UTxO, always with a return output and the total-collateral field. |
+| `phase2Invalid` | `forfeit` | A phase-2-invalid transaction forfeits the observed total collateral. |
+| `burstPass` | `separate` | The in-burst constraint applies only in a separate pass at each parallel burst. |
+| `policyRecord` | `per-spend-and-window` | H-3's per-policy records: bytes and fee recreated in change per spend, and time-averaged locked ADA per window. |
+| `heldBytes` | `ledger` | Value bytes by the ledger's serialization, the minimum by CSL on the output. |
+| `treatmentOrder` | `ref` | The treatment is given UTxOs in `txid#index` order. |
+| `heldToTreatment` | `flagged` | Held UTxOs are given to the treatment marked held. |
+
 ## Hashing
 
 `npm run hash` prints the SHA-256 of every file under `src/`, `sql/` and `data/` and of `package.json` and `package-lock.json`, the pinned dependencies with their npm integrity, and the Node version, in the format of the extraction tool's code manifest. It refuses a file that is not UTF-8 with LF line endings and a final newline, or that has a byte-order mark. Tests and the README are not hashed.
@@ -159,14 +250,24 @@ Where a rule admits more than one reading, the reading is a named setting whose 
 
 `npm test` runs the unit tests: no database and no chain data. They cover CBOR spans and encoders, BLAKE2b against Node's 64-byte digest and known 32-byte digests, CIP-19's address vectors, Base58, CIP-67's ten test vectors and the five registry prefixes, the classification rule, value sizes against the ledger encoding over random values, both output forms with datums and reference scripts, transactions of both era layouts with their size rule, redeemers in both forms, the ImmutableDB format on a constructed chunk (including a CRC-32 mismatch), parameters and both fee terms, bursts (a chained pair in one block, 59 and 61 seconds apart, a parallel burst), marks, the observed replay, spend types, asset classes, settings and the code manifest.
 
-The intent tests build transactions with CSL, so they run when `RESEARCH_SIM_TREATMENT_DIR` and `RESEARCH_SIM_TREATMENT_PINS` name the treatment and its digests, and are skipped otherwise.
+The intent tests and the kit's CSL tests build transactions with CSL, so they run when `RESEARCH_SIM_TREATMENT_DIR` and `RESEARCH_SIM_TREATMENT_PINS` name the treatment and its digests, and are skipped otherwise. The unit tests also cover the kit's checks and their classes, sizes against CSL on every UTxO of the 21 shapes, witness counting over several payment keys, the reference-script fee term, wallet states and the change-address rule, the history file reader, output records and their guard, run plans and arm settings, collateral eligibility, H-6's rescue join, and the replay assembler against CSL's assembly.
+
+`npm run test:treatment` runs the simulator's tests against the treatment (one at a time):
+
+- the bridge against a fresh run of the treatment harness's own runners, plan for plan and battery result for battery result, on a digest-checked copy;
+- every transaction built on the 21 shapes (plans, battery spends by the H-12 rule and the test method under each change policy) meeting the kit's checks, read back by CSL to the same bytes, at exactly the ledger's minimum fee when the treatment built it, with the four negative controls caught on each;
+- the replay engine on every shape's synthetic stream under every arm and variant, each replayed transaction checked, read by CSL and its negative controls caught, and its events in place; one case is left out and named in the test, M3's tidy-once arm at the random grouping, where the planner exhausts the JavaScript heap planning the end state;
+- a replay run repeated through the worker pool with the same seeds writing byte-identical records;
+- the battery runner with its H-12 records and the oracle hook;
+- the time limits, forced (shortened to 2 seconds by default; `RESEARCH_SIM_REAL_LIMITS=1` runs them at 300 and 60 seconds);
+- timing and memory of a plan, a battery and a replay on M2, M3 and E1.
 
 `npm run test:preprod` runs the integration tests against a preprod database, as of one snapshot block (`RESEARCH_SIM_SNAPSHOT`), since db-sync keeps following the chain while they run; their environment is described in `test/integration/history/env.mjs`. They cover:
 
 - the reconstruction against the reference query, for the seeded wallets and 1,000 random wallets at 20 blocks;
 - outputs re-encoded from db-sync's columns against their original bytes, by output form;
-- the 17 seeded shapes against the preprod seeder's specification (`tools/preprod-seeder`, used through its `address` command and its deterministic generator only), and the shapes' own spends as intents;
-- every spend of the seeder's funder and of 200 further wallets over the last 60 days, with the burst cases they contain;
+- the 17 seeded shapes against the preprod seeder's specification (`tools/preprod-seeder`, used through its `address` command and its deterministic generator only), and the shapes' own spends as intents; a UTxO whose creating transaction spends no input of the funder or of a shape, sent by someone else, is left out of the comparison and reported;
+- every spend of the seeder's funder and of 200 further wallets over the last 60 days, with the burst cases they contain, each file read back by the simulator's reader with every record's creating transaction id checked against db-sync's;
 - phase-2-invalid transactions;
 - the ImmutableDB against `tx_cbor`, byte for byte, across every Shelley-based era;
 - the census, near-cap and collateral commands, with their plans and run times.

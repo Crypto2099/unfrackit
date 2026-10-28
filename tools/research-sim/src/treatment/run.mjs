@@ -66,6 +66,15 @@ function kitAgree(state, params, txs, treatmentPass, what) {
   return r;
 }
 
+// The planner's plan for a state without building it (planner2.mjs plan's
+// return value), for comparing two settings on one state.
+export function planOnly(T, state, params, settings = {}, { ladder, refs, arrival } = {}) {
+  const tp = treatmentParams(T, params);
+  const { utxos } = treatmentWallet(T, state, { refs, arrival });
+  const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
+  return T.planner.plan(utxos, settings, tp, adapter, ladder === undefined ? {} : { ladder });
+}
+
 // The planner's plan for a state. options: { ladder } as planner2.mjs plan
 // takes it; refs: the order (state order by default); arrival: as
 // treatmentWallet takes it.

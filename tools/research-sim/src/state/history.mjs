@@ -59,7 +59,10 @@ export function readHistory(text, { analysisFreezeTx = null } = {}) {
     if (e.kind === 'deposit') events.push({ kind: 'deposit', tx: e.tx, txId: e.txId, time: e.time, utxos: e.utxos.map((r) => createdId(r, created)) });
     else if (e.kind === 'held-consumed') events.push({ kind: 'held-consumed', tx: e.tx, txId: e.txId, time: e.time, refs: [...e.refs] });
     else if (e.kind === 'intent') events.push({ kind: 'intent', txId: e.txId, intent: intentFromHistory(e.intent) });
-    else if (e.kind === 'self-reorganization') events.push({ kind: 'self-reorganization', tx: e.tx, txId: e.txId, time: e.time, burst: e.burst || null });
+    else if (e.kind === 'self-reorganization') {
+      const vc = e.valueChange || { coin: '0', assets: [] };
+      events.push({ kind: 'self-reorganization', tx: e.tx, txId: e.txId, time: e.time, burst: e.burst || null, heldConsumed: [...(e.heldConsumed || [])], valueChange: { coin: BigInt(vc.coin), assets: (vc.assets || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) } });
+    }
     else events.push({ kind: 'mark', n: e.n, blockTime: e.blockTime });
   }
   for (const k of Object.keys(counts)) {
