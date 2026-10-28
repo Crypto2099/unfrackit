@@ -30,13 +30,22 @@
 //     collateral under its rule (the smallest eligible UTxO that can carry the
 //     forfeit, ties by txid#index), loses the observed total collateral, and
 //     its return output, at the change address, comes back to the wallet. No
-//     eligible UTxO is a failure of class collateral.
+//     eligible UTxO makes it infeasible for collateral (below).
 //   - infeasible by balance (replay/feasible.mjs): recorded apart, not a
 //     selector failure; the state is left as it was.
-//   - otherwise the method builds it. A method's exception or a failed kit
-//     check is a build failure with its class; 'not-replayable' (an intent the
-//     method cannot express) is counted apart. A failure leaves the state as
-//     it was, and the replay continues.
+//   - a script spend sets its collateral aside before any method selects
+//     (setAside): the UTxO the arm's rule chooses leaves the pool the method
+//     selects from and is the collateral of every transaction the method
+//     assembles. A script spend with no UTxO to set aside, or whose payment
+//     the balance cannot make without it, is infeasible for collateral
+//     (outcome 'infeasible-collateral', reason 'none-eligible' or 'payment'):
+//     recorded apart from build failures and from infeasibility by balance,
+//     never a selector failure; the state is left as it was.
+//   - otherwise the method builds it from the pool. A method's exception or a
+//     failed kit check is a build failure with its class (class collateral: a
+//     transaction whose collateral fails the kit's check); 'not-replayable'
+//     (an intent the method cannot express) is counted apart. A failure
+//     leaves the state as it was, and the replay continues.
 // At the first spend of each parallel burst, a separate pass builds the
 // burst's intents in order from the state at its start without spending any
 // output created earlier in the burst (burst feasibility, H-5 and H-6's rescue
@@ -56,14 +65,14 @@ import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
-import { walletControlledFee } from '../kit/fee.mjs';
+import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
-import { changeOutputBytes, fixedInputValues } from '../kit/replay.mjs';
+import { changeOutputBytes, fixedInputValues, carriesCollateral } from '../kit/replay.mjs';
 import { checkResult, checkOptions, NOT_REPLAYABLE } from '../methods/contract.mjs';
 import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
 import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
 import { replaySuffices } from './feasible.mjs';
-import { eligibleCollateral, collateralAvailability, checkRule } from './collateral.mjs';
+import { eligibleCollateral, collateralAvailability, checkRule, totalCollateralFor } from './collateral.mjs';
 import { spendMeasures, stateMeasures, requestedIndexes, PolicyLock } from './measure.mjs';
 import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
@@ -71,6 +80,40 @@ import { settle } from '../kit/heap.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 const MONTH = 30 * 86400;
+
+// The outcome of a script spend that has no collateral to set aside, or
+// cannot be paid without it.
+export const INFEASIBLE_COLLATERAL = 'infeasible-collateral';
+
+// The UTxO a script spend sets aside as its collateral under `rule` (setting
+// collateralChoice 'smallest'), or null: the smallest UTxO eligible under the
+// rule (replay/collateral.mjs), the spend's fixed inputs excluded, ties by
+// txid#index, that can carry the total collateral of the largest fee the
+// spend can have (one transaction of maxTxSize, with the intent's script fee)
+// with a return output at its minimum, so that it serves every fee a
+// transaction within the size limit reaches.
+export function collateralToSetAside(params, state, intent, rule) {
+  const fixedRefs = new Set(intent.fixed ? intent.fixed.inputs.map((x) => x.ref) : []);
+  const eligible = eligibleCollateral(state, params, rule, { exclude: fixedRefs, observedFee: intent.observed ? intent.observed.fee : null });
+  const scriptFee = intent.fixed ? intent.fixed.scriptFee || 0n : 0n;
+  const total = totalCollateralFor(params, minFee(params, params.maxTxSize, scriptFee));
+  return eligible.find((u) => carriesCollateral(params, u, state.changeAddress, total, { exactZero: false })) || null;
+}
+
+// The set-aside, applied before any method selects: for a script spend, the
+// collateral under the arm's rule leaves the pool the method selects from, as
+// a wallet keeps a dedicated collateral UTxO, and the method assembles every
+// transaction with it (opts.collateral). Returns { ok: true, pool, collateral }
+// (the state itself and null for a spend that runs no script), or { ok: false,
+// reason }: 'none-eligible', no UTxO to set aside, or 'payment', the balance
+// does not suffice without it (replay/feasible.mjs).
+export function setAside(T, params, state, intent, rule) {
+  if (!intent.collateral.required) return { ok: true, pool: state, collateral: null };
+  const u = collateralToSetAside(params, state, intent, rule);
+  if (!u) return { ok: false, reason: 'none-eligible' };
+  if (!replaySuffices(T, state, params, intent, { aside: u.ref }).suffices) return { ok: false, reason: 'payment' };
+  return { ok: true, pool: removeSpent(state, [u.ref]), collateral: u };
+}
 
 // The number of the intent's fixed vkey witnesses that no fixed input's key
 // accounts for (stake keys, required signers, voters): with the inputs' keys
@@ -125,7 +168,7 @@ export async function replay(T, params, source, job) {
   }
   const settings = armSettings(arm, variant, repetition);
   let state = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress ?? null, utxos: source.start, at: { slot: null, time: source.windowStart }, franken: source.franken });
-  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, withdrawalDeposits: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
+  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, infeasibleCollateral: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, withdrawalDeposits: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
   // The change address the source names at a point of the replay.
   const follow = (address) => {
     if (address === undefined || address === state.changeAddress) return;
@@ -255,9 +298,8 @@ export async function replay(T, params, source, job) {
     if (intent.invalid) {
       const f = forfeit(params, state, intent, opts.collateralRule);
       if (!f.ok) {
-        counts.failed++;
-        counts.byClass[CLASSES.collateral] = (counts.byClass[CLASSES.collateral] || 0) + 1;
-        out.spends.push({ ...rec, outcome: 'failed', class: CLASSES.collateral, detail: f.detail });
+        counts.infeasibleCollateral++;
+        out.spends.push({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: 'none-eligible', detail: f.detail });
       } else {
         state = f.state;
         counts.forfeits++;
@@ -275,7 +317,14 @@ export async function replay(T, params, source, job) {
       continue;
     }
 
-    const r = await buildOne(T, params, state, intent, method, opts);
+    const aside = setAside(T, params, state, intent, opts.collateralRule);
+    if (!aside.ok) {
+      counts.infeasibleCollateral++;
+      out.spends.push({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: aside.reason });
+      continue;
+    }
+
+    const r = await buildOne(T, params, state, intent, method, opts, aside);
     if (!r.ok) {
       if (r.class === NOT_REPLAYABLE) counts.notReplayable++;
       else {
@@ -352,12 +401,13 @@ export async function replay(T, params, source, job) {
   return out;
 }
 
-// One intent by the method, checked by the kit and applied.
-async function buildOne(T, params, state, intent, method, opts) {
+// One intent by the method from the pool the set-aside leaves (setAside),
+// checked by the kit against the whole state and applied.
+async function buildOne(T, params, state, intent, method, opts, aside) {
   const t0 = performance.now();
   let r;
   try {
-    r = checkResult(method, await method.build(state, intent, params, opts));
+    r = checkResult(method, await method.build(aside.pool, intent, params, aside.collateral ? { ...opts, collateral: aside.collateral } : opts));
   } catch (e) {
     if (e instanceof StopPoint) throw e;
     r = { ok: false, class: CLASSES.other, detail: String(e && (e.message || e)) };
@@ -366,6 +416,13 @@ async function buildOne(T, params, state, intent, method, opts) {
   if (!r.ok) return { ok: false, class: r.class, detail: r.detail, ms };
   const last = r.txs[r.txs.length - 1];
   const inspected = inspectTx(last.bytes);
+  // The collateral of a script spend is the UTxO set aside, and no other.
+  if (aside.collateral) {
+    for (const t of r.txs) {
+      const c = t === last ? inspected.collateralInputs : inspectTx(t.bytes).collateralInputs;
+      if (c.length !== 1 || c[0].ref !== aside.collateral.ref) return { ok: false, class: CLASSES.other, detail: `${method.name}: a transaction's collateral is not the UTxO set aside`, ms };
+    }
+  }
   const requested = requestedIndexes(intent, inspected);
   const fixedIns = fixedInputValues(intent);
   const heldInputs = fixedIns.filter((x) => x.held && state.utxos.has(x.ref)).map((x) => x.ref);
@@ -398,7 +455,9 @@ async function burstPass(T, params, start, events, method, opts) {
       continue;
     }
     if (!replaySuffices(T, s, params, intent).suffices) break;
-    const r = await buildOne(T, params, s, intent, method, opts);
+    const aside = setAside(T, params, s, intent, opts.collateralRule);
+    if (!aside.ok) break;
+    const r = await buildOne(T, params, s, intent, method, opts, aside);
     if (!r.ok) break;
     const heldIns = fixedInputValues(intent).filter((x) => x.held && s.utxos.has(x.ref)).map((x) => x.ref);
     s = removeSpent(s, [...r.txs.flatMap((t) => t.walletInputs), ...heldIns]);

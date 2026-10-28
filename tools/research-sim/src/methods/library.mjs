@@ -23,7 +23,8 @@
 //               consumed), reference inputs, certificates, withdrawals, the
 //               mint field, validity, required signers, votes, proposals, the
 //               treasury fields, auxiliary data and witnesses
-//   collateral  collateral for a script spend, chosen by the arm's rule
+//   collateral  collateral for a script spend: the UTxO the engine set aside
+//               under the arm's rule before selection (opts.collateral)
 //   implicit    withdrawals, refunds, deposits, a donation, a mint or a burn
 //   outputData  a requested output that carries a datum or a script reference
 // Each adapter states which of them its replay path covers (REPLAY_COVERAGE),

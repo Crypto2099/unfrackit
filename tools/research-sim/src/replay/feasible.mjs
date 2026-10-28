@@ -15,6 +15,10 @@
 //     outputs as their own bytes and the intent's fixed bytes under maxTxSize.
 // An intent that fails it is recorded as infeasible by balance and is not a
 // selector failure; the arm's state is left as it was.
+//
+// `aside`: the ref of a UTxO set aside as the spend's collateral (replay/
+// engine.mjs setAside), left out of the spendable UTxOs; the tokens the wallet
+// keeps are still classified over its whole holding.
 
 import { treatmentParams } from '../treatment/bridge.mjs';
 import { selectAdapterFor } from '../battery/suffices.mjs';
@@ -24,12 +28,12 @@ import { fixedInputValues } from '../kit/replay.mjs';
 
 const key = (a) => `${a.policy}.${a.name}`;
 
-export function replaySuffices(T, state, params, intent, { settings = {} } = {}) {
+export function replaySuffices(T, state, params, intent, { settings = {}, aside = null } = {}) {
   const tp = treatmentParams(T, params);
   const adapter = selectAdapterFor(T, state, tp);
   const fixedIns = fixedInputValues(intent);
   const fixedRefs = new Set(fixedIns.map((x) => x.ref));
-  const own = spendable(state).filter((u) => !fixedRefs.has(u.ref));
+  const own = spendable(state).filter((u) => !fixedRefs.has(u.ref) && u.ref !== aside);
   const left = new Map();
   const add = (a) => {
     const e = left.get(key(a));

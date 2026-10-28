@@ -33,14 +33,14 @@
 // A replayed intent's fixed inputs (non-wallet inputs and the wallet's held
 // UTxOs it spends) bring their value into the balance beside the selector's
 // inputs, and its transaction is assembled by kit/replay.mjs with the intent's
-// fixed parts and, for a script spend, collateral under the arm's rule
-// (replay/collateral.mjs).
+// fixed parts and, for a script spend, the collateral the engine set aside
+// before selection (replay/engine.mjs setAside), which is not in the state the
+// selector was given; the asset classes count its tokens with the wallet's.
 
 import { treatmentParams } from '../treatment/bridge.mjs';
 import { adapterFor } from '../treatment/wallet.mjs';
 import { assembleAtMinimumFee } from '../kit/assemble.mjs';
-import { assembleReplayAtMinimumFee, fixedInputValues, collateralFrom } from '../kit/replay.mjs';
-import { eligibleCollateral } from '../replay/collateral.mjs';
+import { assembleReplayAtMinimumFee, fixedInputValues, setAsideCollateralFor } from '../kit/replay.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { cmpRef } from '../state/state.mjs';
 import { valueSize } from '../history/value.mjs';
@@ -86,9 +86,9 @@ function leftover(inputs, requested, implicit, order) {
 // Builds the spend: the given inputs, the intent's requested outputs (their
 // address, coin and assets, or for a replayed intent their own bytes), and
 // the policy's change. Returns { ok, bytes, fee, size, k, outputs } or
-// { ok: false, class, detail }. collateralRule: the arm's, for a replayed
+// { ok: false, class, detail }. collateral: the UTxO set aside, for a replayed
 // script spend.
-export function buildWithChange(T, { state, params, inputs, intent, policy, collateralRule = null }) {
+export function buildWithChange(T, { state, params, inputs, intent, policy, collateral = null }) {
   if (!CHANGE_POLICIES.includes(policy)) throw new Error(`unknown change policy ${policy}`);
   const tp = treatmentParams(T, params);
   const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
@@ -101,7 +101,7 @@ export function buildWithChange(T, { state, params, inputs, intent, policy, coll
   // A non-wallet fixed input's assets are classified with the wallet's (the
   // wallet's held fixed inputs are already in the state).
   const outside = fixedIns.filter((x) => !state.utxos.has(x.ref)).map((x) => ({ assets: x.assets }));
-  const classes = T.planner.classifyAssets([...state.utxos.values(), { assets: (implicit.mint || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }, ...outside]);
+  const classes = T.planner.classifyAssets([...state.utxos.values(), ...(collateral ? [collateral] : []), { assets: (implicit.mint || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }, ...outside]);
   const withCls = tokens.map((t) => ({ ...t, cls: classes.get(key(t)).cls }));
   const settings = T.planner.mergeSettings(policy === 'naive' ? { control: 'naive' } : {});
   const ctx = { settings, params: tp, adapter };
@@ -139,13 +139,7 @@ export function buildWithChange(T, { state, params, inputs, intent, policy, coll
   };
   let r;
   if (replay) {
-    let collateralFor = () => null;
-    if (intent.collateral.required) {
-      if (!collateralRule) throw new Error('a script spend needs the arm\'s collateral rule');
-      const exclude = new Set([...inputs.map((u) => u.ref), ...fixedIns.map((x) => x.ref)]);
-      const eligible = eligibleCollateral(state, params, collateralRule, { exclude, observedFee: intent.observed ? intent.observed.fee : null });
-      collateralFor = collateralFrom(params, eligible, change);
-    }
+    const collateralFor = setAsideCollateralFor(params, intent, collateral, change);
     r = assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor, walletCreds: new Set([...state.utxos.values()].map((u) => u.cred)) });
     if (r.ok) r.outputs = [...requested, ...r.change];
   } else {

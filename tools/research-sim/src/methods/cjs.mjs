@@ -117,13 +117,14 @@
 //                    the observed ones; the callbacks return no redeemers
 //                    (types.ts:43).
 //   collateral       not input selection's either: for a script spend, the
-//                    UTxO the arm's rule chooses (replay/collateral.mjs:
-//                    the smallest eligible UTxO that is not an input of the
-//                    spend, with a return output and the total-collateral
-//                    field) for the skeleton's inputs and fee, in every
-//                    skeleton the callbacks assemble and in the final
-//                    transaction. When the rule names none, the spend fails
-//                    with class collateral at that point.
+//                    UTxO the engine set aside before selection under the
+//                    arm's rule (replay/engine.mjs setAside), with a return
+//                    output and the total-collateral field, in every skeleton
+//                    the callbacks assemble and in the final transaction. It
+//                    is not among the UTxOs the library is given. Should it
+//                    fail to cover a skeleton's fee (only above the largest
+//                    fee within the size limit), the spend fails with class
+//                    collateral at that point.
 // A part the kit cannot write (a body field 6, protocol parameter updates,
 // which no Conway transaction carries) makes the intent not replayable for
 // this adapter, counted apart from build failures. A battery spend carries
@@ -136,8 +137,7 @@ import { join, dirname } from 'node:path';
 import { roundRobinRandomImprove, InputSelectionError, InputSelectionFailure } from '@cardano-sdk/input-selection';
 import { CLASSES } from '../kit/check.mjs';
 import { assembleOnce, assembleAtMinimumFee, outputBytes } from '../kit/assemble.mjs';
-import { assembleReplayOnce, assembleReplayAtMinimumFee, collateralFrom, replayRefusal, NotReplayable } from '../kit/replay.mjs';
-import { eligibleCollateral } from '../replay/collateral.mjs';
+import { assembleReplayOnce, assembleReplayAtMinimumFee, setAsideCollateralFor, replayRefusal, NotReplayable } from '../kit/replay.mjs';
 import { addressTextOf } from '../state/utxo.mjs';
 import { inspectTx, unspentOutputParts } from '../kit/inspect.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
@@ -162,8 +162,8 @@ const ERROR_CLASSES = Object.freeze({
   [InputSelectionFailure.MaximumInputCountExceeded]: CLASSES.maxInputs
 });
 
-// A replayed skeleton for which the arm's collateral rule names no
-// collateral, thrown out of a callback so that the selection stops there.
+// A replayed skeleton whose fee the collateral set aside cannot cover, thrown
+// out of a callback so that the selection stops there.
 export class NoCollateral extends Error {
   constructor(detail) {
     super(detail);
@@ -235,39 +235,33 @@ export function cjsImplicitValue(imp) {
 // A replayed skeleton's transaction as the kit assembles it: the wallet
 // inputs among `refs` (every input of the skeleton, the fixed ones included),
 // the intent's requested outputs and fixed parts, the change, and for a script
-// spend the collateral the arm's rule chooses for those inputs at that fee.
-export function replayAssembler(T, { state, params, intent, collateralRule }) {
-  if (intent.collateral.required && !collateralRule) throw new Error('cjs-rrri: a script spend needs the arm\'s collateral rule');
+// spend the collateral the engine set aside, at that fee.
+export function replayAssembler(T, { state, params, intent, collateral }) {
   const fixedRefs = new Set(intent.fixed ? intent.fixed.inputs.map((x) => x.ref) : []);
   const walletCreds = new Set([...state.utxos.values()].map((u) => u.cred));
-  const observedFee = intent.observed ? intent.observed.fee : null;
   const walletInputs = (refs) => recordsOf(state, refs.filter((r) => !fixedRefs.has(r)));
-  const collateralFor = (refs) => {
-    if (!intent.collateral.required) return () => null;
-    const eligible = eligibleCollateral(state, params, collateralRule, { exclude: new Set(refs), observedFee });
-    return collateralFrom(params, eligible, state.changeAddress);
-  };
+  const collateralFor = setAsideCollateralFor(params, intent, collateral, state.changeAddress);
   // At a given fee: { ok, bytes, size, k } or the collateral failure.
   const at = (refs, change, fee) => {
-    const co = collateralFor(refs)(fee);
+    const co = collateralFor(fee);
     if (co && !co.ok) return co;
     const a = assembleReplayOnce(T, { intent, inputs: walletInputs(refs), change, collateral: co ? co.collateral : null, fee, walletCreds });
     return { ok: true, bytes: a.bytes, size: inspectTx(a.bytes).size, k: a.k };
   };
   // At its least self-covering fee: { ok, fee, ... } or the collateral failure.
-  const atMinimumFee = (refs, change) => assembleReplayAtMinimumFee(T, params, { intent, inputs: walletInputs(refs), changeFor: () => ({ ok: true, change }), collateralFor: collateralFor(refs), walletCreds });
+  const atMinimumFee = (refs, change) => assembleReplayAtMinimumFee(T, params, { intent, inputs: walletInputs(refs), changeFor: () => ({ ok: true, change }), collateralFor, walletCreds });
   return { fixedRefs, walletInputs, at, atMinimumFee };
 }
 
 // The callbacks for one spend. `trace` collects what the checks read: every
 // cost the library was given and every bundle it asked about. A replayed
-// intent's skeletons are assembled with its fixed parts and collateral
-// (replayAssembler, under collateralRule); a collateral the rule cannot
-// provide stops the selection with NoCollateral.
-export function exactConstraints(T, { state, params, intent, scriptFee = 0n, bundleCoin = SIM_SETTINGS.cjsBundleCoin, trace = null, collateralRule = null }) {
+// intent's skeletons are assembled with its fixed parts and the collateral set
+// aside (replayAssembler); a fee that collateral cannot cover stops the
+// selection with NoCollateral.
+export function exactConstraints(T, { state, params, intent, scriptFee = 0n, bundleCoin = SIM_SETTINGS.cjsBundleCoin, trace = null, collateral = null }) {
   if (bundleCoin !== 'widest') throw new Error(`cjs: bundle coin ${bundleCoin} is not implemented`);
   const C = T.CSL;
-  const replay = intent.source === 'replay' ? replayAssembler(T, { state, params, intent, collateralRule }) : null;
+  const replay = intent.source === 'replay' ? replayAssembler(T, { state, params, intent, collateral }) : null;
   const refsOf = (sk) => [...sk.inputs].map(refOfUtxo);
   const requested = intent.requested.map((o) => ({ address: o.address, coin: o.coin, assets: o.assets }));
   const change = (txOut) => ({ address: state.changeAddress, coin: txOut.value.coins, assets: assetsOf(txOut.value.assets) });
@@ -331,9 +325,9 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
         const rng = makeRng(opts.seed);
         random = () => rng.next();
       }
-      const collateralRule = opts.collateralRule || null;
+      const collateral = opts.collateral || null;
       const trace = { costs: [], bundles: [] };
-      const constraints = exactConstraints(T, { state, params, intent, bundleCoin, trace, collateralRule });
+      const constraints = exactConstraints(T, { state, params, intent, bundleCoin, trace, collateral });
       const changeAddressResolver = { resolve: async (selection) => selection.change.map((c) => ({ ...c, address: state.changeAddress })) };
       const preSelected = replay ? cjsPreSelected(intent) : [];
       const fixedRefs = new Set(preSelected.map(refOfUtxo));
@@ -358,7 +352,7 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
       for (const r of fixedRefs) if (!chosen.has(r)) return { ok: false, class: CLASSES.other, detail: `the library left out the pre-selected input ${r}` };
       const inputs = recordsOf(state, refs.filter((r) => !fixedRefs.has(r)));
       if (opts.changePolicy !== 'default') {
-        const r = buildWithChange(T, { state, params, inputs, intent, policy: opts.changePolicy, collateralRule });
+        const r = buildWithChange(T, { state, params, inputs, intent, policy: opts.changePolicy, collateral });
         if (!r.ok) return { ok: false, class: r.class, detail: `${opts.changePolicy} change on the library's inputs: ${r.detail}` };
         return { ok: true, kind: 'single', txs: [txRecord(r.bytes, inputs.map((u) => u.ref), r.fee, r.size, r.k)] };
       }

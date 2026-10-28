@@ -96,9 +96,10 @@ test('an adapter refuses only the parts its statement leaves out', () => {
 // collateral rules and every change option; and constructed T6, T7 and T8
 // intents for the parts the streams do not carry: a burn, a deregistration
 // with its refund and a reward withdrawal, a treasury donation, and a body
-// field the kit cannot write. Each spend builds, fails with a class, or is not
-// replayable; every built one passes the kit's checks (the engine runs them)
-// and its four negative controls are caught.
+// field the kit cannot write. Each spend builds, fails with a class, is
+// infeasible (by balance or for collateral), or is not replayable; every built
+// one passes the kit's checks (the engine runs them) and its four negative
+// controls are caught.
 
 const T = await treatment();
 const ADA = 1000000n;
@@ -135,7 +136,7 @@ function controlsOf(source, r) {
   return bad;
 }
 
-const OUTCOMES = new Set(['built', 'failed', 'not-replayable', 'infeasible', 'forfeit']);
+const OUTCOMES = new Set(['built', 'failed', 'not-replayable', 'infeasible', 'infeasible-collateral', 'forfeit']);
 function tally(r) {
   const o = {};
   for (const s of r.spends) {
@@ -176,14 +177,15 @@ test('cardano-js-sdk replays the synthetic streams\' script spends, certificates
           // The library's fee is the final transaction's minimum: its
           // callbacks saw the fixed parts and the collateral.
           for (const f of r.fees) assert.equal(f.fee, f.finalMinFee);
-          for (const type of ['T6', 'T7', 'T8']) if (!(name === 'M7' && rule === 'ledger' && type === 'T6')) assert.ok(o[`${type}:built`] >= 1, `${name} ${rule}: no ${type} built`);
+          for (const type of ['T6', 'T7', 'T8']) assert.ok(o[`${type}:built`] >= 1, `${name} ${rule}: no ${type} built`);
         }
       }
     }
   }
-  // M7 holds no pure-ADA UTxO of 5 ADA or more outside the spend: under the
-  // ledger rule its script spend fails with class collateral, never other.
-  assert.equal(seen['M7 ledger default']['T6:failed:collateral'], 1);
+  // Under the ledger rule the library would spend every pure-ADA UTxO of 5
+  // ADA or more M7 holds; with the collateral set aside before selection, its
+  // script spend builds.
+  assert.equal(seen['M7 ledger default']['T6:built'], 1);
   t.diagnostic(JSON.stringify(seen));
 });
 

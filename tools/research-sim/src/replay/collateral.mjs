@@ -39,6 +39,10 @@
 // total collateral is ceiling(collateralPercent * fee / 100). A UTxO whose
 // return would fall under its minimum is passed over for the next, unless the
 // return would be exactly zero, when the transaction carries no return output.
+// A replayed spend makes the choice before selection and sets the UTxO aside
+// from the pool its method selects from (replay/engine.mjs setAside), so the
+// choice is made for the largest fee the spend can have; a phase-2-invalid
+// spend's forfeit makes it for the forfeit.
 
 import { spendable, cmpRef } from '../state/state.mjs';
 

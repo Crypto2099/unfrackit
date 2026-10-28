@@ -58,9 +58,11 @@ export const SIM_SETTINGS = Object.freeze({
   // selector; random layouts seeded with the repetition number.
   rng: 'mulberry32',
   // Which collateral a replayed script spend uses. 'smallest': the smallest
-  // UTxO eligible under the arm's rule that is not an input of the spend,
-  // ties by txid#index, always with a collateral return output and the
-  // total-collateral field.
+  // UTxO eligible under the arm's rule that is not a fixed input of the spend
+  // and covers the collateral of the largest fee the spend can have, ties by
+  // txid#index, set aside before selection so that no method spends it as an
+  // input, always with a collateral return output and the total-collateral
+  // field.
   collateralChoice: 'smallest',
   // Where the in-burst constraint applies. 'separate': only in a separate
   // pass at each parallel burst, from the state at its start, for burst

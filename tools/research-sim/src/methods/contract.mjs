@@ -7,7 +7,11 @@
 //   { name, version, deterministic, build(state, intent, params, opts) }
 //
 //   opts     { seed, changePolicy ('default' | 'layout' | 'single' |
-//            'naive'), collateralRule, absorb }
+//            'naive'), collateralRule, absorb, collateral }
+//            collateral: for a replayed script spend, the UTxO the engine set
+//            aside under the arm's rule (replay/engine.mjs setAside); the
+//            state the method is given does not hold it, and every
+//            transaction the method assembles carries it as collateral
 //   result   { ok: true, kind ('single' | 'chain'), txs [{ bytes (hex),
 //            walletInputs [ref], fee, size, k, roles }] }
 //            or { ok: false, class, detail }
@@ -16,10 +20,11 @@
 // kit's checks and applies each transaction (kit/apply.mjs); a method never
 // sees the kit's verdict before it returns. A method's own exception and a
 // failed kit check are both build failures; a method maps its library's
-// errors to the failure classes (kit/check.mjs CLASSES), and two outcomes are
-// counted apart from build failures: 'not-replayable', an intent the method
-// has no way to express, and the engine's own 'infeasible' (the balance does
-// not suffice).
+// errors to the failure classes (kit/check.mjs CLASSES), and three outcomes
+// are counted apart from build failures: 'not-replayable', an intent the
+// method has no way to express, and the engine's own 'infeasible' (the balance
+// does not suffice) and 'infeasible-collateral' (a script spend with no
+// collateral to set aside, or that cannot be paid without it).
 
 import { CLASSES } from '../kit/check.mjs';
 

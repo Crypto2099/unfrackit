@@ -11,7 +11,8 @@
 // Ties go to the lower txid#index. Change: the layout-preserving policy
 // unless the options name another. The transaction is assembled by the
 // ledger kit; a replayed intent's fixed inputs count toward what it needs, and
-// a script spend's collateral is chosen by the arm's rule (opts.collateralRule).
+// a script spend's collateral is the UTxO the engine set aside before
+// selection (opts.collateral), which the state it is given does not hold.
 
 import { buildWithChange } from './change.mjs';
 import { spendable, cmpRef } from '../state/state.mjs';
@@ -71,7 +72,7 @@ export function testLargestMethod(T) {
       const attempt = () => {
         if (chosen.length * 36 > params.maxTxSize) return { ok: false, class: CLASSES.txSize, detail: `${chosen.length} inputs exceed the size limit` };
         if ((!chosen.length && !fixedIns.length) || coin + fixedCoin + intent.implicit.withdrawals + intent.implicit.refunds < reqCoin + floorFee) return { ok: false, class: CLASSES.balance, detail: 'the inputs do not cover the requested coin' };
-        return buildWithChange(T, { state, params, inputs: chosen, intent, policy, collateralRule: opts.collateralRule || null });
+        return buildWithChange(T, { state, params, inputs: chosen, intent, policy, collateral: opts.collateral || null });
       };
       let last = attempt();
       for (const u of spend) {

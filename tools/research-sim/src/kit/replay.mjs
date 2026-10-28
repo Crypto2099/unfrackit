@@ -237,19 +237,39 @@ export function assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFo
   return leastSelfCoveringFee(at, minFee(params, 0, scriptFee));
 }
 
+// Whether UTxO `u` can carry `total` lovelace of collateral: its return
+// output, at the return address, meets its minimum, or is exactly zero with
+// no tokens (when exactZero).
+export function carriesCollateral(params, u, returnAddress, total, { exactZero = true } = {}) {
+  if (u.coin < total) return false;
+  const retCoin = u.coin - total;
+  if (retCoin === 0n && !u.assets.length) return exactZero;
+  const b = changeOutputBytes({ address: returnAddress, coin: retCoin, assets: u.assets });
+  return retCoin >= outputMinimum(params, b.length);
+}
+
 // The collateral for a fee from a list of eligible UTxOs, smallest first: the
-// first whose return output, at the return address, meets its minimum (or is
-// exactly zero with no tokens).
+// first that can carry it.
 export function collateralFrom(params, eligible, returnAddress) {
   return (fee) => {
     const total = totalCollateralFor(params, fee);
-    for (const u of eligible) {
-      if (u.coin < total) continue;
-      const retCoin = u.coin - total;
-      if (retCoin === 0n && !u.assets.length) return { ok: true, collateral: { utxo: u, returnAddress, total } };
-      const b = changeOutputBytes({ address: returnAddress, coin: retCoin, assets: u.assets });
-      if (retCoin >= outputMinimum(params, b.length)) return { ok: true, collateral: { utxo: u, returnAddress, total } };
-    }
+    for (const u of eligible) if (carriesCollateral(params, u, returnAddress, total)) return { ok: true, collateral: { utxo: u, returnAddress, total } };
     return { ok: false, class: CLASSES.collateral, detail: `no eligible collateral UTxO covers ${total} lovelace of collateral with its return output` };
+  };
+}
+
+// A replayed spend's collateral for a fee, as every method's skeletons and
+// final transaction take it: null when the intent runs no script, otherwise
+// the UTxO the engine set aside before selection (replay/engine.mjs,
+// setAside), its return output at the return address. The engine chose it to
+// carry the collateral of the largest fee a transaction within the size limit
+// can have, so it fails only for a fee above that.
+export function setAsideCollateralFor(params, intent, collateral, returnAddress) {
+  if (!intent.collateral.required) return () => null;
+  if (!collateral) throw new Error('a script spend needs the collateral the engine sets aside');
+  return (fee) => {
+    const total = totalCollateralFor(params, fee);
+    if (carriesCollateral(params, collateral, returnAddress, total)) return { ok: true, collateral: { utxo: collateral, returnAddress, total } };
+    return { ok: false, class: CLASSES.collateral, detail: `the collateral set aside does not cover ${total} lovelace of collateral with its return output` };
   };
 }
