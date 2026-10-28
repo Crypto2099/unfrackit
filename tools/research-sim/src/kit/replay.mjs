@@ -17,7 +17,8 @@
 // list items (listItems), its required signers (requiredSigners), the wallet
 // keys a replayed transaction is witnessed for (replayWitnessKeys), the
 // scripts it holds (intentScripts) and a redeemer's target as a key
-// (redeemerKey, targetKey).
+// (redeemerKey, targetKey); and the comparison the engine makes of every
+// built transaction's redeemers with the intent's (missingRedeemers).
 //
 // Body:
 //   0   inputs: the wallet inputs and the intent's fixed inputs, sorted by
@@ -63,6 +64,7 @@ import { blake2b256, blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw, head, encUint, encBytes, encArray, encTag, asBytes, TRUE, NULL } from '../history/cbor.mjs';
 import { encodeOutput } from '../history/output.mjs';
 import { addressBytes } from '../history/address.mjs';
+import { redeemerTargets, redeemers as txRedeemers, certificates as txCertificates } from '../history/tx.mjs';
 import { unspentOutputParts, inspectTx } from './inspect.mjs';
 import { minFee } from './fee.mjs';
 import { leastSelfCoveringFee } from './assemble.mjs';
@@ -240,6 +242,64 @@ export function targetKey(t) {
   }
 }
 export const redeemerKey = (r) => targetKey(r.target);
+
+// What a redeemer redeems, as a key two transactions' redeemers are compared
+// by: its target's key (targetKey), except that a certificate is named by its
+// kind and the credential it carries, and a voter by its kind and hash, so
+// that neither depends on its place or its encoding. certAt(i) names the
+// transaction's certificate i.
+const certificateIdentity = (buf, n) => {
+  const c = n.items[1];
+  const cred = c && c.mt === 4 && c.items.length === 2 && c.items[1].mt === 2 ? `${c.items[0].value}:${asBytes(c.items[1], 'credential').toString('hex')}` : c ? raw(buf, c).toString('hex') : '';
+  return `${n.items[0].value}:${cred}`;
+};
+const voterIdentity = (h) => {
+  const n = decode(Buffer.from(h, 'hex'));
+  return `${n.items[0].value}:${asBytes(n.items[1], 'voter').toString('hex')}`;
+};
+function purposeKey(target, certAt) {
+  if (target.kind === 'certificate') return `2:${certAt(target.index)}`;
+  if (target.kind === 'voter') return `4:${voterIdentity(target.voter)}`;
+  return targetKey(target);
+}
+
+// The number of the intent's redeemers that the built transaction (the
+// history reader's decoding of it, kit/inspect.mjs inspectTx(...).tx) has no
+// redeemer for: compared by tag and by the input, policy, reward account,
+// certificate, voter or proposal each redeems (purposeKey), the transaction's
+// pointers resolved as the reader resolves the observed transaction's
+// (history/tx.mjs redeemerTargets). The ledger rejects a transaction that
+// lacks a redeemer its Plutus scripts need: hasExactSetOfRedeemers fails with
+// MissingRedeemers (eras/alonzo/impl/src/Cardano/Ledger/Alonzo/Rules/
+// Utxow.hs:251-274), run by Babbage's UTXOW (eras/babbage/impl/src/Cardano/
+// Ledger/Babbage/Rules/Utxow.hs:376), which Conway's runs (eras/conway/impl/
+// src/Cardano/Ledger/Conway/Rules/Utxow.hs:209); the intent's redeemers are
+// those its observed transaction needed, and a replay keeps every purpose
+// they serve (its fixed inputs, mint, certificates, withdrawals, votes and
+// proposals). The engine runs it on every method's built transaction
+// (replay/engine.mjs buildOne).
+export function missingRedeemers(intent, tx) {
+  const f = intent.fixed;
+  if (!f || !f.redeemers.length) return 0;
+  const intentCerts = f.body[4] === undefined ? [] : listItems(f.body[4]).map((b) => certificateIdentity(b, decode(b)));
+  const builtCerts = txCertificates(tx).map((c) => certificateIdentity(tx.buf, { items: c.items }));
+  const targetOf = redeemerTargets(tx);
+  const have = new Map();
+  for (const r of txRedeemers(tx)) {
+    const t = targetOf(r);
+    if (!t) continue;
+    const k = purposeKey(t, (i) => builtCerts[i]);
+    have.set(k, (have.get(k) || 0) + 1);
+  }
+  let missing = 0;
+  for (const r of f.redeemers) {
+    const k = purposeKey(r.target, (i) => intentCerts[i]);
+    const n = have.get(k) || 0;
+    if (n > 0) have.set(k, n - 1);
+    else missing++;
+  }
+  return missing;
+}
 
 // Builder leftovers: parts the observed transaction's builder wrote that the
 // spend does not need and the ledger does not require. They are the network id

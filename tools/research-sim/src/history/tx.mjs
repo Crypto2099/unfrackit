@@ -247,6 +247,47 @@ export function redeemers(tx) {
   throw new CborError('redeemers: expected an array or a map');
 }
 
+// The item a redeemer pointer ({ tag, index }) of the transaction points at,
+// in the ledger's order of each list: inputs as a Set of TxIn (by transaction
+// id bytes, then index), policies as Map keys (by bytes), reward accounts by
+// network, then credential, then hash (compareRewardAccounts); voters by
+// constructor (committee, DRep, pool, eras/conway/impl/src/Cardano/Ledger/
+// Conway/Governance/Procedures.hs:351-355) and credential; certificates and
+// proposals in their listed order. Each target is { kind: 'input', ref },
+// { kind: 'policy', policy }, { kind: 'certificate', index },
+// { kind: 'withdrawal', account }, { kind: 'voter', voter (its bytes, hex) }
+// or { kind: 'proposal', index }; null for a pointer past its list or an
+// unknown tag. The history reader records an intent's redeemers by these
+// targets (history/intent.mjs), and the kit reads a built transaction's
+// redeemers by them (kit/replay.mjs missingRedeemers).
+export function redeemerTargets(tx) {
+  const ins = inputs(tx).sort((a, b) => (a.txid < b.txid ? -1 : a.txid > b.txid ? 1 : a.index - b.index));
+  const policies = [...new Set(mint(tx).map((a) => a.policy))].sort();
+  const wds = withdrawals(tx).sort((a, b) => compareRewardAccounts(Buffer.from(a.account, 'hex'), Buffer.from(b.account, 'hex')));
+  const RANK = { 1: 0, 0: 1, 3: 2, 2: 3, 4: 4 };
+  const vs = voters(tx).sort((a, b) => RANK[a.kind] - RANK[b.kind] || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
+  const nCerts = certificates(tx).length;
+  const nProps = proposals(tx).length;
+  return (r) => {
+    switch (r.tag) {
+      case 0:
+        return ins[r.index] ? { kind: 'input', ref: ins[r.index].ref } : null;
+      case 1:
+        return policies[r.index] ? { kind: 'policy', policy: policies[r.index] } : null;
+      case 2:
+        return r.index < nCerts ? { kind: 'certificate', index: r.index } : null;
+      case 3:
+        return wds[r.index] ? { kind: 'withdrawal', account: wds[r.index].account } : null;
+      case 4:
+        return vs[r.index] ? { kind: 'voter', voter: Buffer.from(vs[r.index].raw).toString('hex') } : null;
+      case 5:
+        return r.index < nProps ? { kind: 'proposal', index: r.index } : null;
+      default:
+        return null;
+    }
+  };
+}
+
 export const hasField = (tx, k) => tx.body.fields.has(k);
 export const intOf = asInt;
 export { decodeAt };

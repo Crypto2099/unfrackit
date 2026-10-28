@@ -54,7 +54,7 @@ import {
   referenceInputs,
   certificates,
   withdrawals,
-  compareRewardAccounts,
+  redeemerTargets,
   mint,
   proposals,
   voters,
@@ -172,38 +172,14 @@ function deposits(tx, ep, row) {
   return { deposits: dep, refunds: ref, dbNet, poolDerived };
 }
 
-// The ledger's order of redeemer pointers: inputs as a Set of TxIn (by
-// transaction id bytes, then index), policies as Map keys (by bytes), reward
-// accounts by network, then credential, then hash (tx.mjs
-// compareRewardAccounts); voters by constructor (committee, DRep, pool,
-// eras/conway/impl/src/Cardano/Ledger/Conway/Governance/Procedures.hs:351-355)
-// and credential; certificates and proposals in their listed order.
-function redeemerTargets(tx) {
-  const ins = inputs(tx).sort((a, b) => (a.txid < b.txid ? -1 : a.txid > b.txid ? 1 : a.index - b.index));
-  const policies = [...new Set(mint(tx).map((a) => a.policy))].sort();
-  const wds = withdrawals(tx).sort((a, b) => compareRewardAccounts(Buffer.from(a.account, 'hex'), Buffer.from(b.account, 'hex')));
-  const RANK = { 1: 0, 0: 1, 3: 2, 2: 3, 4: 4 };
-  const vs = voters(tx).sort((a, b) => RANK[a.kind] - RANK[b.kind] || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
-  const nCerts = certificates(tx).length;
-  const nProps = proposals(tx).length;
+// Each redeemer's target, in the ledger's order of redeemer pointers
+// (tx.mjs redeemerTargets); an unknown tag or a pointer past its list fails
+// the reader's check.
+function redeemerTarget(tx) {
+  const targetOf = redeemerTargets(tx);
   return (r) => {
-    const miss = () => fail(tx, `a redeemer (tag ${r.tag}, index ${r.index}) points past its list`);
-    switch (r.tag) {
-      case 0:
-        return ins[r.index] ? { kind: 'input', ref: ins[r.index].ref } : miss();
-      case 1:
-        return policies[r.index] ? { kind: 'policy', policy: policies[r.index] } : miss();
-      case 2:
-        return r.index < nCerts ? { kind: 'certificate', index: r.index } : miss();
-      case 3:
-        return wds[r.index] ? { kind: 'withdrawal', account: wds[r.index].account } : miss();
-      case 4:
-        return vs[r.index] ? { kind: 'voter', voter: hex(vs[r.index].raw) } : miss();
-      case 5:
-        return r.index < nProps ? { kind: 'proposal', index: r.index } : miss();
-      default:
-        return fail(tx, `unknown redeemer tag ${r.tag}`);
-    }
+    if (!(r.tag >= 0 && r.tag <= 5)) return fail(tx, `unknown redeemer tag ${r.tag}`);
+    return targetOf(r) || fail(tx, `a redeemer (tag ${r.tag}, index ${r.index}) points past its list`);
   };
 }
 
@@ -375,7 +351,7 @@ export function spendEvent(ctx, w, b) {
   const witnesses = {};
   if (otherW.length) witnesses[0] = hex(Buffer.concat([head(4, otherW.length), ...otherW.map((v) => v.raw)]));
   for (const k of tx.wits.order) if (k !== 0) witnesses[k] = hex(tx.wits.fields.get(k).raw);
-  const target = redeemerTargets(tx);
+  const target = redeemerTarget(tx);
   const reds = redeemers(tx).map((r) => ({ tag: r.tag, target: target(r), data: r.data, exUnits: r.exUnits }));
   const refIns = referenceInputs(tx).map((x) => ({ ref: x.ref, cbor: recordCbor(ctx, ctx.resolved.get(x.ref)) }));
   const refRows = new Map();

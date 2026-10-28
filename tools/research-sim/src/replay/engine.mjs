@@ -57,8 +57,14 @@
 //     method, whether the engine or its library chose the collateral);
 //     'not-replayable' (an intent the method cannot express) is counted
 //     apart. A failed kit check on a transaction carrying parts its adapter
-//     wrote after the library priced it names those parts in its detail. A
-//     failure leaves the state as it was, and the replay continues.
+//     wrote after the library priced it names those parts in its detail.
+//     Every method's built transaction has its redeemers compared with the
+//     intent's (kit/replay.mjs missingRedeemers): one that lacks a redeemer
+//     the intent carries fails, since the ledger rejects it, and its detail
+//     names "redeemers" with those parts, whatever the failure's class; when
+//     the kit's checks otherwise pass, the failure is class 'other' (check
+//     'redeemers'). A failure leaves the state as it was, and the replay
+//     continues.
 // At the first spend of each parallel burst, a separate pass builds the
 // burst's intents in order from the state at its start without spending any
 // output created earlier in the burst (burst feasibility, H-5 and H-6's rescue
@@ -92,7 +98,7 @@ import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
-import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers } from '../kit/replay.mjs';
+import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers, missingRedeemers } from '../kit/replay.mjs';
 import { checkResult, checkOptions, choosesOwnCollateral, NOT_REPLAYABLE } from '../methods/contract.mjs';
 import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
 import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
@@ -491,10 +497,15 @@ export async function replay(T, params, source, job) {
   return out;
 }
 
-// The parts a library's adapter wrote on its transaction after the library
-// priced it (the result's library.unpriced), by name, for a failed check's
-// detail; empty when there are none.
-const unpricedText = (r) => (r.library && r.library.unpriced && r.library.unpriced.length ? `; parts the library did not price: ${r.library.unpriced.join(', ')}` : '');
+// The parts of the intent the method's transaction carries unpriced or lacks,
+// by name, for a failure's detail: the parts its library's adapter wrote
+// after the library priced the transaction (the result's library.unpriced),
+// then "redeemers" when it lacks one the intent carries; empty when there are
+// none. Names only, so the record guard passes them.
+const unpricedText = (r, dropped) => {
+  const names = [...(r.library && r.library.unpriced ? r.library.unpriced : []), ...(dropped ? ['redeemers'] : [])];
+  return names.length ? `; parts the library did not price: ${names.join(', ')}` : '';
+};
 
 // One intent by the method from the pool the set-aside leaves (setAside, or
 // the whole pool for a library that chooses its own collateral), checked by
@@ -521,6 +532,9 @@ async function buildOne(T, params, state, intent, method, opts, aside) {
       if (c.length !== 1 || c[0].ref !== aside.collateral.ref) return { ok: false, class: CLASSES.other, detail: `${method.name}: a transaction's collateral is not the UTxO set aside`, ms };
     }
   }
+  // The intent's redeemers the transaction lacks (the intent's parts belong
+  // to the last transaction).
+  const dropped = missingRedeemers(intent, inspected.tx);
   const requested = requestedIndexes(intent, inspected);
   const fixedIns = fixedInputValues(intent);
   const heldInputs = fixedIns.filter((x) => x.held && state.utxos.has(x.ref)).map((x) => x.ref);
@@ -532,7 +546,8 @@ async function buildOne(T, params, state, intent, method, opts, aside) {
     requested,
     heldInputs
   });
-  if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}${unpricedText(r)}`, ms };
+  if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}${unpricedText(r, dropped)}`, ms };
+  if (dropped) return { ok: false, class: CLASSES.other, detail: `kit: redeemers: the transaction lacks ${dropped} of the intent's ${intent.fixed.redeemers.length} redeemers${unpricedText(r, dropped)}`, ms };
   return { ok: true, txs: r.txs, state: applied.state, inspected, requested, size: applied.checks[applied.checks.length - 1].facts.size, ms };
 }
 
