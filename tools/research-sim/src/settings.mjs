@@ -5,7 +5,10 @@
 // setting whose default is the reading this code implements, so a different
 // answer changes one value. A value that is not implemented is refused, never
 // silently ignored. The history reader keeps its own readings in
-// history/settings.mjs; these are the replay's and the batteries'.
+// history/settings.mjs, recorded in each history file's header; these are the
+// replay's and the batteries'. A phase-2-invalid transaction is the history
+// reader's to write or leave out (its setting phase2Invalid); the replay
+// engine replays every one a history holds as a forfeit.
 //
 // Every run records the values it ran under.
 
@@ -59,11 +62,6 @@ export const SIM_SETTINGS = Object.freeze({
   // ties by txid#index, always with a collateral return output and the
   // total-collateral field.
   collateralChoice: 'smallest',
-  // A phase-2-invalid transaction in a window. 'forfeit': replayed as an
-  // intent whose only effect is the forfeit of the observed total collateral,
-  // from collateral chosen under the arm's rule, its return output coming
-  // back to the wallet.
-  phase2Invalid: 'forfeit',
   // Where the in-burst constraint applies. 'separate': only in a separate
   // pass at each parallel burst, from the state at its start, for burst
   // feasibility and H-6's rescue test; the sequential replay continues for
@@ -107,7 +105,6 @@ const IMPLEMENTED = {
   substitutedChange: ['fail'],
   rng: ['mulberry32'],
   collateralChoice: ['smallest'],
-  phase2Invalid: ['forfeit'],
   burstPass: ['separate'],
   policyRecord: ['per-spend-and-window'],
   heldBytes: ['ledger'],

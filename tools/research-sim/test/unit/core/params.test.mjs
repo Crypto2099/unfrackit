@@ -66,7 +66,8 @@ test('the execution term and the reference-script term on constructed cases', ()
 
 test('the core settings refuse what is not implemented', () => {
   assert.equal(simSettings().changeAddress, 'latest-key-base-received');
-  assert.equal(Object.keys(SIM_SETTINGS).length, 18);
+  assert.equal(Object.keys(SIM_SETTINGS).length, 17);
+  assert.equal('phase2Invalid' in SIM_SETTINGS, false, 'the history reader\'s setting is the one source');
   assert.throws(() => simSettings({ recipients: 'enterprise' }), /not implemented/);
   assert.throws(() => simSettings({ nope: 1 }), /unknown setting/);
 });
