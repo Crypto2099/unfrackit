@@ -9,37 +9,37 @@
 
 // Fixed by the pre-registration.
 export const FIXED = {
-  peak_epochs: 73, // section 5.3: 73 epochs of 5 days make 365 days
-  peak_from_protocol_major: 4, // section 5.3: the peak search begins at the Mary hard fork, the first epoch with protocol_major >= 4
-  recent_days: 365, // section 5.3
-  guard: 200000, // section 5.4; it counts eligible keys taken in draw order
-  target_a: 2400, // section 5.4 (a)
-  target_b: 1000, // section 5.4 (b)
-  target_c: 600, // section 5.4 (c)
+  peak_epochs: 73, // the peak window: 73 epochs of 5 days make 365 days
+  peak_from_protocol_major: 4, // the peak search begins at the Mary hard fork, the first epoch with protocol_major >= 4
+  recent_days: 365, // the recent window: the 365 days up to the snapshot
+  guard: 200000, // the draw's guard per frame; it counts eligible keys taken in draw order
+  target_a: 2400, // the random sample's requirement (a): token-holding wallets
+  target_b: 1000, // requirement (b): token-holding wallets with at least spends_b_min spend events
+  target_c: 600, // requirement (c): token-holding wallets holding assets_c_min or more distinct assets
   target_d: 600, // the random sample's requirement (d): fragmented wallets
   frag_min_utxos: 10, // requirement (d): a fungible asset on 10 or more of the wallet's UTxOs makes it fragmented
-  spends_b_min: 5, // section 5.4: at least 5 spends in the window
-  assets_c_min: 100, // section 5.4: 100 or more tokens
-  ada_only_n: 1200, // section 5.4
-  strata_n: 50, // section 5.4
-  nft_top_n: 10, // section 5.4, part 3 of the strata rule
-  ft_n: 10, // section 5.4, part 2 of the strata rule: ten CoinGecko tokens that pass the floor
+  spends_b_min: 5, // requirement (b): at least 5 spends in the window
+  assets_c_min: 100, // requirement (c): 100 or more tokens
+  ada_only_n: 1200, // the ADA-only sample's size
+  strata_n: 50, // wallets per stratum
+  nft_top_n: 10, // part 3 of the strata rule: the ten NFT policies
+  ft_n: 10, // part 2 of the strata rule: ten CoinGecko tokens that pass the floor
   ft_floor: 1000, // part 2: a candidate held by fewer stake credentials of the recent frame at the snapshot is skipped
   sc_floor: 1000, // part 4: a stablecoin or tokenized commodity held by fewer, counted as in part 2, gives no stratum
-  utxo_cap: 20000, // section 5.5: more than 20,000 UTxOs is excluded
-  pay_cred_cap: 200, // section 5.5: more than 200 distinct payment credentials
-  script_share: '0.5', // section 5.5: more than half of the value
-  heavy_tx: 5000, // section 5.5: reported, not excluded
-  split_den: 5, // section 5.8: 20% exploration, the first floor(N / 5) of each sample
-  months: 12, // section 5.9
-  power_spends_pm: 30, // section 5.9
+  utxo_cap: 20000, // exclusion: more than 20,000 UTxOs is excluded
+  pay_cred_cap: 200, // exclusion: more than 200 distinct payment credentials
+  script_share: '0.5', // exclusion: more than half of the value
+  heavy_tx: 5000, // eligible wallets with more than 5,000 transactions in the window: reported, not excluded
+  split_den: 5, // the split: 20% exploration, the first floor(N / 5) of each sample
+  months: 12, // the window as 12 months, for the per-month profile cut points
+  power_spends_pm: 30, // profile cut points: power, 30 spends and 10 market interactions a month
   power_market_pm: 10,
-  active_spends_pm: 8, // section 5.9
+  active_spends_pm: 8, // active, 8 spends or 2 market interactions a month
   active_market_pm: 2,
-  typical_spends_pm: 1, // section 5.9
-  nft_heavy: 100, // section 5.9
-  ft_heavy: 10, // section 5.9
-  dex_active: 3, // section 5.9
+  typical_spends_pm: 1, // typical, 1 spend a month
+  nft_heavy: 100, // descriptive flag: 100 or more distinct NFTs held
+  ft_heavy: 10, // descriptive flag: 10 or more distinct fungible assets held
+  dex_active: 3, // descriptive flag: 3 or more DEX interactions in the window
   sim_utxo_over: 1000, // the simulator's live-fire wallets, condition 7: more than 1,000 UTxOs at the snapshot
   security_k: 2160 // confirm the snapshot hash once 2,160 more blocks exist (mainnet's security parameter)
 };
@@ -91,7 +91,7 @@ export const GENESIS = {
   preview: { k: 432, f: '0.05', epoch_length: 86400 }
 };
 
-// The peak window as frozen (section 5.3), computed from Koios epoch_info on
+// The peak window as frozen, computed from Koios epoch_info on
 // 2026-10-21 with the search beginning at the Mary hard fork. A mainnet run
 // compares the rule's result from db-sync with it and reports any
 // disagreement; the rule's result is used either way.

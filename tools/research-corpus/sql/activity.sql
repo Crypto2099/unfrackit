@@ -1,11 +1,10 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Sections 5.4 and 6.2 of the pre-registration: activity in each window,
--- receipts and spend events.
+-- Activity in each window: receipts and spend events.
 --
 -- A receipt is a transaction that creates an output of the wallet. A spend
--- event is a transaction with at least one wallet input (section 6.2). Read
+-- event is a transaction with at least one wallet input. Read
 -- as: a wallet input is an input consuming a wallet output at a key payment
 -- credential; a DEX order or similar output at a script address that carries
 -- the wallet's stake key is consumed by a third party's transaction, which

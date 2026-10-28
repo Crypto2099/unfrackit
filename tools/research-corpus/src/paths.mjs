@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Where outputs live. Data never enters the repository (sections 5.7 and 10.5):
+// Where outputs live. Data never enters the repository:
 // ${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/ holds
 //   secret/hmac.key            32 random bytes, made once by init-secret
 //   runs/<network>/<run-id>/   parameters, flow tables, sample lists, checks, manifest

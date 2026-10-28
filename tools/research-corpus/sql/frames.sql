@@ -1,8 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Sections 5.4 and 5.5 of the pre-registration: the two frames, their screens
--- and exclusions, and the flow table.
+-- The two frames, their screens and exclusions, and the flow table.
 --
 -- Frames are exact: every stake credential with a key hash, screened in SQL as
 -- of the snapshot block. Adam K. Dean's own wallets are eligible like any

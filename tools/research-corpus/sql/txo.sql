@@ -1,9 +1,9 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 6.1 of the pre-registration: each wallet's UTxO set at any block,
--- built once per run as a life table of every output that carries a stake
--- credential, and used for everything in bulk.
+-- Each wallet's UTxO set at any block, built once per run as a life table of
+-- every output that carries a stake credential, and used for everything in
+-- bulk.
 --
 -- A wallet is a key-hash stake credential, and its outputs are read as the
 -- tx_out rows with its stake_address_id. With the setting x1_enterprise on,
@@ -21,7 +21,7 @@
 -- NULL from Conway on; enterprise and Byron addresses get NULL
 -- (Era/Universal/Insert/Other.hs). So Byron outputs never enter this table.
 --
--- Held UTxOs are flagged, never removed (section 5.5): has_datum,
+-- Held UTxOs are flagged, never removed: has_datum,
 -- has_ref_script, script_pay.
 --
 -- consumed_tx is the transaction that spends the output, if it is at or before

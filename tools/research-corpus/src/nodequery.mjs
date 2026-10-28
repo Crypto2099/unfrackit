@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The node's own UTxO query by address (pre-registration section 8,
-// "Indexer correctness", and artifact A1), which does not depend on
-// cardano-db-sync: cardano-cli of the node's release, run inside the node's
-// container with `docker exec`, `query utxo --address ... --output-json`. It
-// reads the node's ledger state at its tip and changes nothing.
+// The node's own UTxO query by address, for the corpus source checks
+// (src/source-check.mjs), which does not depend on cardano-db-sync: cardano-cli
+// of the node's release, run inside the node's container with `docker exec`,
+// `query utxo --address ... --output-json`. It reads the node's ledger state at
+// its tip and changes nothing.
 
 import { execFileSync } from 'node:child_process';
 

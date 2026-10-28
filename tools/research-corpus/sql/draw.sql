@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.4 of the pre-registration: the draw and the samples.
+-- The draw and the samples.
 --
 -- Within each frame, eligible keys are ordered by draw_key (study.frame) and
 -- taken in that order. The guard is read as counting eligible keys taken in
@@ -23,8 +23,9 @@
 -- within the guard.
 --
 -- study.sample(frame, kind, stratum, sa_id, draw_rank, prevalence_member,
--- split, reconstruction_excluded, fragmented); draw_rank is the 1-based position in the
--- frame's draw order; reconstruction_excluded is set by the section 6.1 check.
+-- split, reconstruction_excluded, fragmented); draw_rank is the 1-based
+-- position in the frame's draw order; reconstruction_excluded is set by the
+-- reconstruction check (reconstruction-check.sql).
 
 -- @step draw
 -- @outputs study.draw_order study.draw_summary study.sample

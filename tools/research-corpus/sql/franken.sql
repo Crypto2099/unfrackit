@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.5 of the pre-registration: franken addresses, per sampled wallet
--- over its whole history up to the snapshot.
+-- Franken addresses, per sampled wallet over its whole history up to the
+-- snapshot.
 --
 -- In a wallet with two or more payment credentials, a payment credential is
 -- flagged if it never appears as an input in a transaction that also spends
@@ -44,7 +44,7 @@ SELECT c.sa_id, c.payment_cred, nc.n_creds, (a.sa_id IS NOT NULL) AS any_cospend
 CREATE INDEX franken_sa ON study.franken (sa_id);
 
 -- Over the sampled wallets only (case wallets are reported per wallet), less
--- those the section 6.1 check excluded. n_multi_cred_no_cospend counts the
+-- those the reconstruction check excluded. n_multi_cred_no_cospend counts the
 -- wallets the rule cannot flag because no pair of their key credentials ever
 -- co-spends: one real credential beside a third party's output at a mangled
 -- address (CIP-19, "Delegation part") is such a case.

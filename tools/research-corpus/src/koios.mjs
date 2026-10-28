@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Koios, for the cross-checks of artifact A1 (pre-registration sections 5.1
-// and 10.5) and for the second reading of the genesis parameters and the
-// epoch nonce that keys the draw. Requests are spaced at least 150 ms apart and a 429 (or a
-// 5xx) is retried after the server's Retry-After, else with exponential
-// backoff. On mainnet the study's own registered-tier token is sent, read from
+// Koios, for the corpus source checks (src/source-check.mjs) and for the second
+// reading of the genesis parameters and the epoch nonce that keys the draw.
+// Requests are spaced at least 150 ms apart and a 429 (or a 5xx) is retried
+// after the server's Retry-After, else with exponential backoff. On mainnet the
+// study's own registered-tier token is sent, read from
 // RESEARCH_CORPUS_KOIOS_TOKEN; on test networks no token is sent at all. The
 // token embedded in the app is never used.
 

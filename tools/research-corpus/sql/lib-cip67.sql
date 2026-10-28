@@ -1,10 +1,10 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- CIP-67 asset name labels, and the asset classification rule of the
--- pre-registration (section 6.2): a valid CIP-67 label decides (333 and 444
--- fungible; 222, 100 and 500 non-fungible unless more than one unit is held),
--- otherwise more than one unit held makes an asset fungible.
+-- CIP-67 asset name labels, and the study's asset classification rule: a
+-- valid CIP-67 label decides (333 and 444 fungible; 222, 100 and 500
+-- non-fungible unless more than one unit is held), otherwise more than one
+-- unit held makes an asset fungible.
 --
 -- CIP-67 (cardano-foundation/CIPs@befcdb75289cb6571ffba6dbece3249ad2bfd491,
 -- CIP-0067/README.md, "Specification"): the asset name starts with four bytes
@@ -70,7 +70,7 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
          END
 $$;
 
--- The rule of section 6.2 for an asset held as `qty` units in total by one
+-- The classification rule for an asset held as `qty` units in total by one
 -- wallet: fungible when its label is 333 or 444, or when more than one unit is
 -- held; otherwise non-fungible. (A 100, 222 or 500 label is non-fungible unless more
 -- than one unit is held; an unlabeled asset is fungible only above one unit;

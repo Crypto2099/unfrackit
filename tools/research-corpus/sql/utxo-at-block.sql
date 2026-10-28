@@ -1,9 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 6.1 of the pre-registration: a wallet's UTxO set at a block, three
--- ways, compared as sets of (transaction hash, index, lovelace, sorted
--- assets).
+-- A wallet's UTxO set at a block, three ways, compared as sets of (transaction
+-- hash, index, lovelace, sorted assets).
 --
 -- 1. The reference query, the pattern of db-sync's own UTxO-at-block query
 --    (cardano-db/src/Cardano/Db/Statement/DbTool.hs, queryUtxoAtBlockIdCoreStmt,
@@ -129,7 +128,8 @@ SELECT encode(ct.hash, 'hex') || '#' || t.out_index || ':' || t.value || ':' ||
 ) x ORDER BY x.line COLLATE "C";
 
 -- The reference query's lines for one wallet at block B, from db-sync's tables
--- alone, for the A1 comparisons (which run before any study table exists).
+-- alone, for the corpus source checks (src/source-check.mjs), which run before
+-- any study table exists.
 -- @query lines_ref
 SELECT x.* FROM (
 SELECT encode(ct.hash, 'hex') || '#' || o.index || ':' || o.value || ':' ||

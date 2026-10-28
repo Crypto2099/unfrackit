@@ -6,8 +6,8 @@
 // and package.json with the lockfile. The code draws the sample after the
 // freeze, so it is fixed on chain before any study query runs. Each file is
 // hashed byte for byte as it is stored: UTF-8, LF line endings, no byte-order
-// mark (pre-registration section 10.2); a file that is not is refused. The
-// Node version is printed with the lockfile.
+// mark, the form every digest of the study is taken over; a file that is not
+// is refused. The Node version is printed with the lockfile.
 
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';

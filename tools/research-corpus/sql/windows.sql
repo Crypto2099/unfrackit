@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.3 of the pre-registration: the two windows and the era report.
+-- The two windows and the era report.
 --
 -- Peak window: over runs of 73 consecutive epochs beginning no earlier than
 -- the Mary hard-fork epoch (native assets begin there), the run with the
@@ -89,8 +89,8 @@ SELECT r.first_epoch, r.last_epoch, r.n_tx_rule, r.n_tx_all, r.n_tx_valid, r.n_t
   JOIN study.epoch_counts l ON l.epoch_no = r.last_epoch
  WHERE r.rank = 1;
 
--- The most recent complete run of the same length, for the report (section 5.3
--- compares the peak with the most recent 73 epochs).
+-- The most recent complete run of the same length, for the report, which
+-- compares the peak with the most recent 73 epochs.
 -- @query latest_run
 SELECT first_epoch, last_epoch, n_tx_rule, n_tx_all, n_tx_valid, n_tx_view
   FROM study.peak_runs ORDER BY first_epoch DESC LIMIT 1;

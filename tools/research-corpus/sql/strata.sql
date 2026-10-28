@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.4 of the pre-registration: the purposive strata, including the
--- frozen NFT query and the frozen holder floor of the fungible part.
+-- The purposive strata, including the frozen NFT query and the frozen holder
+-- floor of the fungible part.
 --
 -- The list has four parts, processed in this order:
 --   1. the named projects (Clay Nation and SpaceBudz, NFT; NIGHT, IAG, HOSKY
@@ -47,15 +47,16 @@
 -- burn stays an NFT (CIP-25, "Update metadata link for a specific token");
 -- an asset ever outstanding in two or more units does not. db-sync inserts no
 -- ma_tx_mint rows for phase-2-invalid transactions, so no validity filter is
--- needed. Inside the surviving policies the per-wallet class of section 6.2
--- applies (study.is_fungible_l): per eligible recent-frame wallet and asset,
--- the total quantity held at the snapshot including held UTxOs. Count the
--- distinct wallets per policy holding at least one non-fungible asset of it;
--- drop the policies the list marks nft_top_exclude (the named NFT policies);
--- order by count descending, then policy bytes ascending; take ten. An
--- nft-top stratum takes holders of the assets the ranking counted: assets of
--- the policy without a CIP-67 label 333 or 444 (every holding of such a
--- policy is one unit, so the per-wallet class reduces to the label).
+-- needed. Inside the surviving policies the per-wallet class of the
+-- classification rule applies (study.is_fungible_l): per eligible recent-frame
+-- wallet and asset, the total quantity held at the snapshot including held
+-- UTxOs. Count the distinct wallets per policy holding at least one
+-- non-fungible asset of it; drop the policies the list marks nft_top_exclude
+-- (the named NFT policies); order by count descending, then policy bytes
+-- ascending; take ten. An nft-top stratum takes holders of the assets the
+-- ranking counted: assets of the policy without a CIP-67 label 333 or 444
+-- (every holding of such a policy is one unit, so the per-wallet class reduces
+-- to the label).
 
 -- @step strata_list_table
 -- @outputs study.strata_list study.strata_candidate study.strata_sc

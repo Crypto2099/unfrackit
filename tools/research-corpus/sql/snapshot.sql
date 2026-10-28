@@ -1,11 +1,10 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Sections 5.1 and 5.3 of the pre-registration: the snapshot block and its
--- parameters, the freeze record, the draw key, and the order rule that makes
--- the study's data postdate the freeze (section 10.1): the snapshot block's
--- height must be greater than the height of the block that contains the final
--- freeze transaction.
+-- The snapshot block and its parameters, the freeze record, the draw key, and
+-- the order rule that makes the study's data postdate the freeze: the
+-- snapshot block's height must be greater than the height of the block that
+-- contains the final freeze transaction.
 --
 -- The draw key h is the epoch nonce of epoch N (decided 2026-10-21): E is the
 -- epoch of the block containing the final freeze transaction; N = E + 1 if

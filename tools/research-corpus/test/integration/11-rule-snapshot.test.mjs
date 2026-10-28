@@ -2,14 +2,15 @@
 // Copyright 2026 Adam K. Dean
 
 // T15. A full run at the snapshot the rule names, below the database tip: h
-// from the stand-in's epoch rule (T10's), the snapshot the last block of
-// epoch N - 1 before its stabilisation cutoff, with the first block of epoch N
-// 2,160 blocks deep in the database and in Koios. Wallet state is read as of
-// that block: the recent window ends there, the reconstruction check runs the
-// reference query and the life table and skips the direct read (defined at
-// the tip only), the shapes seeded before the snapshot land where T10 puts
-// them, and the published 6.1 counts name no case wallet. own-drawn reads the
-// finished run. This replaces the study tables T10 left; T14 runs after it.
+// from the stand-in's epoch rule (T10's), the snapshot the last block of epoch
+// N - 1 before its stabilisation cutoff, with the first block of epoch N 2,160
+// blocks deep in the database and in Koios. Wallet state is read as of that
+// block: the recent window ends there, the reconstruction check runs the
+// reference query and the life table and skips the direct read (defined at the
+// tip only), the shapes seeded before the snapshot land where T10 puts them,
+// and the published reconstruction check counts name no case wallet. own-drawn
+// reads the finished run. This replaces the study tables T10 left; T14 runs
+// after it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

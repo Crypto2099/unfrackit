@@ -239,7 +239,8 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(franken.length, 3);
     for (const f of franken) assert.equal(f.f, false, `no franken flag on ${f.sa_id}`);
 
-    // The 6.1 check ran with the direct read, for the sample and the case wallets.
+    // The reconstruction check ran with the direct read, for the sample and the
+    // case wallets.
     assert.equal(b.report.reconstruction_check.direct_valid, true);
     assert.equal(b.report.reconstruction_check.n_excluded, 0);
     assert.equal(b.report.reconstruction_check.n_case_disagree, 0);

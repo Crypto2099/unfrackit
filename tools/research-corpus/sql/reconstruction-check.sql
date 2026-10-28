@@ -1,11 +1,11 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 6.1 of the pre-registration, the check: for every sampled wallet at
--- the snapshot, the set from the reference query, the set from the life table
--- and the set read directly are compared as sets of (transaction hash, index,
--- lovelace, sorted assets). A wallet whose sets differ is excluded and
--- counted: study.sample.reconstruction_excluded is set for every sample row, and every
+-- The reconstruction check: for every sampled wallet at the snapshot, the set
+-- from the reference query, the set from the life table and the set read
+-- directly are compared as sets of (transaction hash, index, lovelace, sorted
+-- assets). A wallet whose sets differ is excluded and counted:
+-- study.sample.reconstruction_excluded is set for every sample row, and every
 -- count over the sample after this step leaves excluded wallets out.
 --
 -- The driver runs the three digest queries of utxo-at-block.sql over the

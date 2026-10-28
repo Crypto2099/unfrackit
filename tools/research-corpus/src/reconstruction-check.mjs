@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Pre-registration section 6.1, the check: every sampled wallet's UTxO set at the
-// snapshot from the reference query, the life table and the set read
-// directly, compared by count and digest. Wallets are processed in batches by
+// The reconstruction check: every sampled wallet's UTxO set at the snapshot
+// from the reference query, the life table and the set read directly,
+// compared by count and digest. Wallets are processed in batches by
 // id, one query per implementation per batch.
 
 import { q, qBound } from './db.mjs';

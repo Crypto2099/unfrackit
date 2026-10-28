@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Artifact A1, the corpus source checks (pre-registration section 10.5, and
-// section 8, "Indexer correctness"): the db-sync schema version, the node
-// version and the sync tip recorded; the UTxO sets of 20 stake credentials
-// compared with Koios at the same tip; five compared with the node's UTxO query
-// by address at the tip.
+// The corpus source checks, which test the indexer the corpus comes from
+// against sources that do not depend on it: the db-sync schema version, the
+// node version and the sync tip recorded; the UTxO sets of 20 stake
+// credentials compared with Koios at the same tip; five compared with the
+// node's UTxO query by address at the tip.
 //
 // Koios and the node move with the chain while the database may be stopped.
 // Each set is compared at the database tip T: the database side is the

@@ -1,9 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.9 of the pre-registration: the per-wallet inputs of the profiles,
--- per sampled wallet and its frame's window. Profiles decide nothing; they are
--- inputs to later artifacts.
+-- The per-wallet inputs of the profiles, per sampled wallet and its frame's
+-- window. Profiles decide nothing; they are inputs to the later analyses.
 --
 -- The profiles are found by a clustering procedure fitted after the final
 -- freeze on the exploration split, which this code does not run. It computes
@@ -38,9 +37,10 @@
 -- phase-2-invalid transaction (x17_invalid_is_script; db-sync stores no
 -- redeemers for those, Era/Universal/Insert/Tx.hs); native-script evaluation
 -- does not count. The split takes DEX first. An asset's class for the split is
--- the rule of section 6.2 applied to the largest of the wallet's holdings at
--- the window's start, at its end, and the units it moved in the transaction:
--- label 333 or 444, or more than one unit, makes it fungible. study.script_tx
+-- the classification rule (lib-cip67.sql) applied to the largest of the
+-- wallet's holdings at the window's start, at its end, and the units it moved
+-- in the transaction: label 333 or 444, or more than one unit, makes it
+-- fungible. study.script_tx
 -- is materialized once, since redeemer.tx_id has no index.
 --
 -- Net movement: outputs of the transaction at the wallet minus the wallet's

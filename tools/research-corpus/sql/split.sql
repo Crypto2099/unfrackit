@@ -1,10 +1,10 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.8 of the pre-registration: the exploration and confirmation split.
+-- The exploration and confirmation split.
 --
 -- Wallets are split 20% exploration and 80% confirmation by the "split" order
--- of section 5.4 (split_key in study.frame), before any outcome is computed.
+-- (split_key in study.frame, frames.sql), before any outcome is computed.
 -- One label per stake credential (X16 as decided on 2026-10-21): every
 -- credential sampled in any frame and sample is ranked once by its split key,
 -- and the first floor(N / 5) of the N distinct credentials (split_den) are
@@ -13,10 +13,10 @@
 -- label in both; each sample is then about, not exactly, 20% exploration.
 --
 -- study.sample_wallet lists every sampled credential once, for the per-wallet
--- steps that follow (the section 6.1 check, prior-treated flags, franken
+-- steps that follow (the reconstruction check, prior-treated flags, franken
 -- flags), and study.sample_frame each (frame, wallet) once, for the profile
 -- inputs. Case wallets ride along: the wallets Adam K. Dean names as case
--- studies (pre-registration section 5.2). A case wallet that was also drawn
+-- studies. A case wallet that was also drawn
 -- is in the sample like any other; one that was not rides along with
 -- in_sample false, and every count over the sample leaves it out.
 

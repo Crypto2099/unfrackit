@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The corpus manifest (sections 5.7 and 10.5): the snapshot block (height,
-// hash, time), the published identifiers per frame and sample with their split,
-// the flow tables and the code version. It names no stake address, address or
+// The corpus manifest: the snapshot block (height, hash, time), the published
+// identifiers per frame and sample with their split, the flow tables and the
+// code version. It names no stake address, address or
 // policy of a wallet's holdings; the only transaction hashes it names are the
 // freeze records' carriers: the final freeze, the hypotheses record's first
 // carrier and the carrier the final document cites, usually the same

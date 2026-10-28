@@ -1,9 +1,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Sections 5.4 and 5.5 of the pre-registration: the measures the exclusions
--- and the token-holding test read, as state aggregates per credential at a
--- reference block.
+-- The measures the exclusions and the token-holding test read, as state
+-- aggregates per credential at a reference block.
 --
 -- Points: snap (the snapshot, the recent frame's reference block), peak_start
 -- (the state at the peak window's start) and peak_end (its last block, the peak
@@ -28,7 +27,7 @@
 --                                                is reported beside it
 --
 -- n_assets counts distinct assets (policy and name). n_nft counts the assets
--- held as non-fungible by the classification rule of section 6.2 over the
+-- held as non-fungible by the classification rule (lib-cip67.sql) over the
 -- wallet's total quantity (study.is_fungible_l). n_units sums quantities.
 -- max_ft_utxos is the largest number of the wallet's UTxOs that one fungible
 -- asset sits on, held UTxOs always included and the asset classed by the

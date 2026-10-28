@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Artifact A2 of the pre-registration (its section 10.5): the snapshot block
-// recorded; frames, screens and the draw; the corpus manifest; the exclusion
-// flow log per frame. Also the split (artifact A3), the section 6.1 check, the
-// prior-treated and franken flags and the profile inputs, all before any
-// outcome is computed.
+// The corpus run: the snapshot block recorded; frames, screens and the draw;
+// the corpus manifest; the exclusion flow log per frame. Also the split, the
+// reconstruction check, the prior-treated and franken flags and the profile
+// inputs, all before any outcome is computed.
 //
 // Three modes:
 //   study      on mainnet, after the final freeze: the freeze record checked
@@ -387,7 +386,7 @@ export async function runPipeline(opts) {
     report.order_check = oc;
     if (failedOrder.length) throw refuse(`order check failed (${failedOrder.join(', ')}); transaction-id ranges cannot stand for windows`);
 
-    // Windows (pre-registration section 5.3).
+    // Windows.
     await runner.run('epoch_counts');
     await runner.run('peak_runs');
     if (!run.windows) {
@@ -496,7 +495,7 @@ export async function runPipeline(opts) {
     await runner.run('sample_wallets');
     report.case_wallets = { listed: caseViews.length, matched: num((await client.query('SELECT count(*) AS n FROM study.case_wallet')).rows[0].n) };
 
-    // Section 6.1 check, before anything that counts the sample.
+    // The reconstruction check, before anything that counts the sample.
     await runner.run('reconstruction_check_table', {}, async (c) => {
       report.reconstruction_check_run = await reconstructionCheck({ client: c, blocks, run, params: runner.params, log, batch: opts.batch || 500 });
       await q(c, blocks, 'reconstruction_check_mark');

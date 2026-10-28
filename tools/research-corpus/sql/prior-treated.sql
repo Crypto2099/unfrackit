@@ -1,10 +1,10 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Copyright 2026 Adam K. Dean
 --
--- Section 5.6 of the pre-registration: the two classifiers of prior-treated
--- wallets, over each wallet's whole history up to the snapshot. Both are flags
--- on sampled wallets, counted per classifier and window (sections 5.6 and
--- 7.9); prior-treated wallets stay in the primary analyses.
+-- The two classifiers of prior-treated wallets, over each wallet's whole
+-- history up to the snapshot. Both are flags on sampled wallets, counted per
+-- classifier and window for the descriptive report; prior-treated wallets stay
+-- in the primary analyses.
 --
 -- UnFrack.It users: a transaction spending the wallet's UTxOs
 -- whose label-674 message contains "unfrack.it". The app writes
@@ -107,7 +107,7 @@ SELECT sa_id, tx
    AND abs(v[6] / s - 0.05) <= 0.002
    AND abs(v[7] / s - 0.05) <= 0.002;
 
--- Per frame of the sample, less the wallets the section 6.1 check excluded:
+-- Per frame of the sample, less the wallets the reconstruction check excluded:
 -- wallets flagged by each classifier over their whole history, and those with
 -- a flagged transaction inside the frame's window.
 -- @query prior_counts
