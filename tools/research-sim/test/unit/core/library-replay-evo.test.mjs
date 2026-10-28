@@ -23,6 +23,7 @@ import { fixedResolver } from '../../../src/kit/apply.mjs';
 import { inspectTx, unspentOutputParts } from '../../../src/kit/inspect.mjs';
 import { outputBytes } from '../../../src/kit/assemble.mjs';
 import { CLASSES } from '../../../src/kit/check.mjs';
+import { NOT_REPLAYABLE } from '../../../src/methods/contract.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
 import { encodeOutput, unspentOutput } from '../../../src/history/output.mjs';
@@ -176,7 +177,7 @@ const payTo = (i, coin, extra = {}) => {
 
 const sourceOf = (state, intents, params = SYNTHETIC_PARAMS) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 1000, params });
 
-test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output and a required signer, writes the parts it cannot price on its transaction, and refuses a body field 6', { skip }, async (t) => {
+test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output, a required signer and payments without their network id and empty auxiliary data, writes the parts it cannot price on its transaction, and refuses a body field 6', { skip }, async (t) => {
   const shape = shapeState(T, 'S8');
   const state = shape.state;
   const P = SYNTHETIC_PARAMS;
@@ -234,12 +235,14 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
     // A body field 6 (protocol parameter updates): no Conway transaction
     // carries it.
     replayIntent('b7', 70, { type: 'T7', requested: [payTo(4, 2n * ADA)], fixed: { body: { 6: encArray([encMap([]), encUint(0)]).toString('hex') } } }),
-    // Parts the library's builder can neither write nor price, written on the
-    // transaction it built: a network id, auxiliary data without metadata, a
-    // witness-set datum; and a legacy registration of a script stake
-    // credential with no redeemer, which the stake operations refuse.
+    // A network id and an auxiliary data without metadata or scripts, which
+    // the engine leaves out of the intent the library receives.
     replayIntent('b8', 80, { type: 'T1', requested: [payTo(5, 2n * ADA)], fixed: { body: { 15: encUint(0).toString('hex') } } }),
     replayIntent('b9', 90, { type: 'T1', requested: [payTo(6, 2n * ADA)], fixed: { auxiliaryData: 'd90103a0' } }),
+    // Parts the library's builder can neither write nor price, written on the
+    // transaction it built: a witness-set datum; and a legacy registration of
+    // a script stake credential with no redeemer, which the stake operations
+    // refuse.
     replayIntent('c0', 100, { type: 'T1', requested: [payTo(7, 2n * ADA)], fixed: { witnesses: { 4: encArray([Buffer.from('d87980', 'hex')]).toString('hex') } } }),
     replayIntent('c1', 110, { type: 'T7', requested: [payTo(8, 2n * ADA)], fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(1), encBytes(Buffer.alloc(28, 0x5c))])])]).toString('hex') } }, implicit: { deposits: P.keyDeposit } })
   ];
@@ -249,7 +252,15 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
   assert.deepEqual(controlsOf(source, r), []);
   checkBuilt(source, r);
   const at = (id) => r.spends[intents.findIndex((i) => i.id.startsWith(id))];
-  for (const id of ['b1', 'b2', 'b3', 'b5']) assert.equal(at(id).outcome, 'built', `${id}: ${at(id).detail}`);
+  for (const id of ['b1', 'b2', 'b3', 'b5', 'b8', 'b9']) assert.equal(at(id).outcome, 'built', `${id}: ${at(id).detail}`);
+  for (const id of ['b8', 'b9']) {
+    const built = inspectTx(at(id).built.txs[0].bytes);
+    assert.ok(!built.bodyFields.includes(15) && !built.bodyFields.includes(7), id);
+    assert.equal(built.hasAux, false, id);
+    // Given the intent directly, the adapter finds the part not replayable.
+    const direct = await buildEvo(state, intents.find((i) => i.id.startsWith(id)), P, { changePolicy: 'default', seed: 1 });
+    assert.equal(direct.class, NOT_REPLAYABLE, id);
+  }
   assert.equal(at('b4').outcome, 'failed');
   assert.equal(at('b4').class, CLASSES.balance);
   assert.deepEqual(evoImplicit(intents[3], P), { deposits: 0n, refunds: 0n });
@@ -259,12 +270,12 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
   // The unpriced parts are on the transaction: a donation or a deposit the
   // library did not balance fails conservation, and a part it did not price
   // leaves its fee under the minimum.
-  for (const [id, cls] of [['b6', CLASSES.balance], ['c1', CLASSES.balance], ['b8', CLASSES.feeMinimum], ['b9', CLASSES.feeMinimum], ['c0', CLASSES.feeMinimum]]) {
+  for (const [id, cls] of [['b6', CLASSES.balance], ['c1', CLASSES.balance], ['c0', CLASSES.feeMinimum]]) {
     assert.equal(at(id).outcome, 'failed', `${id}: ${at(id).outcome}`);
     assert.equal(at(id).class, cls, `${id}: ${at(id).detail}`);
   }
   const unpriced = {};
-  for (const [id, part, field] of [['b6', 'treasury donation', 22], ['b8', 'network id', 15], ['b9', 'auxiliary data', 7], ['c0', 'witness-set datums', 11], ['c1', 'certificates', 4]]) {
+  for (const [id, part, field] of [['b6', 'treasury donation', 22], ['c0', 'witness-set datums', 11], ['c1', 'certificates', 4]]) {
     const it = intents.find((i) => i.id.startsWith(id));
     const built = await buildEvo(state, it, P, { changePolicy: 'default', seed: 1 });
     assert.equal(built.ok, true, built.detail);

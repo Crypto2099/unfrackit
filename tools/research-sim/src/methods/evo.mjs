@@ -100,20 +100,24 @@
 //
 // A part the library's builder can neither write nor price (unpricedParts) is
 // written on the transaction it built, through the library's own types, as
-// every library's replay does: the network id and the treasury fields
-// (TransactionBody.ts; no operation sets them, internal/txBuilder.ts:
-// 1009-1027), auxiliary data attachMetadata cannot write (none or with
-// scripts), witness-set datums (:851-863) with the script-data hash from the
-// library's Redeemers.toScriptDataHash, bootstrap witnesses (:1030-1039), and
-// the certificates or withdrawals when one is a script stake credential's
-// with no redeemer, which the stake operations refuse (operations/Stake.ts:
-// 43-50, :119-126, :717-724). The library's fee does not count such a part,
-// and a value it did not balance (a donation, a deposit) stays unbalanced;
-// the kit's checks say which (library.unpriced names the parts). Only what the
-// library's types cannot hold makes the intent not replayable (evoRefusal):
-// body field 6, as for every adapter (kit/replay.mjs replayRefusal), a Byron
-// address on a fixed or reference input, and the pre-Conway
-// genesis-delegation and MIR certificates.
+// every library's replay does: the treasury fields (TransactionBody.ts; no
+// operation sets them, internal/txBuilder.ts:1009-1027), auxiliary data
+// carrying scripts, which attachMetadata cannot write, witness-set datums
+// (:851-863) with the script-data hash from the library's
+// Redeemers.toScriptDataHash, bootstrap witnesses (:1030-1039), and the
+// certificates or withdrawals when one is a script stake credential's with no
+// redeemer, which the stake operations refuse (operations/Stake.ts:43-50,
+// :119-126, :717-724). The library's fee does not count such a part, and a
+// value it did not balance (a donation, a deposit) stays unbalanced; the kit's
+// checks say which (library.unpriced names the parts). A replayed intent
+// carries no network id and no auxiliary data without metadata and scripts,
+// which no operation writes either: the engine leaves them out of every
+// method's intent (kit/replay.mjs withoutLeftovers), and the adapter, given one
+// directly, finds it not replayable. Otherwise only what the library's types
+// cannot hold makes the intent not replayable (evoRefusal): body field 6, as
+// for every adapter (kit/replay.mjs replayRefusal), a Byron address on a fixed
+// or reference input, and the pre-Conway genesis-delegation and MIR
+// certificates.
 //
 // Collateral: the library chooses its own (phases/Collateral.ts:116-317): the
 // UTxOs among availableUtxos without a reference script, pure ADA first and
@@ -133,7 +137,7 @@ import { makeTxBuilder, voterToKey } from '@evolution-sdk/evolution/sdk/builders
 import * as CostModel from '@evolution-sdk/evolution/CostModel';
 import { CLASSES } from '../kit/check.mjs';
 import { unspentOutputParts, inspectTx } from '../kit/inspect.mjs';
-import { replayRefusal } from '../kit/replay.mjs';
+import { replayRefusal, emptyAuxiliaryData } from '../kit/replay.mjs';
 import { minFee } from '../kit/fee.mjs';
 import { need } from '../kit/params.mjs';
 import { decode, raw, head, encUint, asUint } from '../history/cbor.mjs';
@@ -285,23 +289,23 @@ export function evoRefusal(intent) {
   if (!f) return null;
   for (const x of [...f.inputs, ...f.referenceInputs]) if (unspentOutputParts(x.cbor).addr.type === 8) return `a Byron address on ${x.ref}: the library reads a payment credential from every input (internal/txBuilder.ts:1102-1108)`;
   if (certificateKinds(f).some((k) => k === 5 || k === 6)) return 'a genesis-delegation or MIR certificate: the library\'s certificate type has none';
+  if (f.body[15] !== undefined) return 'body field 15 (network id): no operation writes it, and a replayed intent carries none';
+  if (f.auxiliaryData && emptyAuxiliaryData(f.auxiliaryData)) return 'auxiliary data without metadata or scripts: no operation writes it, and a replayed intent carries none';
   return null;
 }
 
 // The parts of the intent the library's builder can neither write nor price,
 // which go on the transaction it built through its own types (unpriced): the
-// network id and the treasury fields, which its transaction body carries
-// (TransactionBody.ts) but no operation sets (internal/txBuilder.ts:
-// 1009-1027); auxiliary data attachMetadata cannot write (without metadata, or
-// with scripts); witness-set datums (:851-863) and bootstrap witnesses
-// (:1030-1039); and the certificates or withdrawals when one of them is a
-// script stake credential's with no redeemer, which the stake operations
-// refuse (operations/Stake.ts:43-50, :119-126, :717-724).
+// treasury fields, which its transaction body carries (TransactionBody.ts) but
+// no operation sets (internal/txBuilder.ts:1009-1027); auxiliary data carrying
+// scripts, which attachMetadata cannot write; witness-set datums (:851-863)
+// and bootstrap witnesses (:1030-1039); and the certificates or withdrawals
+// when one of them is a script stake credential's with no redeemer, which the
+// stake operations refuse (operations/Stake.ts:43-50, :119-126, :717-724).
 export function unpricedParts(intent) {
   const f = intent.fixed;
   if (!f) return [];
   const out = [];
-  if (f.body[15] !== undefined) out.push('network id');
   if (f.body[21] !== undefined) out.push('current treasury value');
   if (f.body[22] !== undefined) out.push('treasury donation');
   if (f.auxiliaryData && metadataOf(f).refusal) out.push('auxiliary data');
@@ -608,7 +612,6 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   if (unpriced.length) {
     const set = { ...body };
     const uint = (k) => asUint(decode(Buffer.from(f.body[k], 'hex')), `body field ${k}`);
-    if (after('network id')) set.networkId = Number(uint(15));
     if (after('current treasury value')) set.currentTreasuryValue = uint(21);
     if (after('treasury donation')) set.donation = uint(22);
     if (after('certificates')) set.certificates = itemsOf(f.body[4]).map((x) => E.Certificate.fromCBORHex(hexOf(x)));

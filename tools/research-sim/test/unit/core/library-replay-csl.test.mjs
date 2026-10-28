@@ -11,7 +11,8 @@
 // carry: a Plutus spend with its datum and redeemer, a Plutus mint whose
 // script is a reference script, a burn, a deregistration with its refund and a
 // reward withdrawal, a treasury donation, a deposit CSL counts differently,
-// a network id, and body field 6. Each spend builds, fails with a class other
+// a network id with an empty auxiliary data, which the engine leaves out, and
+// body field 6. Each spend builds, fails with a class other
 // than 'other', is infeasible (by balance or for collateral), or is not
 // replayable; every built one passes the kit's checks (the engine runs them)
 // and its four negative controls are caught; its fixed inputs are present and
@@ -194,7 +195,7 @@ const payTo = (i, coin) => {
 };
 const hash32 = (s) => blake2b256(Buffer.from(s)).toString('hex');
 
-test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, a deregistration with a withdrawal, a donation and a network id, and refuses what it cannot express as not replayable', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
+test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, a deregistration with a withdrawal, a donation, and a payment without its network id and empty auxiliary data, and refuses what it cannot express as not replayable', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
   const shape = shapeState(T, 'S8');
   const state = shape.state;
   // The synthetic parameters with a reference-script price, which the
@@ -291,7 +292,7 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
   // CSL's key deposit.
   const reg = replayIntent('c6', 60, { type: 'T7', fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(0), encBytes(Buffer.from(state.stakeCred, 'hex'))])])]).toString('hex') } }, implicit: { deposits: 3n * ADA } });
   const field6 = replayIntent('c7', 70, { type: 'T7', requested: [payTo(2, 2n * ADA)], fixed: { body: { 6: encArray([encMap([]), encUint(0)]).toString('hex') } } });
-  const field15 = replayIntent('c8', 80, { type: 'T1', requested: [payTo(3, 2n * ADA)], fixed: { body: { 15: encUint(0).toString('hex') } } });
+  const field15 = replayIntent('c8', 80, { type: 'T1', requested: [payTo(3, 2n * ADA)], fixed: { body: { 15: encUint(0).toString('hex') }, auxiliaryData: 'd90103a0' } });
   const intents = [t6, t8mint, burnIntent, dereg, donation, reg, field6, field15];
   // A pure-ADA UTxO eligible as collateral under the ledger rule.
   const collateralUtxo = utxoFromOutput(hash32('csl collateral'), 0, outputBytes(T, { address: state.changeAddress, coin: 6n * ADA, assets: [] }), { origin: 'deposit' });
@@ -327,8 +328,11 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
       if (tx(2)) assert.deepEqual(tx(2).mint, [{ policy: burnPolicy, name: '42', qty: -1n }]);
       if (tx(3)) assert.equal(tx(3).withdrawals.reduce((s, w) => s + w.coin, 0n), 5n * ADA);
       if (tx(4)) assert.equal(tx(4).donation, ADA);
-      // The network id on the body CSL built.
-      if (tx(7) && changePolicy === 'default') assert.deepEqual(Buffer.from(tx(7).tx.body.fields.get(15).raw), Buffer.from([0]));
+      // The engine left the network id and the empty auxiliary data out.
+      if (tx(7)) {
+        assert.ok(!tx(7).bodyFields.includes(15) && !tx(7).bodyFields.includes(7));
+        assert.equal(tx(7).hasAux, false);
+      }
       // CSL prices the script fee itself: its fee covers the final minimum,
       // execution and reference-script terms included.
       for (const f of r.fees) assert.ok(f.fee >= f.finalMinFee, `${f.fee} under ${f.finalMinFee}`);

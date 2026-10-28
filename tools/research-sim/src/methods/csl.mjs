@@ -277,11 +277,6 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 //   required signers   add_required_signer
 //   auxiliary data     set_auxiliary_data, CSL's encoding
 //   treasury fields    set_current_treasury_value, set_donation
-//   network id         TransactionBuilder has no setter and writes none
-//                      (:2340, network_id: None); it is set on the body
-//                      build_tx returns, by TransactionBody.set_network_id
-//                      (transaction_body.rs:182-184), after CSL has priced the
-//                      transaction, so CSL's fee does not count its two bytes
 //   other datums       add_extra_witness_datum (:1507-1515)
 //   collateral         the UTxO the engine set aside (opts.collateral) by
 //                      set_collateral (:761-763). While CSL selects and
@@ -319,6 +314,10 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 // counts them), then the intent's other vkey witnesses and its bootstrap
 // witnesses as observed.
 //
+// A replayed intent carries no network id (body field 15), which the transaction
+// builder never writes (:2340, network_id: None): the engine leaves it out of
+// every method's intent (kit/replay.mjs withoutLeftovers).
+//
 // Not replayable for CSL (a part it has no way to express): body field 6
 // (kit/replay.mjs replayRefusal), which no Conway transaction carries; a deposit
 // or refund CSL counts differently from the transaction (a pool registration
@@ -337,7 +336,7 @@ const nr = (m) => {
   throw new Unexpressible(m);
 };
 const hexOf = (b) => Buffer.from(b).toString('hex');
-const BODY_PARTS = new Set([3, 4, 5, 8, 9, 14, 15, 19, 20, 21, 22]);
+const BODY_PARTS = new Set([3, 4, 5, 8, 9, 14, 19, 20, 21, 22]);
 const WITNESS_PARTS = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
 const PLUTUS_KEYS = [[3, 1], [6, 2], [7, 3]];
 
@@ -769,9 +768,6 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
       return { ok: false, class: classOfCslError(t), detail: `build_tx: ${t}` };
     }
     const body = k(tx.body());
-    // The network id, which the transaction builder never writes (:2340), on
-    // the body it built (transaction_body.rs:182-184).
-    if (f && f.body[15] !== undefined) body.set_network_id(k(C.NetworkId.from_bytes(Buffer.from(f.body[15], 'hex'))));
     const walletRefs = walletRefsOf(body);
     const inputs = recordsOf(state, walletRefs);
     const n = walletKeys(state, intent, inputs, collateral);

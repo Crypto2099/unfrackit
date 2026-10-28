@@ -25,7 +25,10 @@
 //                        is charged to no arm
 //   mark                 every 30 days of block time: the maintained-tidy arm
 //                        re-plans and applies any proposed plan, charged
-// Every arm replays the same intents in the same order. An intent:
+// Every arm replays the same intents in the same order, each with its builder
+// leftovers left out (kit/replay.mjs withoutLeftovers): no method, feasibility
+// test or check sees the observed transaction's network id or an auxiliary
+// data holding no metadata and no script. An intent:
 //   - phase-2-invalid: its only effect is the forfeit. The arm provides
 //     collateral under its rule (the smallest eligible UTxO that can carry the
 //     forfeit, ties by txid#index), loses the observed total collateral, and
@@ -71,7 +74,7 @@ import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
-import { changeOutputBytes, fixedInputValues, carriesCollateral } from '../kit/replay.mjs';
+import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers } from '../kit/replay.mjs';
 import { checkResult, checkOptions, NOT_REPLAYABLE } from '../methods/contract.mjs';
 import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
 import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
@@ -181,6 +184,18 @@ function arrivalMap(state, table) {
 
 const pureOnlyCount = (plan) => plan.txs.filter((t) => t.notes.includes('pure-ada-only')).length;
 
+// An event as the replay takes it: an intent's with its builder leftovers
+// left out, any other unchanged.
+const REPLAYED = new WeakMap();
+function replayedEvent(e) {
+  if (e.kind !== 'intent') return e;
+  if (!REPLAYED.has(e)) {
+    const intent = withoutLeftovers(e.intent);
+    REPLAYED.set(e, intent === e.intent ? e : { ...e, intent });
+  }
+  return REPLAYED.get(e);
+}
+
 // source: { wallet, window, network, stakeCred, changeAddress,
 // changeAddressEnd, franken, start [UTxO], events (each with the
 // changeAddress in effect at it), arrival (Map), windowStart (block time) }.
@@ -258,9 +273,12 @@ export async function replay(T, params, source, job) {
   }
   trajectory.push(stateMeasures(state, params).largestValueBytes);
 
+  // The events with every intent's builder leftovers left out.
+  const events = source.events.map(replayedEvent);
+
   // The intents of each parallel burst, in order, for its separate pass.
   const bursts = new Map();
-  for (const e of source.events) if (e.kind === 'intent' && e.intent.burst && e.intent.burst.parallel) {
+  for (const e of events) if (e.kind === 'intent' && e.intent.burst && e.intent.burst.parallel) {
     if (!bursts.has(e.intent.burst.id)) bursts.set(e.intent.burst.id, []);
     bursts.get(e.intent.burst.id).push(e);
   }
@@ -268,7 +286,7 @@ export async function replay(T, params, source, job) {
   let ordinal = 0;
   let sinceSettle = 0;
 
-  for (const e of source.events) {
+  for (const e of events) {
     follow(e.changeAddress);
     if (e.kind === 'deposit') {
       advance(e.time && e.time.blockTime);

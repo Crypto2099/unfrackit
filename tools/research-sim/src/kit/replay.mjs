@@ -9,6 +9,10 @@
 // eras/conway/impl/cddl/data/conway.cddl: transaction 16-17, body 107-128,
 // witness set 760-771, redeemers 785-805).
 //
+// The intent is the one every method receives (withoutLeftovers below): the
+// network id and an auxiliary data holding no metadata and no script are left
+// out of it.
+//
 // Body:
 //   0   inputs: the wallet inputs and the intent's fixed inputs, sorted by
 //       transaction id then index, as a tagged set (tag 258), as CSL 13.2.1
@@ -19,7 +23,8 @@
 //   2   fee
 //   3, 4, 5, 8, 9, 14, 15, 19, 20, 21, 22   the intent's fixed fields as
 //       their original bytes (validity, certificates, withdrawals, mint,
-//       required signers, network id, votes, proposals, treasury, donation)
+//       required signers, network id, votes, proposals, treasury, donation);
+//       a replayed intent carries no network id
 //   7   the auxiliary-data hash, BLAKE2b-256 of the fixed auxiliary data
 //   11  the script-data hash, when the witness set carries redeemers or
 //       datums: 32 bytes, as the ledger's is. The ledger hashes the
@@ -153,6 +158,58 @@ function requiredSigners(fixed) {
     const n = decode(b);
     return Buffer.from(raw(b, n)).subarray(b.length - 28).toString('hex');
   });
+}
+
+// Builder leftovers: parts the observed transaction's builder wrote that the
+// spend does not need and the ledger does not require. They are the network id
+// (body field 15) and an auxiliary data holding no metadata entry and no
+// script, in any of its three encodings (conway.cddl:802-833: a metadata map,
+// the array [metadata, native scripts], or the tag-259 map of metadata and
+// script lists), with its hash (body field 7). The replay engine leaves them
+// out of every intent before any method, feasibility test or check sees it
+// (replay/engine.mjs), so no method's transaction carries them unless its
+// library writes them itself. The history file keeps them, and the reader's
+// rebuild check (history/rebuild.mjs) rebuilds the observed transaction with
+// them.
+
+// Whether an auxiliary data (hex) holds no metadata entry and no script.
+export function emptyAuxiliaryData(hexValue) {
+  const n = decode(Buffer.from(hexValue, 'hex'));
+  const emptyMap = (x) => x.mt === 5 && x.entries.length === 0;
+  const emptyList = (x) => x.mt === 4 && x.items.length === 0;
+  if (n.mt === 5) return n.entries.length === 0;
+  if (n.mt === 4) return n.items.length === 2 && emptyMap(n.items[0]) && emptyList(n.items[1]);
+  if (n.mt === 6 && n.tag === 259n && n.item.mt === 5) return n.item.entries.every(([k, v]) => (Number(k.value) === 0 ? emptyMap(v) : emptyList(v)));
+  return false;
+}
+
+// The intent with its builder leftovers left out, the same object when it has
+// none. The fixed bytes (the observed bytes of the fixed parts) lose theirs:
+// field 15's key and value, field 7's key and 34-byte value, and the auxiliary
+// data less the one byte of the null that replaces it. The body map's head
+// does not change: a Conway body has at most 21 keys, so a definite head is
+// one byte with or without them, and an indefinite one has no count.
+const LEFTOVERS = new WeakMap();
+export function withoutLeftovers(intent) {
+  const f = intent.fixed;
+  if (!f) return intent;
+  if (LEFTOVERS.has(intent)) return LEFTOVERS.get(intent);
+  const network = f.body[15] !== undefined;
+  const aux = !!f.auxiliaryData && emptyAuxiliaryData(f.auxiliaryData);
+  let out = intent;
+  if (network || aux) {
+    const body = { ...f.body };
+    let gone = 0;
+    if (network) {
+      gone += 1 + f.body[15].length / 2;
+      delete body[15];
+    }
+    if (aux) gone += 1 + 34 + f.auxiliaryData.length / 2 - 1;
+    const fixed = Object.freeze({ ...f, body: Object.freeze(body), auxiliaryData: aux ? null : f.auxiliaryData, fixedBytes: f.fixedBytes - gone });
+    out = Object.freeze({ ...intent, fixed });
+  }
+  LEFTOVERS.set(intent, out);
+  return out;
 }
 
 // Why the kit cannot assemble an intent's transaction, or null when it can.
