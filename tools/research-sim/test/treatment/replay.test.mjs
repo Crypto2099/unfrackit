@@ -6,8 +6,12 @@
 // plan, arms/plan.mjs) with the test method:
 //   - every replayed transaction meets the kit's checks (no kit failure on an
 //     answer), CSL reads it, and the four negative controls are caught on it
-//     for their own reasons; where CSL's re-serialization differs from the
-//     transaction it is counted (cslReencoded, cslDiffers);
+//     for their own reasons; CSL's re-serialization has the transaction's
+//     inputs, fee and witness count byte for byte and its outputs by decoded
+//     content (CSL writes the asset names of one policy shortest first, this
+//     tool by bytes, so the bytes of an output can differ; counted as
+//     cslOutputBytes), and the transactions it re-encodes are counted
+//     (cslReencoded);
 //   - events land where they belong: the deposits before the spends that use
 //     them, held consumption, the two 30-day marks, the maintained-tidy arm's
 //     re-plans at exactly those marks and no other arm's, the burst pass, the
@@ -41,6 +45,16 @@ const DAY = 86400;
 // the JavaScript heap planning the end state for the conformity measure,
 // after every intent has built. The treatment's case, not the engine's.
 const LEFT_OUT = new Set(['M3 tidy-once grouping-random']);
+
+// An output by what it holds: address, coin, assets as a set, datum and script
+// reference.
+const content = (o) => JSON.stringify({
+  address: Buffer.from(o.address).toString('hex'),
+  coin: o.coin,
+  assets: [...o.assets].map((a) => ({ policy: a.policy, name: a.name, qty: a.qty })).sort((x, y) => (x.policy + x.name < y.policy + y.name ? -1 : x.policy + x.name > y.policy + y.name ? 1 : 0)),
+  datum: o.datum,
+  scriptRef: o.scriptRef
+}, (_, v) => (typeof v === 'bigint' ? `${v}n` : v && v.type === 'Buffer' ? Buffer.from(v.data).toString('hex') : v));
 
 test('the synthetic streams replay under every arm the planner expresses, every transaction checked, every event in place', { skip, timeout: 3 * 3600 * 1000 }, async (t) => {
   const method = makeMethod(T, 'test-largest-first');
@@ -128,10 +142,9 @@ test('the synthetic streams replay under every arm the planner expresses, every 
             ctx.free();
             const mine = inspectTx(tx.bytes);
             if (again.hash !== mine.hash) counts.cslReencoded = (counts.cslReencoded || 0) + 1;
-            const same = again.fee === mine.fee && again.inputs.map((i) => i.ref).join() === mine.inputs.map((i) => i.ref).join() && again.outputs.map((o) => o.raw.toString('hex')).join() === mine.outputs.map((o) => o.raw.toString('hex')).join() && again.vkeys.length === mine.vkeys.length;
-            // Counted, not yet asserted: on S9, CSL's re-serialization of some
-            // replayed transactions differs in their inputs, outputs, fee or
-            // witness count, which is still to be explained.
+            const sameOutputs = again.outputs.length === mine.outputs.length && again.outputs.every((o, i) => content(o) === content(mine.outputs[i]));
+            if (again.outputs.map((o) => o.raw.toString('hex')).join() !== mine.outputs.map((o) => o.raw.toString('hex')).join()) counts.cslOutputBytes = (counts.cslOutputBytes || 0) + 1;
+            const same = again.fee === mine.fee && again.inputs.map((i) => i.ref).join() === mine.inputs.map((i) => i.ref).join() && sameOutputs && again.vkeys.length === mine.vkeys.length;
             if (!same) counts.cslDiffers = (counts.cslDiffers || 0) + 1;
           }
         }
@@ -141,4 +154,5 @@ test('the synthetic streams replay under every arm the planner expresses, every 
   t.diagnostic(JSON.stringify(counts));
   assert.deepEqual(bad.slice(0, 20), []);
   assert.equal(counts.kitFailures, 0);
+  assert.equal(counts.cslDiffers || 0, 0, 'CSL re-serializes every replayed transaction with its inputs, fee, witness count and outputs by content');
 });
