@@ -53,13 +53,14 @@ export const keyCount = (records) => new Set(records.map((u) => u.cred)).size;
 export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']);
 
 // The parts each adapter's replay path covers, by adapter module:
-//   csl   csl-lf, csl-ri, csl-lf-pure, csl-ri-pure: none yet
+//   csl   csl-lf, csl-ri, csl-lf-pure, csl-ri-pure: every part
+//         (methods/csl.mjs, its replay path)
 //   evo   evo-lf (and the survey's evo-unfrack): none yet
 //   mesh  the survey's Mesh subjects: none; Mesh is surveyed on battery spends
 //         only and never replays
 //   cjs   cjs-rrri: every part (methods/cjs.mjs, its replay path)
 export const REPLAY_COVERAGE = Object.freeze({
-  csl: Object.freeze([]),
+  csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze([]),
   mesh: Object.freeze([]),
   cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
