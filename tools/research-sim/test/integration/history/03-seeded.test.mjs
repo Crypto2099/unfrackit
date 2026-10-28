@@ -10,11 +10,18 @@
 // transfer of the whole wallet to itself in Eternl on 2026-10-23 (preprod
 // transaction 67aa81ec03932fa94ff5709a18995079f5b3686f643dadabbf8ce9d54520d729),
 // and how each is typed and what it holds is recorded.
+//
+// Anyone can send a seeded wallet a UTxO. A UTxO whose creating transaction
+// spends no input of the funder or of any shape (by stake credential or by
+// any address the seeder names) is not the seeding's: it is left out of the
+// comparison and reported with its block, coin and asset count. Every other
+// difference from the specification still fails the test.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { context, record, shapeWallets, specOf, SHAPES, TAG } from './env.mjs';
+import { context, record, shapeWallets, seederAddresses, specOf, SHAPES, TAG } from './env.mjs';
+import { q } from '../../../src/history/db.mjs';
 import { loadLife, aliveAt, linesOf } from '../../../src/history/wallet.mjs';
 import { walletHistory } from '../../../src/history/history.mjs';
 import { recentWindow } from '../../../src/history/windows.mjs';
@@ -24,27 +31,69 @@ import { readFileSync } from 'node:fs';
 
 const S9_TRANSFER = '67aa81ec03932fa94ff5709a18995079f5b3686f643dadabbf8ce9d54520d729';
 
+// The wallet's outputs that no transaction of the seeding made: those whose
+// creating transaction spends no input of the funder or of a shape. A
+// transaction that spends one of the wallet's own outputs is the wallet's
+// spend and is never foreign. Returns Map ref -> { blockId, blockNo, coin,
+// assets }, the block by db-sync's id and by its number.
+async function foreignOutputs(ctx, life, ours) {
+  const own = new Set(life.filter((r) => r.consumedTx !== null).map((r) => r.consumedTx));
+  const ids = [...new Set(life.map((r) => r.createdTx))].filter((t) => !own.has(t)).sort((a, b) => a - b);
+  const foreignTx = new Set();
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    const ins = await q(ctx.client, ctx.blocks, 'tx_consumed', { ids: { type: 'intarr', value: part } });
+    const byTx = new Map(part.map((t) => [t, []]));
+    for (const c of ins) byTx.get(Number(c.tx_in_id)).push({ h: c.src_hash, i: Number(c.src_index) });
+    const refs = [...byTx.values()].flat();
+    const src = new Map();
+    for (let j = 0; j < refs.length; j += 1000) {
+      const got = await q(ctx.client, ctx.blocks, 'resolve_outputs', { hashes: { type: 'bytearr', value: refs.slice(j, j + 1000).map((x) => x.h) }, indexes: { type: 'int4arr', value: refs.slice(j, j + 1000).map((x) => x.i) } });
+      for (const o of got) src.set(`${o.tx_hash}#${Number(o.index)}`, o);
+    }
+    for (const [t, list] of byTx) {
+      const seeded = list.some((x) => {
+        const o = src.get(`${x.h}#${x.i}`);
+        if (!o) throw new Error(`transaction id ${t}: input ${x.h}#${x.i} does not resolve`);
+        return (o.stake_address_id !== null && ours.saIds.has(Number(o.stake_address_id))) || ours.addresses.has(o.address);
+      });
+      if (!seeded) foreignTx.add(t);
+    }
+  }
+  const out = new Map();
+  if (!foreignTx.size) return out;
+  const blocks = new Map((await q(ctx.client, ctx.blocks, 'txs', { ids: { type: 'intarr', value: [...foreignTx] } })).map((r) => [Number(r.id), { blockId: Number(r.block_id), blockNo: Number(r.block_no) }]));
+  for (const r of life) if (foreignTx.has(r.createdTx)) out.set(r.ref, { ...blocks.get(r.createdTx), coin: r.coin.toString(), assets: r.assets.length });
+  return out;
+}
+
 test('seeded shapes equal their specification, and their own spends as intents', { timeout: 3600 * 1000 }, async () => {
   const ctx = await context();
   const out = { shapes: {}, spends: {} };
   try {
     const sa = await shapeWallets(ctx);
+    const ours = { saIds: new Set(Object.values(sa).filter((x) => x !== null)), addresses: new Set([...SHAPES, 'funder'].flatMap((s) => seederAddresses(s))) };
     const win = await recentWindow(ctx, ctx.snapshot);
     for (const s of SHAPES) {
       const life = await loadLife(ctx.client, ctx.blocks, sa[s], ctx.snapshot.tx);
       const spec = (await specOf(s)).utxos;
-      const at = (t) => linesOf(aliveAt(life, t)).map(parseLine);
+      const foreign = await foreignOutputs(ctx, life, ours);
+      const alive = (t) => aliveAt(life, t).filter((r) => !foreign.has(r.ref));
+      const at = (t) => linesOf(alive(t)).map(parseLine);
       let m = matchSpec(spec, at(ctx.snapshot.tx));
       let where = 'snapshot';
+      let t = ctx.snapshot.tx;
       if (!m.ok) {
-        const lastDeposit = Math.max(...life.filter((r) => !life.some((x) => x.consumedTx === r.createdTx)).map((r) => r.createdTx));
+        const lastDeposit = Math.max(...life.filter((r) => !foreign.has(r.ref) && !life.some((x) => x.consumedTx === r.createdTx)).map((r) => r.createdTx));
         const spends = [...new Set(life.filter((r) => r.consumedTx !== null && r.consumedTx > lastDeposit).map((r) => r.consumedTx))].sort((a, b) => a - b);
         if (spends.length) {
-          m = matchSpec(spec, at(spends[0] - 1));
+          t = spends[0] - 1;
+          m = matchSpec(spec, at(t));
           where = 'before its first spend after seeding';
         }
       }
-      out.shapes[s] = { ok: m.ok, where, utxos: spec.length, policies: m.policies, problems: m.problems };
+      const left = aliveAt(life, t).filter((r) => foreign.has(r.ref)).map((r) => foreign.get(r.ref));
+      out.shapes[s] = { ok: m.ok, where, utxos: spec.length, policies: m.policies, problems: m.problems, foreign: left };
       assert.ok(m.ok, `${s}: ${m.problems.join('; ')}`);
     }
     // The shapes' own spends in the recent window.
