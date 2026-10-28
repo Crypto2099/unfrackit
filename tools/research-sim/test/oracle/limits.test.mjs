@@ -55,11 +55,16 @@ test('a worker past the parent\'s deadline is terminated and replaced', { skip, 
     if (r.status === 'best-at-limit') assert.ok(r.tx && r.fee !== null);
     else assert.equal(r.status, 'undecided');
     assert.equal(o.stats.terminated, 1);
-    // The next call runs on a fresh worker.
-    const small = shapeState(T, 'S4').state;
+    // The next call runs on a fresh worker, on a wallet small enough (S8, 10
+    // spendable UTxOs) that the program over every spendable UTxO proves its
+    // answer well before this oracle's shortened deadline of 5 seconds.
+    const small = shapeState(T, 'S8').state;
     const sp = standardBattery(T, small, P, { pools: SHAPE_POOLS }).find((b) => b.id === 'ada-payment');
     const r2 = await o.oracle(small, sp, P, 'csl', { timeLimitMs: 10000 });
+    t.diagnostic(JSON.stringify({ status: r2.status, scope: r2.scope, fee: String(r2.fee), ms: Math.round(r2.ms), terminated: r2.terminated }));
+    assert.equal(r2.terminated, false);
     assert.equal(r2.status, 'optimal');
+    assert.equal(r2.scope, 'spendable');
     assert.equal(o.stats.workersStarted, 2);
   } finally {
     await o.close();
