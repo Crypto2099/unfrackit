@@ -49,6 +49,8 @@ parentPort.on('message', async (job) => {
     const spends = standardBattery(T, state, P, { pools: SHAPE_POOLS }).filter((b) => !b.unsettled);
     for (const spend of spends) {
       for (const policy of job.policies) {
+        // Thousands of builds per spend: the heap is settled before each.
+        await settle();
         const M = makeBoundModel(state, spend, P, settings);
         const ev = makeEvaluator(T, { state, spend, params: P, policy, settings, lib });
         const cs = candidateSet(state, spend);
