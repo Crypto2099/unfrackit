@@ -55,7 +55,11 @@ export const SIM_SETTINGS = Object.freeze({
   // fails with class change-minimum.
   substitutedChange: 'fail',
   // Random sources. 'mulberry32': seeded with the seed number for a
-  // selector; random layouts seeded with the repetition number.
+  // selector; random layouts seeded with the repetition number. A replay job
+  // (wallet, window, arm, variant, method, change policy, collateral rule,
+  // seed) makes one generator when it starts, and every build of the job
+  // draws from it in order, the burst pass included; a battery run (spend,
+  // method, repetition) seeds its own.
   rng: 'mulberry32',
   // Which collateral a replayed script spend uses. 'smallest': the smallest
   // UTxO eligible under the arm's rule that is not a fixed input of the spend

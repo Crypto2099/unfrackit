@@ -72,6 +72,14 @@
 // proposes a pure-ADA-only transaction the never-propose setting would not is
 // an H-6 trigger, returned with its time for the rescue test.
 //
+// Randomness: the job's one generator (setting rng 'mulberry32'), made from
+// the job's seed when the job starts and handed to every build the job makes
+// as opts.random, in the order the engine makes them, the burst pass included
+// (jobOptions). A job is one (wallet, window, arm, variant, method, change
+// policy, collateral rule, seed), so arms compared with each other start from
+// the same stream, and the generator lives in the thread that runs the job, so
+// a worker's earlier jobs leave it untouched.
+//
 // The engine runs the kit's checks and applies each transaction; a method
 // never sees the verdict before it returns. CSL objects the treatment leaves
 // to finalization are released by settling the heap (kit/heap.mjs) after each
@@ -94,6 +102,7 @@ import { spendMeasures, stateMeasures, requestedIndexes, PolicyLock } from './me
 import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
 import { settle } from '../kit/heap.mjs';
+import { makeRng } from '../shapes/rng.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 const MONTH = 30 * 86400;
@@ -216,15 +225,28 @@ function replayedEvent(e) {
   return REPLAYED.get(e);
 }
 
+// The options every build of a job receives: the job's options with its one
+// random source, a mulberry32 generator seeded with opts.seed. A caller's own
+// opts.random is refused, so that the engine is a replay's only source of
+// draws.
+export function jobOptions(opts) {
+  if (opts.random !== undefined) throw new Error('replay: opts.random is the engine\'s own, made from opts.seed; a caller cannot give one');
+  if (!Number.isSafeInteger(opts.seed)) throw new Error(`replay: the seed must be an integer, not ${opts.seed}`);
+  const rng = makeRng(opts.seed);
+  return { ...opts, random: () => rng.next() };
+}
+
 // source: { wallet, window, network, stakeCred, changeAddress,
 // changeAddressEnd, franken, start [UTxO], events (each with the
 // changeAddress in effect at it), arrival (Map), windowStart (block time) }.
-// job: { key, arm, variant, repetition, method, opts, settleEvery, policyLock }.
+// job: { key, arm, variant, repetition, method, opts, settleEvery, policyLock };
+// opts.seed is the repetition.
 export async function replay(T, params, source, job) {
   const t0 = performance.now();
-  const { arm, variant, repetition, method, opts } = job;
-  checkOptions(opts);
-  checkRule(opts.collateralRule);
+  const { arm, variant, repetition, method } = job;
+  checkOptions(job.opts);
+  checkRule(job.opts.collateralRule);
+  const opts = jobOptions(job.opts);
   const out = { spends: [], plans: [], bursts: [], triggers: [], summary: null };
   const gap = changeAddressGap(source);
   if (gap) {

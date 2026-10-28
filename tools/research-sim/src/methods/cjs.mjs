@@ -55,9 +55,10 @@
 //                                  constraint takes the same shape,
 //                                  selectionConstraints.ts:233-242)
 //
-// Random source (setting rng 'mulberry32'): opts.random, a function the
-// engine keeps per (wallet, arm, seed) so that a replay's spends draw from one
-// stream; without it, a fresh mulberry32 generator seeded with opts.seed.
+// Random source (setting rng 'mulberry32'): opts.random when given, the
+// replay job's one generator (replay/engine.mjs jobOptions), so that a
+// replay's builds draw from one stream; without it (a battery run), a fresh
+// mulberry32 generator seeded with opts.seed for this build.
 //
 // Errors (InputSelectionError.ts:3-28) to failure classes:
 //   UtxoBalanceInsufficient    balance

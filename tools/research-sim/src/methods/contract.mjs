@@ -8,11 +8,19 @@
 //     ownCollateral? }
 //
 //   opts     { seed, changePolicy ('default' | 'layout' | 'single' |
-//            'naive'), collateralRule, absorb, collateral }
+//            'naive'), collateralRule, absorb, collateral, random }
 //            collateral: for a replayed script spend, the UTxO the engine set
 //            aside under the arm's rule (replay/engine.mjs setAside); the
 //            state the method is given does not hold it, and every
 //            transaction the method assembles carries it as collateral
+//            random: a function returning the next draw in [0, 1), which a
+//            seeded method draws from. In a replay it is the job's one
+//            generator (replay/engine.mjs jobOptions), mulberry32 seeded
+//            with the seed when the job starts, drawn by every build of the
+//            job in the order the engine makes them, the burst pass
+//            included. In a battery it is absent: each run (spend, method,
+//            repetition) has its seed alone, and a seeded method seeds a
+//            fresh mulberry32 with it, so each run starts its own stream
 //   ownCollateral  true for a method whose library chooses its own
 //            collateral and cannot be given one (choosesOwnCollateral): the
 //            engine sets nothing aside for it and passes no opts.collateral
