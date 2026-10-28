@@ -205,7 +205,9 @@ export function reencode(ctx, r) {
   return { bytes: encodeOutput(o, form), form, datum, scriptRef };
 }
 
-// A UTxO record in the simulator's form.
+// A UTxO record in the simulator's form. `txId` is db-sync's id of the
+// creating transaction, which follows chain order (block, then position in
+// the block); the change-address rule ranks outputs by it.
 export function utxoRecord(ctx, r, origin, franken) {
   const enc = reencode(ctx, r);
   return {
@@ -216,7 +218,8 @@ export function utxoRecord(ctx, r, origin, franken) {
     coin: r.coin,
     assets: r.assets,
     held: heldReason(r, franken),
-    origin
+    origin,
+    txId: r.createdTx
   };
 }
 

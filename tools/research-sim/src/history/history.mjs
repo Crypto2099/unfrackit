@@ -37,7 +37,7 @@ import { loadLife, aliveAt, frankenFlags, holdingsOf, arrivalTable, loadExtras, 
 import { loadBundles } from './txdata.mjs';
 import { spendEvent, timeOf, IntentCheck } from './intent.mjs';
 
-export const FORMAT = 'unfrackit-research-sim history 1';
+export const FORMAT = 'unfrackit-research-sim history 2';
 const BUNDLE_BATCH = 400;
 
 export function bursts(spends, settings) {

@@ -146,10 +146,13 @@ export function holdings(utxos) {
 // output at a key payment credential and a base address (largest creating
 // transaction id, then output index). `created` maps a ref to the creating
 // transaction's id in chain order (db-sync's tx.id); a UTxO without one makes
-// the rule inapplicable, which stops the run rather than guessing.
+// the rule inapplicable, which stops the run rather than guessing. A UTxO
+// whose payment credential the franken rule flags is passed over: change sent
+// there would be held at once and never spent again.
 export function latestKeyBaseAddress(utxos, created) {
   let best = null;
   for (const u of utxos) {
+    if (u.held === 'franken') continue;
     const a = parseAddress(addressBytes(u.address));
     if (a.paymentKind !== 'key' || a.type > 3) continue;
     const id = created.get(u.ref);

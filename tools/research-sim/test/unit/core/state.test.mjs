@@ -99,6 +99,11 @@ test('the change address rule: the latest output at a key payment credential and
   created.set(`${T2}#1`, 1);
   assert.equal(latestKeyBaseAddress(s.utxos.values(), created), addressTextOf(A1));
   assert.throws(() => latestKeyBaseAddress(s.utxos.values(), new Map()), /no creating transaction id/);
+  // A franken-flagged credential is passed over, so change never lands where
+  // it would be held at once.
+  const fr = makeState({ network: 'synthetic', stakeCred: STAKE, changeAddress: addressTextOf(A0), utxos: [...s.utxos.values()], franken: [keyHash(1)] });
+  const flagged = [...fr.utxos.values()].map((u) => (u.cred === keyHash(1) ? { ...u, held: 'franken' } : u));
+  assert.equal(latestKeyBaseAddress(flagged, created), addressTextOf(A0));
 });
 
 test('battery intents carry requested outputs only', () => {
@@ -111,10 +116,10 @@ test('battery intents carry requested outputs only', () => {
 
 const PARAMS = paramsFromRow('preprod', { epoch_no: 300, protocol_major: 10, min_fee_a: 44, min_fee_b: 155381, coins_per_utxo_size: 4310, max_val_size: 5000, max_tx_size: 16384, max_collateral_inputs: 3, collateral_percent: 150, price_mem: 0.0577, price_step: 0.0000721, min_fee_ref_script_cost_per_byte: 15, key_deposit: 2000000, pool_deposit: 500000000, drep_deposit: 500000000, gov_action_deposit: 100000000000 });
 
-function historyText({ split = 'exploration', withEnd = true, count = 1 } = {}) {
-  const r = (txid, i, address, coin, assets = [], origin = 'initial', held = null) => {
+function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId = false } = {}) {
+  const r = (txid, i, address, coin, assets = [], origin = 'initial', held = null, txId = 1) => {
     const u = utxoFromCbor(rec(txid, i, address, coin, assets), { origin });
-    return { ...utxoJson(u), held };
+    return noTxId ? { ...utxoJson(u), held } : { ...utxoJson(u), held, txId };
   };
   const intent = {
     id: '55'.repeat(32), source: 'replay', type: 'T1', time: { slot: 10, blockTime: 1000, blockIndex: 0, epoch: 300, block: 5 },
@@ -127,8 +132,8 @@ function historyText({ split = 'exploration', withEnd = true, count = 1 } = {}) 
   };
   const lines = [
     { kind: 'header', format: HISTORY_FORMAT, network: 'preprod', wallet: 42, frame: 'recent', split, window: null, snapshot: { block: 1, tx: 1 }, params: PARAMS, franken: [], arrival: [{ policy: POL, name: '4e4654', tx: T1, txId: 17, flagged: false }], settings: {}, source: { bytes: 'tx_cbor' } },
-    { kind: 'state', at: { tx: 1 }, utxos: [r(T1, 2, A0, 3000000n), r(T1, 10, A1, 2000000n, [{ policy: POL, name: '4e4654', qty: 1n }])] },
-    { kind: 'deposit', tx: T2, txId: 3, time: {}, utxos: [r(T2, 0, A0, 4000000n, [], 'deposit')] },
+    { kind: 'state', at: { tx: 1 }, utxos: [r(T1, 2, A0, 3000000n, [], 'initial', null, 0), r(T1, 10, A1, 2000000n, [{ policy: POL, name: '4e4654', qty: 1n }], 'initial', null, 1)] },
+    { kind: 'deposit', tx: T2, txId: 3, time: {}, utxos: [r(T2, 0, A0, 4000000n, [], 'deposit', null, 3)] },
     { kind: 'mark', n: 1, blockTime: 900 },
     { kind: 'intent', txId: 4, intent },
     { kind: 'self-reorganization', tx: T3, txId: 5, time: {}, burst: null }
@@ -150,6 +155,12 @@ test('a history file reads into parameters, the start state, events and intents'
   assert.equal(it.observed.walletWitnesses.length, 1);
   assert.deepEqual(it.derived, { poolDeposits: '500000000' });
   assert.equal(h.arrival.get(`${POL}.4e4654`).txId, 17);
+  // Every record's creating transaction id is kept, and the change address is
+  // the start state's latest output at a key payment credential and a base
+  // address: T1#10 at A1 (transaction id 1) over T1#2 at A0 (id 0).
+  assert.deepEqual([...h.created], [[`${T1}#2`, 0], [`${T1}#10`, 1], [`${T2}#0`, 3]]);
+  assert.equal(h.changeAddress, addressTextOf(A1));
+  assert.throws(() => readHistory(historyText({ noTxId: true })), /carries no creating transaction id/);
   assert.throws(() => readHistory(historyText({ withEnd: false })), /no end record/);
   assert.throws(() => readHistory(historyText({ count: 2 })), /end record says 2/);
   assert.throws(() => readHistory(historyText({ split: 'confirmation' })), /confirmation split/);
