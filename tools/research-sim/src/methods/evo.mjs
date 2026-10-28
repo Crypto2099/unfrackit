@@ -153,7 +153,7 @@ import { makeTxBuilder, voterToKey } from '@evolution-sdk/evolution/sdk/builders
 import * as CostModel from '@evolution-sdk/evolution/CostModel';
 import { CLASSES } from '../kit/check.mjs';
 import { unspentOutputParts, inspectTx } from '../kit/inspect.mjs';
-import { replayRefusal, emptyAuxiliaryData } from '../kit/replay.mjs';
+import { replayRefusal, emptyAuxiliaryData, listItems, requiredSigners, replayWitnessKeys, redeemerKey, targetKey } from '../kit/replay.mjs';
 import { minFee } from '../kit/fee.mjs';
 import { need } from '../kit/params.mjs';
 import { decode, raw, head, encUint, asUint } from '../history/cbor.mjs';
@@ -238,15 +238,6 @@ const EMPTY_COST_MODELS = new CostModel.CostModels({ PlutusV1: new CostModel.Cos
 const refOfInput = (i) => `${E.TransactionHash.toHex(i.transactionId)}#${i.index}`;
 const hexOf = (b) => Buffer.from(b).toString('hex');
 
-// The items of a list or tagged set, as their bytes.
-function itemsOf(hexValue) {
-  const b = Buffer.from(hexValue, 'hex');
-  const n = decode(b);
-  const arr = n.mt === 6 ? n.item : n;
-  if (arr.mt !== 4) throw new Error('expected a list');
-  return arr.items.map((x) => Buffer.from(raw(b, x)));
-}
-
 // The intent's witness-set entries with the given keys, decoded by the
 // library, or null.
 function witnessesOf(fixed, keys) {
@@ -257,7 +248,7 @@ function witnessesOf(fixed, keys) {
 
 // The intent's certificates' first fields (their kinds), and the library's
 // reading of each.
-const certificateKinds = (fixed) => (fixed.body[4] === undefined ? [] : itemsOf(fixed.body[4]).map((b) => Number(asUint(decode(b).items[0], 'certificate kind'))));
+const certificateKinds = (fixed) => (fixed.body[4] === undefined ? [] : listItems(fixed.body[4]).map((b) => Number(asUint(decode(b).items[0], 'certificate kind'))));
 
 // 'a certificate' or 'a withdrawal' when the intent has one for a script stake
 // credential with no redeemer (a legacy registration needs none on the ledger,
@@ -266,7 +257,7 @@ const STAKE_CERTIFICATES = new Set([0, 1, 2, 7, 8, 9, 10, 11, 12, 13]);
 function scriptStakeWithoutRedeemer(fixed) {
   const has = (tag, pred) => fixed.redeemers.some((r) => r.tag === tag && pred(r.target));
   if (fixed.body[4] !== undefined) {
-    const items = itemsOf(fixed.body[4]);
+    const items = listItems(fixed.body[4]);
     for (let i = 0; i < items.length; i++) {
       const n = decode(items[i]);
       if (!STAKE_CERTIFICATES.has(Number(asUint(n.items[0], 'certificate kind')))) continue;
@@ -334,18 +325,28 @@ export function unpricedParts(intent) {
   return out;
 }
 
-// The intent's redeemer data and observed units for one target.
-function redeemerFinder(fixed) {
+// The intent's redeemer data for one target, found by the target's key
+// (kit/replay.mjs redeemerKey): the library's objects give an input's
+// reference, a policy, a certificate's or proposal's place and a withdrawal's
+// reward account (RewardAccount.toHex) in full. A voter they give only as its
+// key hash (voterToKey), so a voter's redeemer is the one whose recorded voter
+// ends with that hash.
+export function redeemerFinder(fixed) {
   const reds = fixed ? fixed.redeemers : [];
-  const find = (pred) => reds.find(pred) || null;
+  const byKey = new Map();
+  for (const r of reds) {
+    const key = redeemerKey(r);
+    if (!byKey.has(key)) byKey.set(key, r);
+  }
   const arg = (r) => (r ? { redeemer: E.Data.fromCBORHex(r.data) } : {});
+  const at = (target) => arg(byKey.get(targetKey(target)) || null);
   return {
-    input: (ref) => arg(find((r) => r.tag === 0 && r.target.ref === ref)),
-    policy: (policy) => arg(find((r) => r.tag === 1 && r.target.policy === policy)),
-    certificate: (i) => arg(find((r) => r.tag === 2 && r.target.index === i)),
-    withdrawal: (cred) => arg(find((r) => r.tag === 3 && r.target.account.slice(2) === cred)),
-    voter: (hash) => arg(find((r) => r.tag === 4 && r.target.voter.endsWith(hash))),
-    proposal: (i) => arg(find((r) => r.tag === 5 && r.target.index === i))
+    input: (ref) => at({ kind: 'input', ref }),
+    policy: (policy) => at({ kind: 'policy', policy }),
+    certificate: (index) => at({ kind: 'certificate', index }),
+    withdrawal: (account) => at({ kind: 'withdrawal', account }),
+    voter: (hash) => arg(reds.find((r) => r.tag === 4 && r.target.voter.endsWith(hash)) || null),
+    proposal: (index) => at({ kind: 'proposal', index })
   };
 }
 
@@ -422,7 +423,7 @@ export function evoImplicit(intent, params) {
     else if (k === 8) refunds += p('keyDeposit');
     else if (k === 17) refunds += p('drepDeposit');
   }
-  if (f.body[20] !== undefined) deposits += BigInt(itemsOf(f.body[20]).length) * p('govActionDeposit');
+  if (f.body[20] !== undefined) deposits += BigInt(listItems(f.body[20]).length) * p('govActionDeposit');
   return { deposits, refunds };
 }
 
@@ -445,14 +446,14 @@ function withFixedParts(b, intent, params, chain, unpriced) {
     for (const [policy, record] of byPolicy) b = b.mintAssets({ assets: E.Assets.fromRecord(record), ...red.policy(policy) });
   }
   if (f.body[4] !== undefined && !unpriced.includes('certificates')) {
-    itemsOf(f.body[4]).forEach((bytes, i) => {
+    listItems(f.body[4]).forEach((bytes, i) => {
       b = withCertificate(b, E.Certificate.fromCBORHex(hexOf(bytes)), red.certificate(i), params);
     });
   }
   if (f.body[5] !== undefined && !unpriced.includes('certificates') && !unpriced.includes('withdrawals')) {
     for (const [account, amount] of E.Withdrawals.fromCBORHex(f.body[5]).withdrawals) {
       if (account.networkId !== chain.id) throw new Error(`a withdrawal from network ${account.networkId} on chain ${chain.id}`);
-      b = b.withdraw({ stakeCredential: account.stakeCredential, amount, ...red.withdrawal(hexOf(account.stakeCredential.hash)) });
+      b = b.withdraw({ stakeCredential: account.stakeCredential, amount, ...red.withdrawal(E.RewardAccount.toHex(account)) });
     }
   }
   if (f.body[19] !== undefined) {
@@ -462,7 +463,7 @@ function withFixedParts(b, intent, params, chain, unpriced) {
     }
   }
   if (f.body[20] !== undefined) {
-    itemsOf(f.body[20]).map((x) => E.ProposalProcedure.fromCBORHex(hexOf(x))).forEach((p, i) => {
+    listItems(f.body[20]).map((x) => E.ProposalProcedure.fromCBORHex(hexOf(x))).forEach((p, i) => {
       need(params, 'govActionDeposit');
       b = b.propose({ governanceAction: p.governanceAction, rewardAccount: p.rewardAccount, anchor: p.anchor, ...red.proposal(i) });
     });
@@ -475,16 +476,6 @@ function withFixedParts(b, intent, params, chain, unpriced) {
   if (f.auxiliaryData && !unpriced.includes('auxiliary data')) for (const [label, metadata] of metadataOf(f).entries) b = b.attachMetadata({ label, metadata });
   return b;
 }
-
-// The key hashes body field 14 lists.
-function requiredSigners(fixed) {
-  if (fixed.body[14] === undefined) return [];
-  return itemsOf(fixed.body[14]).map((b) => asBytesOf(b));
-}
-const asBytesOf = (b) => {
-  const n = decode(b);
-  return Buffer.from(raw(b, n)).subarray(b.length - 28).toString('hex');
-};
 
 // The evaluator (BuildOptions.evaluator, TransactionBuilder.ts:201-213): the
 // intent's observed execution units for each of its redeemers, at the index
@@ -521,21 +512,13 @@ export function observedEvaluator(intent) {
 }
 
 // The wallet's payment keys a replayed transaction needs a synthetic witness
-// for: its inputs', its held fixed inputs', its collateral inputs' and the
-// required signers' among the wallet's keys.
+// for (kit/replay.mjs replayWitnessKeys): the collateral is the library's own
+// collateral inputs, read from its transaction, and the wallet's credentials
+// those of the pool, which holds that collateral.
 function walletKeysOf(state, intent, inputs, collateralRefs) {
-  const keys = new Set(inputs.map((u) => u.cred));
   const f = intent.fixed;
-  if (f) for (const x of f.inputs) if (x.walletKey) keys.add(x.walletKey);
-  for (const r of collateralRefs) {
-    const u = state.utxos.get(r);
-    if (u) keys.add(u.cred);
-  }
-  if (f) {
-    const creds = new Set([...state.utxos.values()].map((u) => u.cred));
-    for (const h of requiredSigners(f)) if (creds.has(h)) keys.add(h);
-  }
-  return keys;
+  const collateral = collateralRefs.map((r) => state.utxos.get(r)).filter(Boolean);
+  return replayWitnessKeys(f, { inputs, collateral, walletCreds: f ? new Set([...state.utxos.values()].map((u) => u.cred)) : null });
 }
 
 // Builds the intent with the library: the battery path for a battery spend,
@@ -632,7 +615,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
     const uint = (k) => asUint(decode(Buffer.from(f.body[k], 'hex')), `body field ${k}`);
     if (after('current treasury value')) set.currentTreasuryValue = uint(21);
     if (after('treasury donation')) set.donation = uint(22);
-    if (after('certificates')) set.certificates = itemsOf(f.body[4]).map((x) => E.Certificate.fromCBORHex(hexOf(x)));
+    if (after('certificates')) set.certificates = listItems(f.body[4]).map((x) => E.Certificate.fromCBORHex(hexOf(x)));
     if ((after('certificates') || after('withdrawals')) && f.body[5] !== undefined) set.withdrawals = E.Withdrawals.fromCBORHex(f.body[5]);
     if (after('auxiliary data')) {
       auxiliaryData = E.AuxiliaryData.fromCBORHex(f.auxiliaryData);

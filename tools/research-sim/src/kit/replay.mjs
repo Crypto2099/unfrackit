@@ -13,6 +13,12 @@
 // network id and an auxiliary data holding no metadata and no script are left
 // out of it.
 //
+// The module also holds the replay helpers every adapter shares: an intent's
+// list items (listItems), its required signers (requiredSigners), the wallet
+// keys a replayed transaction is witnessed for (replayWitnessKeys), the
+// scripts it holds (intentScripts) and a redeemer's target as a key
+// (redeemerKey, targetKey).
+//
 // Body:
 //   0   inputs: the wallet inputs and the intent's fixed inputs, sorted by
 //       transaction id then index, as a tagged set (tag 258), as CSL 13.2.1
@@ -42,7 +48,7 @@
 //   0   synthetic vkey witnesses, one per distinct payment key among the wallet
 //       inputs, the wallet's held fixed inputs and the collateral input, and
 //       one per required signer (body field 14) that is one of the wallet's
-//       payment keys
+//       payment keys (replayWitnessKeys)
 //       (state/utxo.mjs: real public keys from fixed seeds and fixed
 //       signatures, 101 bytes each as real ones, the treatment's
 //       build.mjs makeWitnessSet), then the intent's other vkey witnesses as
@@ -53,8 +59,8 @@
 //       not move, since their lists are fixed parts)
 // The transaction is [body, witness set, true, auxiliary data or null].
 
-import { blake2b256 } from '../history/blake2b.mjs';
-import { decode, raw, head, encUint, encBytes, encArray, encTag, TRUE, NULL } from '../history/cbor.mjs';
+import { blake2b256, blake2b224 } from '../history/blake2b.mjs';
+import { decode, raw, head, encUint, encBytes, encArray, encTag, asBytes, TRUE, NULL } from '../history/cbor.mjs';
 import { encodeOutput } from '../history/output.mjs';
 import { addressBytes } from '../history/address.mjs';
 import { unspentOutputParts, inspectTx } from './inspect.mjs';
@@ -103,7 +109,8 @@ export function syntheticVkeys(T, k) {
   return items;
 }
 
-function listItems(hexOrBuf) {
+// The items of a list or a tag-258 set (hex or a Buffer), each as its bytes.
+export function listItems(hexOrBuf) {
   const b = Buffer.isBuffer(hexOrBuf) ? hexOrBuf : Buffer.from(hexOrBuf, 'hex');
   const n = decode(b);
   const arr = n.mt === 6 ? n.item : n;
@@ -151,14 +158,88 @@ export function fixedInputValues(intent) {
   });
 }
 
-// The key hashes body field 14 lists (required signers).
-function requiredSigners(fixed) {
+// The key hashes body field 14 lists (required signers), as hex.
+export function requiredSigners(fixed) {
   if (!fixed || fixed.body[14] === undefined) return [];
   return listItems(fixed.body[14]).map((b) => {
     const n = decode(b);
     return Buffer.from(raw(b, n)).subarray(b.length - 28).toString('hex');
   });
 }
+
+// The wallet's payment keys a replayed transaction carries a synthetic vkey
+// witness for, the count every replay assembles with: the credentials of the
+// wallet inputs, the wallet keys of the held fixed inputs, the credentials of
+// the collateral inputs, and the required signers (body field 14) that are
+// among the wallet's payment credentials. The caller names the collateral
+// inputs (the UTxO the engine set aside, or the collateral a library chose
+// itself) and the wallet's credentials (none: no required signer counts).
+// A Set of key hashes (hex).
+export function replayWitnessKeys(fixed, { inputs, collateral = [], walletCreds = null }) {
+  const keys = new Set(inputs.map((u) => u.cred));
+  if (fixed) for (const x of fixed.inputs) if (x.walletKey) keys.add(x.walletKey);
+  for (const u of collateral) keys.add(u.cred);
+  if (walletCreds) for (const h of requiredSigners(fixed)) if (walletCreds.has(h)) keys.add(h);
+  return keys;
+}
+
+const hexOf = (b) => Buffer.from(b).toString('hex');
+const PLUTUS_KEYS = [[3, 1], [6, 2], [7, 3]];
+
+// The scripts an intent's fixed parts hold, by hash (BLAKE2b-224 of the
+// language tag and the script: 0 native, 1 to 3 Plutus V1 to V3): the witness
+// set's, then the reference scripts of its fixed and reference inputs. Each:
+// { lang, raw (a native script's bytes, a witness-set Plutus script's item
+// bytes, or null), ref (null, or { ref, size } for a reference script),
+// witness, used }; `used` is the caller's to set.
+export function intentScripts(fixed) {
+  const m = new Map();
+  const put = (hash, e) => {
+    if (!m.has(hash)) m.set(hash, e);
+  };
+  if (fixed.witnesses[1] !== undefined) {
+    for (const r of listItems(fixed.witnesses[1])) put(hexOf(blake2b224(Buffer.concat([Buffer.from([0]), r]))), { lang: 0, raw: r, ref: null, witness: true, used: false });
+  }
+  for (const [key, lang] of PLUTUS_KEYS) {
+    if (fixed.witnesses[key] === undefined) continue;
+    for (const r of listItems(fixed.witnesses[key])) {
+      const content = asBytes(decode(r), 'plutus script');
+      put(hexOf(blake2b224(Buffer.concat([Buffer.from([lang]), content]))), { lang, raw: r, ref: null, witness: true, used: false });
+    }
+  }
+  for (const x of [...fixed.inputs, ...fixed.referenceInputs]) {
+    const p = unspentOutputParts(x.cbor);
+    if (!p.scriptRef) continue;
+    const s = Buffer.from(p.scriptRef.script, 'hex');
+    put(hexOf(blake2b224(Buffer.concat([Buffer.from([p.scriptRef.lang]), s]))), { lang: p.scriptRef.lang, raw: p.scriptRef.lang === 0 ? s : null, ref: { ref: x.ref, size: p.scriptRef.size }, witness: false, used: false });
+  }
+  return m;
+}
+
+// A redeemer's target as a key, the one definition of which part a redeemer
+// serves: the tag's number and the target as the history reader records it
+// (history/intent.mjs redeemerTargets): an input's txid#index, a policy, a
+// certificate's or proposal's place in its list, a reward account (hex), a
+// voter (its observed bytes, hex).
+export function targetKey(t) {
+  switch (t.kind) {
+    case 'input':
+      return `0:${t.ref}`;
+    case 'policy':
+      return `1:${t.policy}`;
+    case 'certificate':
+      return `2:${t.index}`;
+    case 'withdrawal':
+      return `3:${t.account}`;
+    case 'voter':
+      return `4:${t.voter}`;
+    case 'proposal':
+      return `5:${t.index}`;
+    default:
+      throw new Error(`unknown redeemer target ${t.kind}`);
+  }
+}
+export const redeemerKey = (r) => targetKey(r.target);
 
 // Builder leftovers: parts the observed transaction's builder wrote that the
 // spend does not need and the ledger does not require. They are the network id
@@ -230,9 +311,7 @@ export function assembleReplayOnce(T, parts) {
   const allRefs = [...inputs.map((u) => u.ref), ...(fixed ? fixed.inputs.map((x) => x.ref) : [])];
   if (new Set(allRefs).size !== allRefs.length) throw new Error('replay: an input is given twice');
   const sorted = allRefs.slice().sort(cmpRef);
-  const keys = new Set(inputs.map((u) => u.cred));
-  if (fixed) for (const x of fixed.inputs) if (x.walletKey) keys.add(x.walletKey);
-  if (walletCreds) for (const h of requiredSigners(fixed)) if (walletCreds.has(h)) keys.add(h);
+  const keys = replayWitnessKeys(fixed, { inputs, collateral: collateral ? [collateral.utxo] : [], walletCreds });
 
   const body = [];
   const put = (k, v) => body.push([k, v]);
@@ -251,7 +330,6 @@ export function assembleReplayOnce(T, parts) {
   if (reds || datums) put(11, encBytes(blake2b256(Buffer.concat([reds || Buffer.alloc(0), datums || Buffer.alloc(0)]))));
   if (collateral) {
     const u = collateral.utxo;
-    keys.add(u.cred);
     put(13, SET([inputBytes(u.ref)]));
     const retCoin = u.coin - collateral.total;
     if (retCoin > 0n || u.assets.length) {

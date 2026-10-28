@@ -67,12 +67,12 @@ import { CLASSES } from '../kit/check.mjs';
 import { buildWithChange } from './change.mjs';
 import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 import { inspectTx, unspentOutputParts } from '../kit/inspect.mjs';
-import { replayRefusal } from '../kit/replay.mjs';
+import { replayRefusal, listItems, requiredSigners, replayWitnessKeys, intentScripts, redeemerKey, targetKey } from '../kit/replay.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
 import { totalCollateralFor } from '../replay/collateral.mjs';
 import { minFee } from '../kit/fee.mjs';
-import { decode, raw, asBytes, asUint, asInt, setItems } from '../history/cbor.mjs';
-import { blake2b224, blake2b256 } from '../history/blake2b.mjs';
+import { decode, asBytes, asUint, asInt, setItems } from '../history/cbor.mjs';
+import { blake2b256 } from '../history/blake2b.mjs';
 import { decodeTx, compareRewardAccounts } from '../history/tx.mjs';
 
 export const CSL_STRATEGIES = Object.freeze({ lf: 'LargestFirstMultiAsset', ri: 'RandomImproveMultiAsset' });
@@ -311,8 +311,8 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 // The witness set is CSL's (scripts, datums, redeemers), with the vkey
 // witnesses a signer adds: one synthetic witness per distinct payment key
 // among the wallet inputs, the wallet's held fixed inputs, the collateral
-// input and the required signers that are wallet keys (as kit/replay.mjs
-// counts them), then the intent's other vkey witnesses and its bootstrap
+// input and the required signers that are wallet keys (kit/replay.mjs
+// replayWitnessKeys), then the intent's other vkey witnesses and its bootstrap
 // witnesses as observed. These are written after CSL priced the transaction;
 // when the transaction outgrows the one CSL priced, library.unpriced names
 // the observed ones, and a failed check names them in its detail
@@ -342,65 +342,6 @@ const nr = (m) => {
 const hexOf = (b) => Buffer.from(b).toString('hex');
 const BODY_PARTS = new Set([3, 4, 5, 8, 9, 14, 19, 20, 21, 22]);
 const WITNESS_PARTS = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
-const PLUTUS_KEYS = [[3, 1], [6, 2], [7, 3]];
-
-function itemsOf(h) {
-  const b = Buffer.from(h, 'hex');
-  return { b, items: setItems(decode(b)) };
-}
-
-// The scripts an intent holds, by hash (BLAKE2b-224 of the language tag and
-// the script: 0 native, 1 to 3 Plutus V1 to V3): the witness set's, then the
-// reference scripts of its fixed and reference inputs.
-export function intentScripts(fixed) {
-  const m = new Map();
-  const put = (hash, e) => {
-    if (!m.has(hash)) m.set(hash, e);
-  };
-  if (fixed.witnesses[1] !== undefined) {
-    const { b, items } = itemsOf(fixed.witnesses[1]);
-    for (const it of items) {
-      const r = Buffer.from(raw(b, it));
-      put(hexOf(blake2b224(Buffer.concat([Buffer.from([0]), r]))), { lang: 0, raw: r, ref: null, witness: true, used: false });
-    }
-  }
-  for (const [key, lang] of PLUTUS_KEYS) {
-    if (fixed.witnesses[key] === undefined) continue;
-    const { b, items } = itemsOf(fixed.witnesses[key]);
-    for (const it of items) {
-      const content = asBytes(it, 'plutus script');
-      put(hexOf(blake2b224(Buffer.concat([Buffer.from([lang]), content]))), { lang, raw: Buffer.from(raw(b, it)), ref: null, witness: true, used: false });
-    }
-  }
-  for (const x of [...fixed.inputs, ...fixed.referenceInputs]) {
-    const p = unspentOutputParts(x.cbor);
-    if (!p.scriptRef) continue;
-    const s = Buffer.from(p.scriptRef.script, 'hex');
-    put(hexOf(blake2b224(Buffer.concat([Buffer.from([p.scriptRef.lang]), s]))), { lang: p.scriptRef.lang, raw: p.scriptRef.lang === 0 ? s : null, ref: { ref: x.ref, size: p.scriptRef.size }, witness: false, used: false });
-  }
-  return m;
-}
-
-// A redeemer's place, as the history reader records its target.
-export function redeemerKey(r) {
-  const t = r.target;
-  switch (t.kind) {
-    case 'input':
-      return `0:${t.ref}`;
-    case 'policy':
-      return `1:${t.policy}`;
-    case 'certificate':
-      return `2:${t.index}`;
-    case 'withdrawal':
-      return `3:${t.account}`;
-    case 'voter':
-      return `4:${t.voter}`;
-    case 'proposal':
-      return `5:${t.index}`;
-    default:
-      throw new Error(`unknown redeemer target ${t.kind}`);
-  }
-}
 
 const REDEEMER_TAGS = ['new_spend', 'new_mint', 'new_cert', 'new_reward', 'new_vote', 'new_voting_proposal'];
 const LANGUAGES = [null, 'new_plutus_v1', 'new_plutus_v2', 'new_plutus_v3'];
@@ -421,13 +362,7 @@ function addFixedParts(T, tb, intent, S, at) {
   }
   const usedReds = new Set();
   const datums = new Map();
-  if (f.witnesses[4] !== undefined) {
-    const { b, items } = itemsOf(f.witnesses[4]);
-    for (const it of items) {
-      const r = Buffer.from(raw(b, it));
-      datums.set(hexOf(blake2b256(r)), { raw: r, used: false });
-    }
-  }
+  if (f.witnesses[4] !== undefined) for (const r of listItems(f.witnesses[4])) datums.set(hexOf(blake2b256(r)), { raw: r, used: false });
   const field = (n) => Buffer.from(f.body[n], 'hex');
   const txIn = (ref) => {
     const i = ref.indexOf('#');
@@ -486,8 +421,8 @@ function addFixedParts(T, tb, intent, S, at) {
           const d = datums.get(p.datum.hash);
           if (!d) nr(`input ${x.ref}: the datum of hash ${p.datum.hash} is not in the witness set`);
           d.used = true;
-          w = k(C.PlutusWitness.new_with_ref(s.src, k(C.DatumSource.new(k(C.PlutusData.from_bytes(d.raw)))), redeemer(`0:${x.ref}`, `input ${x.ref}`)));
-        } else w = plutusOnly(`0:${x.ref}`, s, `input ${x.ref}`);
+          w = k(C.PlutusWitness.new_with_ref(s.src, k(C.DatumSource.new(k(C.PlutusData.from_bytes(d.raw)))), redeemer(targetKey({ kind: 'input', ref: x.ref }), `input ${x.ref}`)));
+        } else w = plutusOnly(targetKey({ kind: 'input', ref: x.ref }), s, `input ${x.ref}`);
         ib.add_plutus_script_input(w, input, amount);
       }
     } else {
@@ -527,7 +462,7 @@ function addFixedParts(T, tb, intent, S, at) {
         const cred = nodes[i].items[1];
         const s = source(hexOf(asBytes(cred.items[1], 'credential')), `certificate ${i}`);
         if (s.native) cb.add_with_native_script(cert, s.src);
-        else cb.add_with_plutus_witness(cert, plutusOnly(`2:${i}`, s, `certificate ${i}`));
+        else cb.add_with_plutus_witness(cert, plutusOnly(targetKey({ kind: 'certificate', index: i }), s, `certificate ${i}`));
       } else cb.add(cert);
     }
     tb.set_certs_builder(cb);
@@ -550,7 +485,7 @@ function addFixedParts(T, tb, intent, S, at) {
         const what = `withdrawal ${hexOf(e.account)}`;
         const s = source(k(cred.to_scripthash()).to_hex(), what);
         if (s.native) wb.add_with_native_script(e.ra, e.coin, s.src);
-        else wb.add_with_plutus_witness(e.ra, e.coin, plutusOnly(`3:${hexOf(e.account)}`, s, what));
+        else wb.add_with_plutus_witness(e.ra, e.coin, plutusOnly(targetKey({ kind: 'withdrawal', account: hexOf(e.account) }), s, what));
       } else wb.add(e.ra, e.coin);
     }
     tb.set_withdrawals_builder(wb);
@@ -562,7 +497,7 @@ function addFixedParts(T, tb, intent, S, at) {
     for (const [pk, assets] of decode(field(9)).entries) {
       const policy = hexOf(asBytes(pk, 'policy'));
       const s = source(policy, `policy ${policy}`);
-      const w = s.native ? k(C.MintWitness.new_native_script(s.src)) : k(C.MintWitness.new_plutus_script(s.src, redeemer(`1:${policy}`, `policy ${policy}`)));
+      const w = s.native ? k(C.MintWitness.new_native_script(s.src)) : k(C.MintWitness.new_plutus_script(s.src, redeemer(targetKey({ kind: 'policy', policy }), `policy ${policy}`)));
       for (const [nk, qk] of assets.entries) mb.add_asset(w, k(C.AssetName.new(asBytes(nk, 'asset name'))), k(C.Int.from_str(String(asInt(qk, 'quantity')))));
     }
     tb.set_mint_builder(mb);
@@ -570,8 +505,7 @@ function addFixedParts(T, tb, intent, S, at) {
 
   if (f.body[14] !== undefined) {
     at('required signers');
-    const { items } = itemsOf(f.body[14]);
-    for (const it of items) tb.add_required_signer(k(C.Ed25519KeyHash.from_bytes(asBytes(it, 'required signer'))));
+    for (const h of requiredSigners(f)) tb.add_required_signer(k(C.Ed25519KeyHash.from_bytes(Buffer.from(h, 'hex'))));
   }
 
   if (f.body[19] !== undefined) {
@@ -586,7 +520,7 @@ function addFixedParts(T, tb, intent, S, at) {
       if (voter.has_script_credentials()) {
         const cred = k(voter.to_constitutional_committee_hot_credential() || voter.to_drep_credential());
         const s = source(k(cred.to_scripthash()).to_hex(), what);
-        wit = s.native ? { native: s.src } : { plutus: plutusOnly(`4:${hexOf(voter.to_bytes())}`, s, what) };
+        wit = s.native ? { native: s.src } : { plutus: plutusOnly(targetKey({ kind: 'voter', voter: hexOf(voter.to_bytes()) }), s, what) };
       }
       const ids = k(vp.get_governance_action_ids_by_voter(voter));
       for (let j = 0; j < ids.len(); j++) {
@@ -608,7 +542,7 @@ function addFixedParts(T, tb, intent, S, at) {
     const pb = k(C.VotingProposalBuilder.new());
     for (let i = 0; i < ps.len(); i++) {
       const p = k(ps.get(i));
-      if (reds.has(`5:${i}`)) {
+      if (reds.has(targetKey({ kind: 'proposal', index: i }))) {
         // The guardrail policy is the last item of a parameter change or a
         // treasury withdrawal (conway.cddl gov_action).
         const action = nodes[i].items[2];
@@ -616,7 +550,7 @@ function addFixedParts(T, tb, intent, S, at) {
         if (last.mt !== 2) nr(`proposal ${i}: a redeemer without a policy`);
         const s = source(hexOf(asBytes(last, 'policy')), `proposal ${i}`);
         if (s.native) nr(`proposal ${i}: a native policy`);
-        pb.add_with_plutus_witness(p, plutusOnly(`5:${i}`, s, `proposal ${i}`));
+        pb.add_with_plutus_witness(p, plutusOnly(targetKey({ kind: 'proposal', index: i }), s, `proposal ${i}`));
       } else pb.add(p);
     }
     tb.set_voting_proposal_builder(pb);
@@ -641,22 +575,17 @@ function addFixedParts(T, tb, intent, S, at) {
   for (const key of reds.keys()) if (!usedReds.has(key)) nr(`the redeemer for ${key} serves no part CSL builds`);
 }
 
-// The keys a replayed spend's synthetic witnesses stand for, as kit/replay.mjs
-// counts them.
-function walletKeys(state, intent, inputs, collateral) {
+// The keys a replayed spend's synthetic witnesses stand for
+// (kit/replay.mjs replayWitnessKeys): the collateral is the UTxO set aside,
+// and the wallet's credentials those of the pool and the collateral.
+function walletKeyCount(state, intent, inputs, collateral) {
   const f = intent.fixed;
-  const keys = new Set(inputs.map((u) => u.cred));
-  if (f) for (const x of f.inputs) if (x.walletKey) keys.add(x.walletKey);
-  if (collateral) keys.add(collateral.cred);
+  let creds = null;
   if (f && f.body[14] !== undefined) {
-    const creds = new Set([...state.utxos.values()].map((u) => u.cred));
+    creds = new Set([...state.utxos.values()].map((u) => u.cred));
     if (collateral) creds.add(collateral.cred);
-    for (const it of itemsOf(f.body[14]).items) {
-      const h = hexOf(asBytes(it, 'required signer'));
-      if (creds.has(h)) keys.add(h);
-    }
   }
-  return keys.size;
+  return replayWitnessKeys(f, { inputs, collateral: collateral ? [collateral] : [], walletCreds: creds }).size;
 }
 
 function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opts) {
@@ -762,14 +691,11 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     const body = k(tx.body());
     const walletRefs = walletRefsOf(body);
     const inputs = recordsOf(state, walletRefs);
-    const n = walletKeys(state, intent, inputs, collateral);
+    const n = walletKeyCount(state, intent, inputs, collateral);
     const ws = k(tx.witness_set());
     const synthetic = k(T.build.makeWitnessSet(n));
     const vk = synthetic.vkeys() ? k(synthetic.vkeys()) : k(C.Vkeywitnesses.new());
-    if (f && f.witnesses[0] !== undefined) {
-      const { b, items } = itemsOf(f.witnesses[0]);
-      for (const it of items) vk.add(k(C.Vkeywitness.from_bytes(Buffer.from(raw(b, it)))));
-    }
+    if (f && f.witnesses[0] !== undefined) for (const w of listItems(f.witnesses[0])) vk.add(k(C.Vkeywitness.from_bytes(w)));
     if (vk.len()) ws.set_vkeys(vk);
     if (f && f.witnesses[2] !== undefined) ws.set_bootstraps(k(C.BootstrapWitnesses.from_bytes(Buffer.from(f.witnesses[2], 'hex'))));
     // Transaction.new takes the auxiliary data by value, so it is not freed here.
