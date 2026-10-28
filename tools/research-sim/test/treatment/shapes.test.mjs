@@ -4,9 +4,8 @@
 // Every transaction built on the 21 synthetic shapes builds with CSL and meets
 // the ledger kit's checks, and the four negative controls are caught on each
 // for its own reason; CSL reads each back to the same bytes, and the kit's
-// sizes are CSL's. Every transaction the treatment builds pays exactly the
-// ledger's minimum fee on the ledger's size, as the kit's own do; the count
-// of any fee above the minimum is reported by form. The transactions: the planner's plan of every shape
+// sizes are CSL's. Every transaction, the treatment's and the kit's, pays
+// exactly the ledger's minimum fee on the ledger's size. The transactions: the planner's plan of every shape
 // under every settings variant; and every battery spend (the standard battery
 // and H-10's on the observed layout, H-10's on the tidy layout) by the H-12
 // rule with absorption on and off and by the test method under the
@@ -111,6 +110,6 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
   }
   assert.deepEqual(bad, []);
   assert.equal(counts.kitFailures, 0);
-  for (const form of ['plan', 'chain-plan', 'payment']) assert.equal(counts.aboveMinimum[form], 0, `a ${form} transaction of the treatment pays above the ledger's minimum`);
+  for (const form of ['plan', 'chain-plan', 'payment', 'kit']) assert.equal(counts.aboveMinimum[form], 0, `a ${form} transaction pays above the ledger's minimum`);
   t.diagnostic(JSON.stringify(counts));
 });

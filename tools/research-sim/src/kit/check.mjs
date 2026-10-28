@@ -33,9 +33,14 @@
 //   fee           fee >= minFeeA * |tx| + minFeeB + the script fee (Babbage
 //                 Utxo.hs:183-212, feesOK part 1)
 //   witnesses     at least one vkey witness per distinct key payment
-//                 credential among the inputs, plus the intent's fixed
-//                 witnesses (eras/shelley/impl/src/Cardano/Ledger/Shelley/
-//                 Rules/Utxow.hs:420-434, validateNeededWitnesses). Witnesses
+//                 credential among the inputs and the collateral inputs (both
+//                 are spending inputs for this rule: eras/alonzo/impl/src/
+//                 Cardano/Ledger/Alonzo/TxBody.hs:307-313,
+//                 alonzoSpendableInputsTxBodyF; eras/shelley/impl/src/Cardano/
+//                 Ledger/Shelley/UTxO.hs:205-227, inputAuthors), plus the
+//                 intent's fixed witnesses (eras/shelley/impl/src/Cardano/
+//                 Ledger/Shelley/Rules/Utxow.hs:420-434,
+//                 validateNeededWitnesses). Witnesses
 //                 here are synthetic, so they are counted, not verified; a key
 //                 payment credential is spent with a vkey witness (CIP-0019,
 //                 "Payment part").
@@ -145,6 +150,10 @@ export function checkTx(bytes, ctx) {
 
   const keys = new Set();
   for (const r of resolved) if (r.addr && r.addr.paymentKind === 'key') keys.add(r.addr.payment);
+  for (const x of t.collateralInputs) {
+    const r = ctx.resolve(x.ref);
+    if (r && r.addr && r.addr.paymentKind === 'key') keys.add(r.addr.payment);
+  }
   const required = keys.size + (ctx.extraWitnesses || 0);
   if (t.vkeys.length < required) fail('witnesses', CLASSES.other, `${t.vkeys.length} vkey witnesses, ${required} needed`);
 

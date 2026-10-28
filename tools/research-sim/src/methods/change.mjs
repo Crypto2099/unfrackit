@@ -29,10 +29,18 @@
 // it (the ADA left is negative, or under the minimum with no token output to
 // carry it), the spend fails with class change-minimum (setting
 // substitutedChange 'fail').
+//
+// A replayed intent's fixed inputs (non-wallet inputs and the wallet's held
+// UTxOs it spends) bring their value into the balance beside the selector's
+// inputs, and its transaction is assembled by kit/replay.mjs with the intent's
+// fixed parts and, for a script spend, collateral under the arm's rule
+// (replay/collateral.mjs).
 
 import { treatmentParams } from '../treatment/bridge.mjs';
 import { adapterFor } from '../treatment/wallet.mjs';
 import { assembleAtMinimumFee } from '../kit/assemble.mjs';
+import { assembleReplayAtMinimumFee, fixedInputValues, collateralFrom } from '../kit/replay.mjs';
+import { eligibleCollateral } from '../replay/collateral.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { cmpRef } from '../state/state.mjs';
 import { valueSize } from '../history/value.mjs';
@@ -76,17 +84,24 @@ function leftover(inputs, requested, implicit, order) {
 }
 
 // Builds the spend: the given inputs, the intent's requested outputs (their
-// address, coin and assets), and the policy's change. Returns { ok, bytes,
-// fee, size, k, outputs } or { ok: false, class, detail }.
-export function buildWithChange(T, { state, params, inputs, intent, policy }) {
+// address, coin and assets, or for a replayed intent their own bytes), and
+// the policy's change. Returns { ok, bytes, fee, size, k, outputs } or
+// { ok: false, class, detail }. collateralRule: the arm's, for a replayed
+// script spend.
+export function buildWithChange(T, { state, params, inputs, intent, policy, collateralRule = null }) {
   if (!CHANGE_POLICIES.includes(policy)) throw new Error(`unknown change policy ${policy}`);
   const tp = treatmentParams(T, params);
   const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
   const implicit = intent.implicit || {};
-  const tokens = leftover(inputs, intent.requested, implicit, policy === 'naive' ? 'inputs' : 'policy');
+  const replay = intent.source === 'replay';
+  const fixedIns = fixedInputValues(intent);
+  const tokens = leftover([...inputs, ...fixedIns], intent.requested, implicit, policy === 'naive' ? 'inputs' : 'policy');
   if (!tokens) return { ok: false, class: CLASSES.balance, detail: 'the inputs do not hold every requested asset' };
   // Classes over the wallet's holding, a minted asset included.
-  const classes = T.planner.classifyAssets([...state.utxos.values(), { assets: (implicit.mint || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }]);
+  // A non-wallet fixed input's assets are classified with the wallet's (the
+  // wallet's held fixed inputs are already in the state).
+  const outside = fixedIns.filter((x) => !state.utxos.has(x.ref)).map((x) => ({ assets: x.assets }));
+  const classes = T.planner.classifyAssets([...state.utxos.values(), { assets: (implicit.mint || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }, ...outside]);
   const withCls = tokens.map((t) => ({ ...t, cls: classes.get(key(t)).cls }));
   const settings = T.planner.mergeSettings(policy === 'naive' ? { control: 'naive' } : {});
   const ctx = { settings, params: tp, adapter };
@@ -97,30 +112,49 @@ export function buildWithChange(T, { state, params, inputs, intent, policy }) {
   else tokenOuts = (withCls.length ? T.planner.packByRules(withCls, settings, ctx) : []).map((ts) => ({ address: change, coin: adapter.describe(ts).coin, assets: ts.map((t) => ({ policy: t.policy, name: t.name, qty: t.qty })).sort(cmpTok) }));
 
   const requested = intent.requested.map((o) => ({ address: o.address, coin: BigInt(o.coin), assets: o.assets.map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }));
-  const coinIn = sum(inputs.map((u) => u.coin)) + BigInt(implicit.withdrawals || 0n) + BigInt(implicit.refunds || 0n);
+  const coinIn = sum(inputs.map((u) => u.coin)) + sum(fixedIns.map((x) => x.coin)) + BigInt(implicit.withdrawals || 0n) + BigInt(implicit.refunds || 0n);
   const coinOut = sum(requested.map((o) => o.coin)) + sum(tokenOuts.map((o) => o.coin)) + BigInt(implicit.deposits || 0n) + BigInt(implicit.donation || 0n);
   const pureMin = adapter.pureAdaMin;
 
-  const outputsFor = (fee) => {
+  // The change for a fee, or a failure. A script spend's collateral is not an
+  // input and moves no value outside its own return output.
+  const changeFor = (fee) => {
     const ada = coinIn - coinOut - fee;
     if (ada < 0n) return { ok: false, class: CLASSES.changeMinimum, detail: `the inputs fall ${-ada} lovelace short of the outputs and the fee` };
     if (policy === 'single') {
       const assets = withCls.map((t) => ({ policy: t.policy, name: t.name, qty: t.qty })).sort(cmpTok);
-      if (!assets.length && ada === 0n) return { ok: true, outputs: requested };
+      if (!assets.length && ada === 0n) return { ok: true, change: [] };
       const d = assets.length ? adapter.describe(assets) : null;
       const min = d ? d.coin : pureMin;
       if (ada < min) return { ok: false, class: CLASSES.changeMinimum, detail: `the single change output's coin ${ada} is under its minimum ${min}` };
       const vb = valueSize(ada, assets);
       if (vb > tp.maxValSize) return { ok: false, class: CLASSES.valueSize, detail: `the single change output's Value is ${vb} bytes, over ${tp.maxValSize}` };
-      return { ok: true, outputs: [...requested, { address: change, coin: ada, assets }] };
+      return { ok: true, change: [{ address: change, coin: ada, assets }] };
     }
-    if (ada === 0n) return { ok: true, outputs: [...requested, ...tokenOuts] };
-    if (ada >= pureMin) return { ok: true, outputs: [...requested, ...tokenOuts, { address: change, coin: ada, assets: [] }] };
+    if (ada === 0n) return { ok: true, change: tokenOuts };
+    if (ada >= pureMin) return { ok: true, change: [...tokenOuts, { address: change, coin: ada, assets: [] }] };
     if (!tokenOuts.length) return { ok: false, class: CLASSES.changeMinimum, detail: `ADA change ${ada} is under the pure-ADA minimum ${pureMin} and no token output can carry it` };
     const last = tokenOuts[tokenOuts.length - 1];
-    return { ok: true, outputs: [...requested, ...tokenOuts.slice(0, -1), { ...last, coin: last.coin + ada }] };
+    return { ok: true, change: [...tokenOuts.slice(0, -1), { ...last, coin: last.coin + ada }] };
   };
-  const r = assembleAtMinimumFee(T, params, inputs, outputsFor, { scriptFee: intent.fixed ? intent.fixed.scriptFee || 0n : 0n });
+  let r;
+  if (replay) {
+    let collateralFor = () => null;
+    if (intent.collateral.required) {
+      if (!collateralRule) throw new Error('a script spend needs the arm\'s collateral rule');
+      const exclude = new Set([...inputs.map((u) => u.ref), ...fixedIns.map((x) => x.ref)]);
+      const eligible = eligibleCollateral(state, params, collateralRule, { exclude, observedFee: intent.observed ? intent.observed.fee : null });
+      collateralFor = collateralFrom(params, eligible, change);
+    }
+    r = assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor, walletCreds: new Set([...state.utxos.values()].map((u) => u.cred)) });
+    if (r.ok) r.outputs = [...requested, ...r.change];
+  } else {
+    const outputsFor = (fee) => {
+      const c = changeFor(fee);
+      return c.ok ? { ok: true, outputs: [...requested, ...c.change] } : c;
+    };
+    r = assembleAtMinimumFee(T, params, inputs, outputsFor, { scriptFee: intent.fixed ? intent.fixed.scriptFee || 0n : 0n });
+  }
   if (!r.ok) return r;
   if (r.size > params.maxTxSize) return { ok: false, class: CLASSES.txSize, detail: `${r.size} bytes, over ${params.maxTxSize}` };
   return r;

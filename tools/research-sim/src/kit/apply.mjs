@@ -45,6 +45,7 @@ export function checkAndApply(state, params, txs, opts = {}) {
   const fixedMap = fixedResolver(opts.fixed);
   let s = state;
   const checks = [];
+  const states = [];
   for (let i = 0; i < txs.length; i++) {
     const last = i === txs.length - 1;
     const cur = s;
@@ -64,6 +65,9 @@ export function checkAndApply(state, params, txs, opts = {}) {
     checks.push(r);
     if (!r.ok) return { ok: false, failed: i, checks, state, failure: r.failures[0] };
     s = applyTx(s, { bytes: txs[i].bytes, walletInputs: txs[i].walletInputs, heldInputs: last ? opts.heldInputs || [] : [], notWallet: opts.notWallet || null }).state;
+    states.push(s);
   }
-  return { ok: true, checks, state: s };
+  // states: the state after each transaction, so a chain's payment can be
+  // read against the state its plan transactions left.
+  return { ok: true, checks, state: s, states };
 }

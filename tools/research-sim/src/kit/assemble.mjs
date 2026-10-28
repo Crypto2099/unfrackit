@@ -13,8 +13,11 @@
 //
 // The fee is the ledger's minimum for the assembled size, found as a fixed
 // point because the fee's own encoding and the change coin's are part of the
-// size: the fee rises until it covers the size it produces. `outputsFor(fee)`
-// returns the outputs for a fee, or a failure.
+// size: the fee rises until it covers the size it produces. When the size
+// then falls (a coin's encoding narrows as the change shrinks), the fee is
+// lowered to the minimum of the smaller transaction for as long as that still
+// covers itself, so the fee is the least that pays for its own transaction.
+// `outputsFor(fee)` returns the outputs for a fee, or a failure.
 
 import { cmpRef } from '../state/state.mjs';
 import { minFee } from './fee.mjs';
@@ -84,17 +87,35 @@ export function assembleOnce(T, inputs, outputs, fee) {
 // The transaction at its minimum fee. Returns { ok, bytes, fee, size, k,
 // outputs } or the failure outputsFor gave.
 export function assembleAtMinimumFee(T, params, inputs, outputsFor, { scriptFee = 0n } = {}) {
-  let fee = minFee(params, 0, scriptFee);
-  for (let it = 0; it < 16; it++) {
+  const at = (fee) => {
     const outs = outputsFor(fee);
     if (!outs.ok) return outs;
     const a = assembleOnce(T, inputs, outs.outputs, fee);
     const t = inspectTx(a.bytes);
-    const need = minFee(params, t.size, scriptFee);
-    // The fee only grows, so the loop ends; a fee that came out above the
-    // minimum by a coin-width step stays (it is still at least the minimum).
-    if (need <= fee) return { ok: true, bytes: a.bytes, fee, size: t.size, serializedSize: t.serializedSize, k: a.k, outputs: outs.outputs, hash: t.hash };
-    fee = need;
+    return { ok: true, bytes: a.bytes, fee, size: t.size, serializedSize: t.serializedSize, k: a.k, outputs: outs.outputs, hash: t.hash, need: minFee(params, t.size, scriptFee) };
+  };
+  return leastSelfCoveringFee(at, minFee(params, 0, scriptFee));
+}
+
+// The fixed point of the fee: rising until the fee covers its transaction,
+// then lowered while a lower fee still covers its own (smaller) transaction.
+// at(fee) returns the transaction at that fee with its minimum as `need`.
+export function leastSelfCoveringFee(at, start) {
+  let fee = start;
+  let cur = null;
+  for (let it = 0; it < 24; it++) {
+    cur = at(fee);
+    if (!cur.ok) return cur;
+    if (cur.need <= fee) break;
+    fee = cur.need;
+    cur = null;
   }
-  throw new Error('assemble: the fee did not settle');
+  if (!cur) throw new Error('assemble: the fee did not settle');
+  for (let it = 0; it < 24 && cur.need < cur.fee; it++) {
+    const lower = at(cur.need);
+    if (!lower.ok || lower.need > lower.fee) break;
+    cur = lower;
+  }
+  const { need: _need, ...out } = cur;
+  return out;
 }

@@ -51,6 +51,7 @@ export async function runSpend(T, { state, params, intent, method, opts, tidySet
     paymentSize: applied.checks[applied.checks.length - 1].facts.size,
     kit: applied.checks,
     after: applied.state,
+    beforePayment: applied.states.length > 1 ? applied.states[applied.states.length - 2] : state,
     utxosAfter: applied.state.utxos.size,
     tidyTxs: tidy.txs.length,
     tidyFee: sum(tidy.txs.map((t) => t.fee))
