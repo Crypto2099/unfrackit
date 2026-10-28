@@ -72,7 +72,7 @@ SELECT b.id
 -- first epoch whose protocol_major is 4 or more (the Mary hard fork), each
 -- ending before the snapshot's epoch, the run with the largest transaction
 -- count, every transaction counted, ties to the earlier run. The extraction
--- tool's rule (sql/05-03-windows.sql, steps epoch_counts and peak_runs) as
+-- tool's rule (sql/windows.sql, steps epoch_counts and peak_runs) as
 -- one statement; the extraction run's params.json, when given, is used
 -- instead.
 -- @query peak_window
@@ -148,7 +148,7 @@ SELECT m.tx_out_id, encode(ma.policy, 'hex') AS policy, encode(ma.name, 'hex') A
 
 -- The reference query: the pattern of db-sync's own UTxO-at-block query
 -- (cardano-db/src/Cardano/Db/Statement/DbTool.hs, queryUtxoAtBlockIdCoreStmt;
--- the extraction tool's sql/06-01-utxo-at-block.sql, digest_ref), restricted
+-- the extraction tool's sql/utxo-at-block.sql, digest_ref), restricted
 -- to the wallets: outputs whose transaction is in a block with id <= B, less
 -- those consumed by an input whose transaction is in such a block. Each UTxO
 -- is one canonical line; a wallet's set is the count and the MD5 of its lines
@@ -271,12 +271,12 @@ SELECT u.usage,
             ELSE has_table_privilege(current_user, 'study.sample', 'SELECT') END AS has_frame
   FROM u;
 
--- The extraction's study tables (tools/research-corpus, sql/05-04-draw.sql,
--- 05-05-franken.sql, 06-01-txo.sql), read when this role can read them: the
+-- The extraction's study tables (tools/research-corpus, sql/draw.sql,
+-- franken.sql, txo.sql), read when this role can read them: the
 -- sampled wallets with their split and the reconstruction check's exclusion,
 -- the franken flags, and the life table's UTxO set at T.
 -- @query study_samples
-SELECT s.sa_id, bool_or(s.kind = 'random') AS random, max(s.split) AS split, bool_or(coalesce(s.excluded_6_1, false)) AS excluded
+SELECT s.sa_id, bool_or(s.kind = 'random') AS random, max(s.split) AS split, bool_or(coalesce(s.reconstruction_excluded, false)) AS excluded
   FROM study.sample s
  GROUP BY s.sa_id
  ORDER BY s.sa_id;

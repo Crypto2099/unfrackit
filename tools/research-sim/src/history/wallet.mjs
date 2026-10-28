@@ -14,7 +14,7 @@
 //
 // The UTxO set at transaction id T is every output created at or before T and
 // not consumed at or before T: the life-table rule of the extraction tool
-// (tools/research-corpus, sql/06-01-txo.sql), computed here from the wallet's
+// (tools/research-corpus, sql/txo.sql), computed here from the wallet's
 // own rows, without a study table. sql/history.sql's ref_digests is the
 // independent reference it is checked against.
 //
@@ -99,7 +99,7 @@ export function digestOf(rows) {
 // transaction that also spends another of the wallet's key payment
 // credentials, across the wallet's whole history up to the snapshot, in a
 // wallet where at least one pair does co-spend. The extraction tool's rule
-// (sql/05-05-franken.sql), on the wallet's own rows.
+// (sql/franken.sql), on the wallet's own rows.
 export function frankenFlags(life, snapTx) {
   const creds = new Set();
   const byTx = new Map();

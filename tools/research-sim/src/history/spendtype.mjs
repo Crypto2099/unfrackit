@@ -14,7 +14,7 @@
 // units: under the 'profile' setting, the largest of the wallet's holding of
 // the asset at the window's start, at its end, and the units the transaction
 // moved (the absolute net of the wallet's outputs less its consumed outputs,
-// as the extraction tool's sql/05-09-profile-inputs.sql computes it); under
+// as the extraction tool's sql/profile-inputs.sql computes it); under
 // 'at-spend', the wallet's holding just before the spend.
 
 import { isFungible } from './cip67.mjs';

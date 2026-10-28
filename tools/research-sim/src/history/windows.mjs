@@ -2,7 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 // The snapshot block and the two windows, by the extraction tool's rules and
-// conventions (tools/research-corpus, sql/05-03-windows.sql and
+// conventions (tools/research-corpus, sql/windows.sql and
 // src/pipeline.mjs): the recent window runs from the first block whose time
 // is at or after the snapshot's time less 365 days through the snapshot
 // block; the peak window is the busiest run of 73 completed epochs from the

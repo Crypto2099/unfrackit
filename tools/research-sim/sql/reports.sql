@@ -30,7 +30,7 @@ SELECT sa.id
  ORDER BY sa.id;
 
 -- The extraction's eligible recent-frame wallets, when its study tables are
--- readable (tools/research-corpus, sql/05-04-frames.sql).
+-- readable (tools/research-corpus, sql/frames.sql).
 -- @query study_recent_eligible
 SELECT f.sa_id AS id FROM study.frame f WHERE f.frame = 'recent' AND f.eligible ORDER BY f.sa_id;
 
