@@ -14,7 +14,7 @@ import { readStakeList } from './guards.mjs';
 import { formatHashList, hashList, codeVersion, TOOL_DIR } from './hash.mjs';
 import { loadAll } from './sqlfile.mjs';
 import { connect, dbMeta, q } from './db.mjs';
-import { a1Compare } from './a1.mjs';
+import { sourceCheck } from './source-check.mjs';
 import { project, rowsFromHealth } from './project.mjs';
 import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { FIXED } from './params.mjs';
@@ -69,8 +69,8 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
                                   find the hypotheses record and the final freeze on chain, check the final
                                   record, and print the draw key and the rule's snapshot once each is known;
                                   mainnet: --code-manifest required, --study-key and --from-block as for run
-  cleanup --run-id <id>           drop a live-fire run's study tables and work directory, or an a1 live-fire
-                                  run's work directory; logged in the check log
+  cleanup --run-id <id>           drop a live-fire run's study tables and work directory, or a source-check
+                                  live-fire run's work directory; logged in the check log
   cleanup --start-seq <n> --network <n>
                                   close the start entry a killed command left, by its sequence number; that
                                   start only, never a run's tables, kept output or other starts
@@ -96,10 +96,10 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
   confirm-snapshot --run-id <id>  the snapshot is still on chain, ${FIXED.security_k} or more blocks deep in the database and
                                   in Koios; for a snapshot by rule, the rule still names it, with the first block
                                   of epoch N that deep
-  a1 [--from-run <id> --count 20 --node-count 5] [--stake <addr> ...] [--node-stake <addr> ...]
-     [--node-container <name> --node-socket <path> --magic <n>]
-     mainnet: --live-fire --purpose <text> --expect-network mainnet --hypotheses-tx
-     [--keep-for-debug], or the final freeze options of run
+  source-check [--from-run <id> --count 20 --node-count 5] [--stake <addr> ...]
+               [--node-stake <addr> ...] [--node-container <name> --node-socket <path> --magic <n>]
+               mainnet: --live-fire --purpose <text> --expect-network mainnet --hypotheses-tx
+               [--keep-for-debug], or the final freeze options of run
                                   compare UTxO sets with Koios and the node at the database tip; --from-run
                                   takes the first credentials of a run's recent-frame draw order
   explain --expect-network <name> --purpose <text> [--snapshot tip|<block hash>]
@@ -145,11 +145,11 @@ export function parseArgs(argv) {
 const dbOpts = (a) => ({ host: a.host, port: a.port, database: a.database, user: a.user });
 const lower = (x) => (x ? x.toLowerCase() : x);
 
-// On mainnet, a1 is a study query: it runs only as a logged live-fire check
-// before the final freeze, or after it with the final freeze checked.
-async function a1Gate(c, blocks, meta, a, studyKey) {
+// On mainnet, source-check is a study query: it runs only as a logged live-fire
+// check before the final freeze, or after it with the final freeze checked.
+async function sourceCheckGate(c, blocks, meta, a, studyKey) {
   if (meta.network !== 'mainnet' || a.liveFire) return;
-  if (!a.freezeTx || !a.prereg || !a.codeManifest) throw new Error('refusing: on mainnet a1 needs --live-fire --purpose, or --freeze-tx, --prereg and --code-manifest');
+  if (!a.freezeTx || !a.prereg || !a.codeManifest) throw new Error('refusing: on mainnet source-check needs --live-fire --purpose, or --freeze-tx, --prereg and --code-manifest');
   const fc = finalChecks(a, meta.network);
   const errs = codeManifestErrors(readFileSync(a.codeManifest, 'utf8'), hashList());
   if (errs.length) throw new Error(`refusing: the code differs from the code manifest: ${errs.join('; ')}`);
@@ -211,21 +211,22 @@ export async function verifyFreezeCommand(a, command, { client = null } = {}) {
   }
 }
 
-// a1: compares stake credentials' UTxO sets in the database with Koios and
-// the node. `client` lets the unit tests stand PGlite in for the database.
-export async function a1Command(a, command, { client = null } = {}) {
+// source-check: compares stake credentials' UTxO sets in the database with
+// Koios and the node. `client` lets the unit tests stand PGlite in for the
+// database.
+export async function sourceCheckCommand(a, command, { client = null } = {}) {
   const blocks = loadAll();
   const t0 = performance.now();
-  const runId = a.runId || `a1-${new Date().toISOString().replace(/[:.]/g, '')}`;
-  // A live-fire a1 logs its gate (connection, the hypotheses record on
-  // mainnet) as a query before its first query, and its start entry once
-  // the gate has passed, like a live-fire run.
+  const runId = a.runId || `source-check-${new Date().toISOString().replace(/[:.]/g, '')}`;
+  // A live-fire source-check logs its gate (connection, the hypotheses record
+  // on mainnet) as a query before its first query, and its start entry once the
+  // gate has passed, like a live-fire run.
   let gate = null;
   let start = null;
   if (a.liveFire) {
-    if (!(a.purpose || '').trim()) throw refuse('refusing: a live-fire a1 needs --purpose');
-    if (!a.expectNetwork) throw refuse('refusing: a live-fire a1 needs --expect-network, so that its check-log entry is written before the first query');
-    gate = appendEntry(a.expectNetwork, 'query-start', { name: 'a1 live-fire gate', run_id: runId, command, code: codeFacts() });
+    if (!(a.purpose || '').trim()) throw refuse('refusing: a live-fire source-check needs --purpose');
+    if (!a.expectNetwork) throw refuse('refusing: a live-fire source-check needs --expect-network, so that its check-log entry is written before the first query');
+    gate = appendEntry(a.expectNetwork, 'query-start', { name: 'source-check live-fire gate', run_id: runId, command, code: codeFacts() });
   }
   let c = null;
   let meta = null;
@@ -235,15 +236,15 @@ export async function a1Command(a, command, { client = null } = {}) {
     const studyKey = studyKeyFor(meta.network, a.studyKey);
     if (a.liveFire) {
       if (meta.network === 'mainnet') {
-        if (!/^[0-9a-f]{64}$/.test(lower(a.hypothesesTx) || '')) throw refuse('refusing: a mainnet live-fire a1 needs --hypotheses-tx (the hypotheses freeze comes first)');
+        if (!/^[0-9a-f]{64}$/.test(lower(a.hypothesesTx) || '')) throw refuse('refusing: a mainnet live-fire source-check needs --hypotheses-tx (the hypotheses freeze comes first)');
         const hyp = await readTx(c, blocks, lower(a.hypothesesTx));
         if (!hyp || !signedBy(hyp, studyKey)) throw refuse('refusing: the hypotheses freeze is not in the database with a record signed by the study key');
       }
-      appendEntry(meta.network, 'query', { name: 'a1 live-fire gate', start_seq: gate.seq, outcome: 'succeeded', error: null, run_ms: Math.round(performance.now() - t0) });
+      appendEntry(meta.network, 'query', { name: 'source-check live-fire gate', start_seq: gate.seq, outcome: 'succeeded', error: null, run_ms: Math.round(performance.now() - t0) });
       gate = null;
-      start = appendEntry(meta.network, 'a1-live-fire-start', { run_id: runId, command, purpose: a.purpose, code: codeFacts() });
+      start = appendEntry(meta.network, 'source-check-live-fire-start', { run_id: runId, command, purpose: a.purpose, code: codeFacts() });
     }
-    await a1Gate(c, blocks, meta, a, studyKey);
+    await sourceCheckGate(c, blocks, meta, a, studyKey);
     const node = a.nodeContainer ? { container: a.nodeContainer, socket: a.nodeSocket || '/ipc/node.socket', magic: a.magic || (meta.network === 'mainnet' ? 'mainnet' : '1') } : null;
     let views = a.stake;
     let nodeViews = a.nodeStake;
@@ -261,7 +262,7 @@ export async function a1Command(a, command, { client = null } = {}) {
       views = [...views, ...rows.rows.map((x) => x.view)];
       nodeViews = [...nodeViews, ...rows.rows.slice(0, m).map((x) => x.view)];
     }
-    r = await a1Compare({ client: c, blocks, network: meta.network, views, nodeViews, node, log: a.liveFire ? () => {} : (x) => process.stderr.write(x + '\n') });
+    r = await sourceCheck({ client: c, blocks, network: meta.network, views, nodeViews, node, log: a.liveFire ? () => {} : (x) => process.stderr.write(x + '\n') });
     if (!a.liveFire) console.log(JSON.stringify(r, null, 2));
   };
   try {
@@ -269,20 +270,20 @@ export async function a1Command(a, command, { client = null } = {}) {
     meta = await dbMeta(c, blocks);
     if (a.expectNetwork && a.expectNetwork !== meta.network) throw refuse(`refusing: database is ${meta.network}, expected ${a.expectNetwork}`);
     if (a.liveFire) await body();
-    else await loggedQuery(meta.network, 'a1', { run_id: runId, command, code: codeFacts() }, body);
+    else await loggedQuery(meta.network, 'source-check', { run_id: runId, command, code: codeFacts() }, body);
   } catch (e) {
     error = e;
   } finally {
     if (c && !client) await c.end();
   }
-  if (gate) appendEntry(a.expectNetwork, 'query', { name: 'a1 live-fire gate', start_seq: gate.seq, outcome: 'failed', error: error ? sanitizeError(error) : null, run_ms: Math.round(performance.now() - t0) });
+  if (gate) appendEntry(a.expectNetwork, 'query', { name: 'source-check live-fire gate', start_seq: gate.seq, outcome: 'failed', error: error ? sanitizeError(error) : null, run_ms: Math.round(performance.now() - t0) });
   if (start) {
     // Wallet-level output (the UTxO lines that differ) goes to the run's
     // work directory, removed unless kept; the log gets outcomes only.
     const work = join(runDir(a.expectNetwork, runId), 'work');
     let outputs = 'none written';
     if (r) {
-      writePrivate(join(work, 'a1.json'), JSON.stringify(r, null, 2) + '\n');
+      writePrivate(join(work, 'source-check.json'), JSON.stringify(r, null, 2) + '\n');
       outputs = 'kept for debugging';
       if (!a.keepForDebug) {
         try {
@@ -294,7 +295,7 @@ export async function a1Command(a, command, { client = null } = {}) {
       }
     }
     const results = r ? r.results.map((x) => ({ koios: x.error ? 'error' : x.koios.equal ? 'equal' : x.koios.explained_by_later_txs ? 'explained' : 'differs', node: x.node ? (x.node.equal ? 'equal' : x.node.explained_by_later_txs ? 'explained' : 'differs') : null })) : [];
-    const entry = appendEntry(a.expectNetwork, 'a1-live-fire', {
+    const entry = appendEntry(a.expectNetwork, 'source-check-live-fire', {
       run_id: runId,
       start_seq: start.seq,
       command,
@@ -519,8 +520,8 @@ async function main() {
       }
       return;
     }
-    case 'a1':
-      await a1Command(a, command);
+    case 'source-check':
+      await sourceCheckCommand(a, command);
       return;
     case 'explain': {
       const r = await explainCommand(a, command);

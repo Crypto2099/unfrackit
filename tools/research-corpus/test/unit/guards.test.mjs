@@ -26,7 +26,7 @@ import { checkLogPath, verifyLog, appendEntry } from '../../src/checklog.mjs';
 import { logPrefixDigests } from '../../src/freeze.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 import { STUDY_KEY } from '../../src/params.mjs';
-import { verifyFreezeCommand, a1Command, parseArgs, runOptions } from '../../src/cli.mjs';
+import { verifyFreezeCommand, sourceCheckCommand, parseArgs, runOptions } from '../../src/cli.mjs';
 import { freezeOf } from '../../src/manifest.mjs';
 import { fixtureRepo } from '../lib/gitfixture.mjs';
 import { captureScamList } from '../../src/scam-list.mjs';
@@ -177,22 +177,23 @@ test('an interrupted live-fire run is reported until cleanup closes it', withHom
   assert.deepEqual(v.kept_not_cleaned, []);
 }));
 
-test('cleanup takes an a1 live-fire run from the check log', withHome(async (home) => {
+test('cleanup takes a source-check live-fire run from the check log', withHome(async (home) => {
   const m = await mainnetDb();
-  const start = appendEntry('mainnet', 'a1-live-fire-start', { run_id: 'a1-x', purpose: 'p' });
-  appendEntry('mainnet', 'a1-live-fire', { run_id: 'a1-x', start_seq: start.seq, outcome: 'succeeded', wallet_level_output: 'kept for debugging' });
+  const start = appendEntry('mainnet', 'source-check-live-fire-start', { run_id: 'source-check-x', purpose: 'p' });
+  appendEntry('mainnet', 'source-check-live-fire', { run_id: 'source-check-x', start_seq: start.seq, outcome: 'succeeded', wallet_level_output: 'kept for debugging' });
   writeFileSync(join(home, 'marker'), '');
-  assert.deepEqual(verifyLog('mainnet').kept_not_cleaned.map((x) => x.run_id), ['a1-x']);
-  await cleanupRun({ client: m.client, runId: 'a1-x' });
+  assert.deepEqual(verifyLog('mainnet').kept_not_cleaned.map((x) => x.run_id), ['source-check-x']);
+  await cleanupRun({ client: m.client, runId: 'source-check-x' });
   assert.deepEqual(verifyLog('mainnet').kept_not_cleaned, []);
   await assert.rejects(cleanupRun({ client: m.client, runId: 'nothing' }), /no live-fire run nothing/);
 }));
 
-// verify-freeze and a1 on mainnet, through the commands themselves: --from-block
-// and any study key but the pinned one are refused, and verify-freeze needs
-// the code manifest, each before a chain table is read (the stand-in database
-// fails the test on any chain query) and each logged as a failed query.
-test('verify-freeze and a1 on mainnet refuse --from-block and another study key; verify-freeze needs --code-manifest', withHome(async (home) => {
+// verify-freeze and source-check on mainnet, through the commands themselves:
+// --from-block and any study key but the pinned one are refused, and
+// verify-freeze needs the code manifest, each before a chain table is read (the
+// stand-in database fails the test on any chain query) and each logged as a
+// failed query.
+test('verify-freeze and source-check on mainnet refuse --from-block and another study key; verify-freeze needs --code-manifest', withHome(async (home) => {
   const m = await mainnetDb({ studyRun: false });
   const manifest = join(home, 'code-manifest.txt');
   writeFileSync(manifest, formatHashList());
@@ -203,22 +204,22 @@ test('verify-freeze and a1 on mainnet refuse --from-block and another study key;
   await assert.rejects(verifyFreezeCommand({ ...base, studyKey: 'cc'.repeat(32) }, 'verify-freeze', opts), /pinned freeze identity/);
   // The parsed command line may carry --study-key-pin; neither command reads it.
   await assert.rejects(verifyFreezeCommand({ ...base, studyKey: 'cc'.repeat(32), studyKeyPin: 'cc'.repeat(32) }, 'verify-freeze', opts), /pinned freeze identity/);
-  await assert.rejects(a1Command({ ...base, fromBlock: '1' }, 'a1', opts), /--from-block is for test networks only/);
-  await assert.rejects(a1Command({ ...base, studyKey: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
-  await assert.rejects(a1Command({ ...base, studyKey: 'cc'.repeat(32), studyKeyPin: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
-  await assert.rejects(a1Command({ liveFire: true, purpose: 'p', expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, 'a1', opts), /pinned freeze identity/);
+  await assert.rejects(sourceCheckCommand({ ...base, fromBlock: '1' }, 'source-check', opts), /--from-block is for test networks only/);
+  await assert.rejects(sourceCheckCommand({ ...base, studyKey: 'cc'.repeat(32) }, 'source-check', opts), /pinned freeze identity/);
+  await assert.rejects(sourceCheckCommand({ ...base, studyKey: 'cc'.repeat(32), studyKeyPin: 'cc'.repeat(32) }, 'source-check', opts), /pinned freeze identity/);
+  await assert.rejects(sourceCheckCommand({ liveFire: true, purpose: 'p', expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, 'source-check', opts), /pinned freeze identity/);
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(entries.filter((e) => e.type === 'query').map((e) => [e.name, e.outcome]), [
     ['verify-freeze', 'failed'],
     ['verify-freeze', 'failed'],
     ['verify-freeze', 'failed'],
     ['verify-freeze', 'failed'],
-    ['a1', 'failed'],
-    ['a1', 'failed'],
-    ['a1', 'failed'],
-    ['a1 live-fire gate', 'failed']
+    ['source-check', 'failed'],
+    ['source-check', 'failed'],
+    ['source-check', 'failed'],
+    ['source-check live-fire gate', 'failed']
   ]);
-  assert.equal(entries.filter((e) => e.type === 'a1-live-fire-start').length, 0);
+  assert.equal(entries.filter((e) => e.type === 'source-check-live-fire-start').length, 0);
   assert.deepEqual(verifyLog('mainnet').unclosed, []);
 }));
 

@@ -632,9 +632,9 @@ export async function runPipeline(opts) {
   }
 }
 
-// Drops a live-fire run's study tables and work directory, or removes an a1
-// live-fire run's work directory, and logs when. An unclosed start entry of
-// the run (an interrupted run) is closed by the cleanup entry.
+// Drops a live-fire run's study tables and work directory, or removes a
+// source-check live-fire run's work directory, and logs when. An unclosed start
+// entry of the run (an interrupted run) is closed by the cleanup entry.
 export async function cleanupRun({ db, runId, command, client: given = null }) {
   const client = given || (await connect(db || {}));
   try {
@@ -647,8 +647,9 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
     const text = existsSync(checkLogPath(network)) ? readFileSync(checkLogPath(network), 'utf8') : '';
     const entries = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
     // A live-fire run is found by its mode row, or, once its rows are gone (a
-    // run that finished after being kept, an a1 run), by its check-log entries.
-    const logged = entries.some((e) => e.run_id === runId && ['live-fire', 'live-fire-start', 'a1-live-fire', 'a1-live-fire-start'].includes(e.type));
+    // run that finished after being kept, a source-check run), by its check-log
+    // entries.
+    const logged = entries.some((e) => e.run_id === runId && ['live-fire', 'live-fire-start', 'source-check-live-fire', 'source-check-live-fire-start'].includes(e.type));
     if (!mode && !logged) throw refuse(`refusing: no live-fire run ${runId} in this database or the check log`);
     if (mode && mode.m !== 'live-fire') throw refuse(`refusing: run ${runId} is a ${mode.m} run; cleanup is for live-fire runs`);
     await takeLock(client);

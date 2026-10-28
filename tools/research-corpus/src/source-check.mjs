@@ -52,7 +52,7 @@ async function spentInputs(koios, laterTxs) {
   return spent;
 }
 
-export async function a1Compare({ client, blocks, network, views, nodeViews = [], node = null, log = () => {} }) {
+export async function sourceCheck({ client, blocks, network, views, nodeViews = [], node = null, log = () => {} }) {
   const tip = (await q(client, blocks, 'tip_block'))[0];
   const T = { id: Number(tip.id), block_no: Number(tip.block_no), hash: tip.hash, time: tip.time };
   const koios = new Koios(network, { log });
@@ -91,7 +91,7 @@ export async function a1Compare({ client, blocks, network, views, nodeViews = []
       r.node = { addresses: addrs.length, pointer_addresses_left_out: all.length - addrs.length, n_db: dbNodeLines.length, n_node: nLines.length, equal: eq, only_db: dn.onlyA.length, only_node: dn.onlyB.length, explained_by_later_txs: !eq && explained(dn, later, spent), diff_sample: eq ? [] : [...dn.onlyA.slice(0, 3), ...dn.onlyB.slice(0, 3)] };
     }
     results.push(r);
-    log(`a1 ${view.slice(0, 20)}...: db ${r.n_db}, koios ${r.n_koios}${r.node ? `, node ${r.node.n_node}` : ''}, later txs ${later.length}`);
+    log(`source-check ${view.slice(0, 20)}...: db ${r.n_db}, koios ${r.n_koios}${r.node ? `, node ${r.node.n_node}` : ''}, later txs ${later.length}`);
   }
   const kTip1 = await koios.tip();
   const out = { db_tip: T, koios_tip_before: kTip0, koios_tip_after: kTip1, koios_requests: koios.requests, results };

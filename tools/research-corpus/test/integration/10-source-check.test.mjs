@@ -2,18 +2,19 @@
 // Copyright 2026 Adam K. Dean
 
 // T4. Current state against Koios account_utxos and against the node's
-// `query utxo` for every address of each shape: the A1 rehearsal. Twenty
-// credentials (the three shapes, the funder, and the first sixteen others in
-// the recent frame's draw order) are compared with Koios at the database tip;
-// five (the shapes, the funder and the first in draw order) with the node.
+// `query utxo` for every address of each shape: the source-check rehearsal.
+// Twenty credentials (the three shapes, the funder, and the first sixteen
+// others in the recent frame's draw order) are compared with Koios at the
+// database tip; five (the shapes, the funder and the first in draw order) with
+// the node.
 // Koios is the preprod public tier with no token, requests 150 ms apart.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { db, blocks, record, RUN_B, SHAPES, FUNDER, seederAddress, stakeOf } from './env.mjs';
-import { a1Compare } from '../../src/a1.mjs';
+import { sourceCheck } from '../../src/source-check.mjs';
 
-test('T4 A1 rehearsal: Koios and the node agree with db-sync at its tip', { timeout: 3600 * 1000 }, async () => {
+test('T4 source-check rehearsal: Koios and the node agree with db-sync at its tip', { timeout: 3600 * 1000 }, async () => {
   const c = await db();
   try {
     const fixed = [...SHAPES.map((s) => stakeOf(seederAddress(s)[0])), stakeOf(FUNDER)];
@@ -23,7 +24,7 @@ test('T4 A1 rehearsal: Koios and the node agree with db-sync at its tip', { time
     const nodeViews = [...fixed, drawn[0]];
     const container = process.env.RESEARCH_CORPUS_NODE_CONTAINER;
     if (!container) throw new Error('set RESEARCH_CORPUS_NODE_CONTAINER');
-    const r = await a1Compare({ client: c, blocks, network: 'preprod', views, nodeViews, node: { container, socket: '/ipc/node.socket', magic: '1' }, log: (s) => process.stderr.write(`  ${s}\n`) });
+    const r = await sourceCheck({ client: c, blocks, network: 'preprod', views, nodeViews, node: { container, socket: '/ipc/node.socket', magic: '1' }, log: (s) => process.stderr.write(`  ${s}\n`) });
     const summary = r.results.map((x) => ({
       view: x.view,
       n_db: x.n_db,

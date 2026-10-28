@@ -130,7 +130,7 @@ export function verifyLog(network) {
   const failedDeletions = [];
   const bySeq = new Map(entries.map((e) => [e.seq, e]));
   for (const e of entries) {
-    if (e.type === 'live-fire-start' || e.type === 'a1-live-fire-start' || e.type === 'query-start') starts.set(e.seq, e);
+    if (e.type === 'live-fire-start' || e.type === 'source-check-live-fire-start' || e.type === 'query-start') starts.set(e.seq, e);
     if (e.start_seq !== undefined && e.start_seq !== null) starts.delete(e.start_seq);
     // A query of a run (a run's gate, a study run) that finishes cleanly
     // settles the same run's earlier starts of that query, left by a killed
@@ -142,14 +142,14 @@ export function verifyLog(network) {
     // A later end entry that deleted the run's output (a run resumed to a
     // clean finish) settles its earlier unclosed starts, its gates' included,
     // kept output and failed deletions.
-    if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && typeof e.wallet_level_output === 'string' && e.wallet_level_output.startsWith('deleted ')) {
+    if ((e.type === 'live-fire' || e.type === 'source-check-live-fire') && typeof e.wallet_level_output === 'string' && e.wallet_level_output.startsWith('deleted ')) {
       for (const [seq, st] of starts) if (st.run_id === e.run_id) starts.delete(seq);
       open.delete(e.run_id);
       for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
     }
-    if ((e.type === 'live-fire' || e.type === 'a1-live-fire') && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
+    if ((e.type === 'live-fire' || e.type === 'source-check-live-fire') && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
     if (e.type === 'live-fire' && e.sim_wallets === SIM_KEPT) open.set(e.run_id, e.seq);
-    if ((e.type === 'live-fire' || e.type === 'a1-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
+    if ((e.type === 'live-fire' || e.type === 'source-check-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
       failedDeletions.push({ run_id: e.run_id, seq: e.seq, wallet_level_output: e.wallet_level_output });
     }
     // A run's cleanup settles the run. A start-closed entry (cleanup

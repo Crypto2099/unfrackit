@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// A1's difference test: a line only on the other side must be created by a
-// later transaction, a line only in the database must be an input a later
-// transaction spends; pointer addresses recognized from CIP-19's test vectors
-// (cardano-foundation/CIPs@befcdb75, CIP-0019, "Test vectors").
+// The source check's difference test: a line only on the other side must be
+// created by a later transaction, a line only in the database must be an input
+// a later transaction spends; pointer addresses recognized from CIP-19's test
+// vectors (cardano-foundation/CIPs@befcdb75, CIP-0019, "Test vectors").
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { explained, isPointerAddress } from '../../src/a1.mjs';
+import { explained, isPointerAddress } from '../../src/source-check.mjs';
 
 const T1 = 'aa'.repeat(32);
 const T2 = 'bb'.repeat(32);

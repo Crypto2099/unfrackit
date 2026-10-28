@@ -222,7 +222,7 @@ export function logPrefixDigests(text) {
 // A live-fire start entry is written only once the run's gate (connection,
 // probes, the hypotheses record on mainnet) has passed, so a refused attempt
 // does not count as a live-fire run.
-const LIVE_FIRE_STARTS = new Set(['live-fire-start', 'a1-live-fire-start']);
+const LIVE_FIRE_STARTS = new Set(['live-fire-start', 'source-check-live-fire-start']);
 const CITATION = /web\+cardano:\/\/transaction\/([0-9a-fA-F]{64})\/metadata\/309(?![0-9])/g;
 const blockTime = (t) => Date.parse(`${String(t).replace(' ', 'T')}Z`);
 
