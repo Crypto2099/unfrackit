@@ -7,7 +7,8 @@
 // each simulator-owned change policy: every transaction an adapter builds
 // either meets the ledger kit's checks or fails one with its class, every
 // refusal carries a class, and the kit's four negative controls are caught on
-// every built transaction in the library's own encoding. Alongside: whether
+// every built transaction in the library's own encoding. A transaction whose
+// fee is under the ledger minimum is classed fee-minimum, apart from balance. Alongside: whether
 // cardano-js-sdk's callbacks are exact (the fee the library was given against
 // the minimum of the transaction finally assembled, and the bundle-size
 // callback against the kit's value-size check on every change output), and
@@ -33,6 +34,7 @@ import { settle } from '../../src/kit/heap.mjs';
 import { cslMethod } from '../../src/methods/csl.mjs';
 import { cjsMethod } from '../../src/methods/cjs.mjs';
 import { evoMethod } from '../../src/methods/evo.mjs';
+import { CLASSES } from '../../src/kit/check.mjs';
 
 const T = await treatment();
 const MAX_U64 = 18446744073709551615n;
@@ -52,7 +54,7 @@ test('every baseline on the battery spends of the 21 shapes', { skip, timeout: 3
     ...['layout', 'single', 'naive'].flatMap((p) => [[lf, p], [ri, p], [cjsMethod(T), p]])
   ];
   const label = ([m, p]) => (p === 'default' ? m.name : `${m.name}/${p}`);
-  const summary = { spends: 0, unsettled: 0, configs: {}, others: [], kitFailures: [], controls: { checked: 0, bad: [] }, cjs: { selections: 0, feeEqual: 0, feeUnder: [], feeOver: [], bundles: 0, bundleAgree: 0, bundleDisagree: [] }, timing: {}, memory: {} };
+  const summary = { spends: 0, unsettled: 0, configs: {}, others: [], kitFailures: [], feeUnderMinimum: [], controls: { checked: 0, bad: [] }, cjs: { selections: 0, feeEqual: 0, feeUnder: [], feeOver: [], bundles: 0, bundleAgree: 0, bundleDisagree: [] }, timing: {}, memory: {} };
   for (const c of configs) summary.configs[label(c)] = { built: 0, kitPass: 0, kitFail: {}, failed: {} };
   for (const name of SHAPE_NAMES) {
     await settle();
@@ -97,6 +99,7 @@ test('every baseline on the battery spends of the 21 shapes', { skip, timeout: 3
         else {
           rec.kitFail[k.failure.cls] = (rec.kitFail[k.failure.cls] || 0) + 1;
           summary.kitFailures.push(`${name} ${it.id} ${L}: ${k.failure.check}: ${k.failure.detail}`);
+          if (k.failure.check === 'fee') summary.feeUnderMinimum.push({ spend: `${name} ${it.id} ${L}`, class: k.failure.cls });
         }
         if (k.ok) {
           const ctl = negativeControls(state, P, r.txs[0].bytes);
@@ -132,6 +135,7 @@ test('every baseline on the battery spends of the 21 shapes', { skip, timeout: 3
   t.diagnostic(out);
   assert.deepEqual(summary.controls.bad, []);
   assert.deepEqual(summary.cjs.bundleDisagree, []);
+  assert.deepEqual(summary.feeUnderMinimum.filter((f) => f.class !== CLASSES.feeMinimum), []);
   for (const [L, rec] of Object.entries(summary.configs)) assert.equal(rec.built, rec.kitPass + Object.values(rec.kitFail).reduce((a, b) => a + b, 0), L);
 });
 

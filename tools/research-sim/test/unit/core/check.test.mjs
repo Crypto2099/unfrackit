@@ -62,11 +62,11 @@ test('a balanced transaction at its minimum fee passes every check', () => {
   assert.equal(r.facts.minFee, P.minFeeA * BigInt(r.facts.size) + P.minFeeB);
 });
 
-test('the fee one lovelace short of the minimum, balance kept, fails the fee check only', () => {
+test('the fee one lovelace short of the minimum, balance kept, fails the fee check only, in its own class', () => {
   const t = simple();
   const bad = withFee(t.bytes, t.fee - 1n, 1);
   const r = checkTx(bad, { params: P, resolve: t.resolve });
-  assert.deepEqual(r.failures.map((f) => [f.check, f.cls]), [['fee', CLASSES.balance]]);
+  assert.deepEqual(r.failures.map((f) => [f.check, f.cls]), [['fee', CLASSES.feeMinimum]]);
 });
 
 test('one byte over the size limit fails the size check only', () => {

@@ -31,7 +31,9 @@
 //                 conwayProducedValue); the transaction's own withdrawals,
 //                 mint and donation must equal the intent's
 //   fee           fee >= minFeeA * |tx| + minFeeB + the script fee (Babbage
-//                 Utxo.hs:183-212, feesOK part 1)
+//                 Utxo.hs:183-212, feesOK part 1); a fee under it is its own
+//                 class, fee-minimum, apart from balance: the network rejects
+//                 the transaction although its value balances
 //   witnesses     at least one vkey witness per distinct key payment
 //                 credential among the inputs and the collateral inputs (both
 //                 are spending inputs for this rule: eras/alonzo/impl/src/
@@ -65,6 +67,7 @@ export const CLASSES = Object.freeze({
   changeMinimum: 'change-minimum',
   maxInputs: 'max-inputs',
   balance: 'balance',
+  feeMinimum: 'fee-minimum',
   collateral: 'collateral',
   timeLimit: 'time-limit',
   other: 'other'
@@ -146,7 +149,7 @@ export function checkTx(bytes, ctx) {
   }
 
   const mf = minFee(p, t.size, scriptFee);
-  if (t.fee < mf) fail('fee', CLASSES.balance, `fee ${t.fee} under the minimum ${mf}`);
+  if (t.fee < mf) fail('fee', CLASSES.feeMinimum, `fee ${t.fee} under the minimum ${mf}`);
 
   const keys = new Set();
   for (const r of resolved) if (r.addr && r.addr.paymentKind === 'key') keys.add(r.addr.payment);
