@@ -26,7 +26,11 @@
 //   asset is covered, then random UTxOs, any kind, until the coin covers the
 //   outputs and the fees ("Phase 3", :563-589), from rand::thread_rng(), which
 //   a caller cannot seed. It is random selection, not CIP-0002
-//   "Random-Improve".
+//   "Random-Improve". Its draws for an asset serve the requested outputs that
+//   hold it (:659-690), so an asset that only a burn needs is covered only
+//   when the draws for other assets and for the coin happen to bring it; the
+//   largest-first passes run over the outputs' total, burns included
+//   (:506-531, :1772-1783).
 //
 //   add_change_if_needed (:1828-1830, :1844-2209). Every leftover asset goes
 //   into change outputs packed greedily in policy and asset-name order, a new
@@ -267,8 +271,8 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 //                      a reference script is added the same way, with
 //                      deduplicate_explicit_ref_inputs_with_regular_inputs
 //                      set, so that CSL counts its size in the
-//                      reference-script fee (:1679-1722) without writing it as
-//                      a reference input (:1571-1613)
+//                      reference-script fee (:1667-1722) without writing it as
+//                      a reference input (:1571-1616)
 //   validity           set_ttl_bignum, set_validity_start_interval_bignum
 //   required signers   add_required_signer
 //   auxiliary data     set_auxiliary_data, CSL's encoding
@@ -300,7 +304,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 //                      serializes them: 32 placeholder bytes while CSL
 //                      selects and prices (set_script_data_hash, :2302-2306),
 //                      the hash once build_tx has written the witness set.
-// CSL prices the transaction itself (min_fee, :119-155): the size of a
+// CSL prices the transaction itself (min_fee, :122-157): the size of a
 // transaction with fake witnesses for the keys it counts (:11-28), plus the
 // execution units at the configured prices (fees.rs:41-60) and the reference
 // scripts at the configured price (fees.rs:63-113); cslConfig passes the run's
