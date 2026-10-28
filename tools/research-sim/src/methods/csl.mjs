@@ -148,6 +148,33 @@ export function cslWithWitnesses(T, tx, k, S) {
   return Buffer.from(full.to_bytes()).toString('hex');
 }
 
+// Body field 18 (reference inputs) with its elements sorted by transaction id
+// (bytes, ascending) and then index. CSL 13.2.1 collects the reference inputs
+// in a Rust hash set and writes them in its iteration order (tx_builder.rs:
+// 1572), which differs from one build to the next, so the same replay would
+// give a different body and transaction id each time. The elements keep their
+// own encoding and the set keeps its own head (tag 258 or not, definite length
+// or not): only the span from the first element's start to the last element's
+// end is rewritten, so the size does not change. A transaction with no field
+// 18, or with fewer than two elements, comes back as it was. It runs on the
+// finished transaction, before the replay's bytes, size and hash are read.
+export function sortReferenceInputs(hex) {
+  const buf = Buffer.from(hex, 'hex');
+  const tx = decodeTx(buf);
+  const field = tx.body.fields.get(18);
+  if (!field) return hex;
+  const items = setItems(field.node);
+  if (items.length < 2) return hex;
+  const keyed = items.map((n) => {
+    const [id, ix] = n.items;
+    return { id: Buffer.from(asBytes(id, 'reference input id')), ix: asUint(ix, 'reference input index'), raw: buf.subarray(n.s, n.e) };
+  });
+  keyed.sort((a, b) => Buffer.compare(a.id, b.id) || (a.ix < b.ix ? -1 : a.ix > b.ix ? 1 : 0));
+  const start = items[0].s;
+  const end = items[items.length - 1].e;
+  return Buffer.concat([buf.subarray(0, start), ...keyed.map((x) => x.raw), buf.subarray(end)]).toString('hex');
+}
+
 const refOf = (input) => `${Buffer.from(input.transaction_id().to_bytes()).toString('hex')}#${input.index()}`;
 
 export function cslMethod(T, { strategy, preferPureChange = false }) {
@@ -701,7 +728,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     // Transaction.new takes the auxiliary data by value, so it is not freed here.
     const aux = tx.auxiliary_data();
     const full = k(aux ? C.Transaction.new(body, ws, aux) : C.Transaction.new(body, ws));
-    const bytes = Buffer.from(full.to_bytes()).toString('hex');
+    const bytes = sortReferenceInputs(Buffer.from(full.to_bytes()).toString('hex'));
     const fee = BigInt(k(body.fee()).to_str());
     const size = inspectTx(bytes).size;
     // The parts written after CSL priced the transaction, which its fee need

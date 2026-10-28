@@ -28,10 +28,11 @@ import { REPLAY_PARTS, REPLAY_COVERAGE, refuseUncovered } from '../../../src/met
 import { ZERO_IMPLICIT } from '../../../src/state/intent.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 import { negativeControls, EXPECTED } from '../../lib/controls.mjs';
-import { cslMethod } from '../../../src/methods/csl.mjs';
+import { cslMethod, sortReferenceInputs } from '../../../src/methods/csl.mjs';
 import { replay, fixedExtraWitnesses } from '../../../src/replay/engine.mjs';
 import { loadSource } from '../../../src/replay/source.mjs';
 import { fixedResolver } from '../../../src/kit/apply.mjs';
+import { decodeTx } from '../../../src/history/tx.mjs';
 import { inspectTx } from '../../../src/kit/inspect.mjs';
 import { outputBytes } from '../../../src/kit/assemble.mjs';
 import { executionFee, refScriptFee } from '../../../src/kit/fee.mjs';
@@ -352,4 +353,58 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
     }
   }
   t.diagnostic(JSON.stringify(out));
+});
+
+test('CSL writes a spend\'s reference inputs sorted by transaction id and index, the same bytes on every build', { skip, timeout: 10 * 60 * 1000 }, async () => {
+  const state = shapeState(T, 'S8').state;
+  const P = SYNTHETIC_PARAMS;
+  const refIn = (id, ix) => {
+    const out = encodeOutput({ address: addressBytes(recipientAddress('synthetic', 460 + ix)), coin: 3n * ADA, assets: [] }, 'map');
+    return { ref: `${id}#${ix}`, cbor: unspentOutput(id, ix, out).toString('hex') };
+  };
+  const ids = ['a', 'b', 'c', 'd', 'e'].map((x) => hash32(`csl sorted reference ${x}`));
+  const refs = [refIn(ids[0], 0), refIn(ids[1], 2), refIn(ids[1], 0), refIn(ids[2], 1), refIn(ids[3], 0), refIn(ids[4], 0)];
+  const want = refs.map((x) => x.ref).sort((a, b) => {
+    const [ta, ia] = a.split('#');
+    const [tb, ib] = b.split('#');
+    return Buffer.compare(Buffer.from(ta, 'hex'), Buffer.from(tb, 'hex')) || Number(ia) - Number(ib);
+  });
+  const intent = replayIntent('d1', 10, { type: 'T1', requested: [payTo(0, 2n * ADA)], fixed: { referenceInputs: refs } });
+  const other = replayIntent('d2', 20, { type: 'T1', requested: [payTo(1, 2n * ADA)] });
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: [intent, other].map((x, i) => ({ kind: 'intent', txId: i + 1, intent: x })), arrival: new Map(), windowStart: 0, windowEnd: 30, params: P };
+  const built = [];
+  for (let i = 0; i < 6; i++) {
+    const r = await replayCsl(source, { strategy: 'lf', pure: i % 2 === 1 });
+    const s = r.spends.find((x) => x.intent === 0);
+    assert.equal(s.outcome, 'built', s.detail);
+    // Other CSL objects in between: hash sets created and dropped, a second
+    // transaction built.
+    for (let j = 0; j < 50; j++) T.CSL.TransactionInputs.new().free();
+    built.push(s.built.txs[0]);
+  }
+  // Same method, same bytes, however many builds and other objects between.
+  for (const pure of [0, 1]) {
+    const same = built.filter((_, i) => i % 2 === pure);
+    for (const b of same) assert.equal(b.bytes, same[0].bytes);
+  }
+  for (const b of built) {
+    assert.deepEqual(inspectTx(b.bytes).referenceInputs.map((x) => x.ref), want);
+    assert.equal(inspectTx(b.bytes).size, b.size);
+  }
+  // The sort changes the order only: a transaction with the elements reversed
+  // sorts back to the same bytes, at the same size and with the same fee, and
+  // a transaction without field 18 is returned as it was.
+  const b0 = built[0];
+  const d = decodeTx(Buffer.from(b0.bytes, 'hex'));
+  const buf = d.buf;
+  const items = d.body.fields.get(18).node;
+  const els = (items.item || items).items;
+  const rev = Buffer.concat([buf.subarray(0, els[0].s), ...els.map((n) => buf.subarray(n.s, n.e)).reverse(), buf.subarray(els[els.length - 1].e)]).toString('hex');
+  assert.notEqual(rev, b0.bytes);
+  assert.equal(sortReferenceInputs(rev), b0.bytes);
+  assert.equal(rev.length, b0.bytes.length);
+  assert.equal(decodeTx(Buffer.from(rev, 'hex')).body.fields.get(2).raw.toString('hex'), d.body.fields.get(2).raw.toString('hex'));
+  const o = (await replayCsl(source, { strategy: 'lf', pure: false })).spends.find((x) => x.intent === 1);
+  assert.equal(o.outcome, 'built', o.detail);
+  assert.equal(sortReferenceInputs(o.built.txs[0].bytes), o.built.txs[0].bytes);
 });
