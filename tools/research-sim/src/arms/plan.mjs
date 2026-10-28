@@ -13,6 +13,8 @@
 //   rrri    cardano-js-sdk round-robin Random-Improve, seeded: the primary
 //           selector of H-2 to H-6 and H-9
 //   evo     the Evolution SDK default (deterministic), H-7 and H-12 only
+//   lf-pure, ri-pure  lf and ri with prefer_pure_change set: the sensitivity
+//           arm on change policy, in the snapshot battery only
 // Repetitions: 30 for a random selector in H-1's arms (observed, tidy-once,
 // maintained-tidy and the controls), at the snapshot, and for H-9's tidy-once
 // arm; 10 in the layout variants and H-11's factorial; one run for each
@@ -39,9 +41,9 @@
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
-export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf' });
-export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first' });
-const DETERMINISTIC_ROLES = new Set(['lf', 'evo']);
+export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', 'lf-pure': 'csl-lf-pure', 'ri-pure': 'csl-ri-pure' });
+export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', 'lf-pure': 'test-largest-first', 'ri-pure': 'test-largest-first' });
+const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'lf-pure']);
 const BASELINES = ['lf', 'ri', 'rrri'];
 
 const H1 = { arms: ['observed', 'tidy-once', 'maintained-tidy'], controls: ['naive-tidy', 'random-tidy'] };
@@ -117,11 +119,14 @@ export function expandJobs(entries, { roles, needsCollateral, collateralRules = 
   return jobs;
 }
 
-// The battery's selectors at the snapshot: the four of H-7 and H-12, and the
-// H-12 rule with absorption on and off. Repetitions as above.
+// The battery's selectors at the snapshot: the four of H-7 and H-12, the
+// sensitivity arm on change policy (both CSL strategies with
+// prefer_pure_change set, each scored against the oracle's csl-ppc
+// reference), and the H-12 rule with absorption on and off. Repetitions as
+// above.
 export function batteryPlan({ roles = STUDY_ROLES, reps = 30, h12 = true } = {}) {
   const methods = [];
-  for (const role of ['lf', 'ri', 'rrri', 'evo']) methods.push({ name: roles[role], role, opts: [{ changePolicy: 'default' }], repetitions: DETERMINISTIC_ROLES.has(role) ? 1 : reps });
+  for (const role of ['lf', 'ri', 'rrri', 'evo', 'lf-pure', 'ri-pure']) methods.push({ name: roles[role], role, opts: [{ changePolicy: 'default' }], repetitions: DETERMINISTIC_ROLES.has(role) ? 1 : reps });
   if (h12) methods.push({ name: 'unfrackit-h12', role: 'h12', opts: [{ changePolicy: 'default', absorb: true }, { changePolicy: 'default', absorb: false }], repetitions: 1 });
   return methods;
 }

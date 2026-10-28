@@ -88,7 +88,7 @@ test('run plans: arms per window, repetitions by selector, collateral rules when
   assert.throws(() => windowPlan('snapshot'), /no replay plan/);
   assert.ok(testPlan().length > 20);
   const b = batteryPlan();
-  assert.deepEqual(b.map((m) => [m.name, m.repetitions]), [['csl-lf', 1], ['csl-ri', 30], ['cjs-rrri', 30], ['evo-lf', 1], ['unfrackit-h12', 1]]);
+  assert.deepEqual(b.map((m) => [m.name, m.repetitions]), [['csl-lf', 1], ['csl-ri', 30], ['cjs-rrri', 30], ['evo-lf', 1], ['csl-lf-pure', 1], ['csl-ri-pure', 30], ['unfrackit-h12', 1]]);
 });
 
 test('arm settings: variants, controls and seeds', () => {
