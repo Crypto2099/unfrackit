@@ -186,12 +186,14 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
         if (!groups.has(g)) groups.set(g, { spend: run.spend, policy, incumbents: [] });
         if (res && !res.timeLimit && res.ok && res.incumbent) groups.get(g).incumbents.push({ name: res.method.name, ...res.incumbent });
       }
-      for (const g of groups.values()) {
-        const intent = built.spends[g.spend].intent;
-        const ref = await oracle.reference(built.observed, intent, source.params, g.policy, { incumbents: g.incumbents });
+      // The calls run together, so that an oracle with several workers uses
+      // them; the records are written in group order.
+      const list = [...groups.values()];
+      const refs = await Promise.all(list.map((g) => oracle.reference(built.observed, built.spends[g.spend].intent, source.params, g.policy, { incumbents: g.incumbents })));
+      list.forEach((g, i) => {
         totals.oracle++;
-        out.write(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: intent.id, incumbents: g.incumbents.length, oracle: ref }));
-      }
+        out.write(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, oracle: refs[i] }));
+      });
     }
   }
   return totals;

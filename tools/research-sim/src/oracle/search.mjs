@@ -56,7 +56,7 @@ import { oracleSettings, TIME_LIMIT_MS } from './settings.mjs';
 import { spendable, cmpRef } from '../state/state.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 
-const summary = (ev) => ev && { fee: ev.fee, txFee: ev.txFee, minFee: ev.minFee, size: ev.size, k: ev.k, inputs: ev.inputs, hash: ev.hash };
+const summary = (ev) => ev && { fee: ev.fee, txFee: ev.txFee, minFee: ev.minFee, size: ev.size, k: ev.k, inputs: ev.inputs };
 
 // incumbents: [{ name, walletInputs [ref], bytes (hex), fee }], the methods'
 // transactions that passed the kit's checks. path: 'auto', 'exhaustive' or

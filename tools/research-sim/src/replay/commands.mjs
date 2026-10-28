@@ -12,6 +12,8 @@
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
 //           [--run-id <id>] [--workers <n>] [--answer-limit-ms <ms>]
+//           [--oracle [--oracle-workers <n>] [--oracle-limit-ms <ms>]
+//           [--oracle-settings <name>=<value>,...]]
 //
 // A history directory is read for its *.jsonl files. A test plan runs the
 // test method only and is never a study run. Results go to the private run
@@ -28,6 +30,8 @@ import { SHAPE_NAMES } from '../shapes/shapes.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
 import { formatHashList } from '../hash.mjs';
 import { loadSource } from './source.mjs';
+import { createBatteryOracle } from '../oracle/battery-hook.mjs';
+import { oracleSettings } from '../oracle/settings.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 
@@ -55,9 +59,22 @@ function walletsOf(opts, { stream }) {
   return files.map((path) => ({ spec: { kind: 'history', path, analysisFreezeTx: opts.analysisFreezeTx || null } }));
 }
 
+const pinsPathOf = (opts) => (opts.treatmentPins ? resolve(opts.treatmentPins) : DEFAULT_PINS);
+
+// --oracle-settings name=value,name=value
+function parseOracleSettings(v) {
+  if (v === undefined) return {};
+  if (typeof v !== 'string') throw new Error('--oracle-settings <name>=<value>,...');
+  return Object.fromEntries(v.split(',').map((kv) => {
+    const i = kv.indexOf('=');
+    if (i < 1) throw new Error(`--oracle-settings: ${kv} is not name=value`);
+    return [kv.slice(0, i), kv.slice(i + 1)];
+  }));
+}
+
 async function setup(opts, command) {
   if (!opts.treatment) throw new Error('--treatment <dir> names the treatment directory');
-  const pinsPath = opts.treatmentPins ? resolve(opts.treatmentPins) : DEFAULT_PINS;
+  const pinsPath = pinsPathOf(opts);
   const T = await loadTreatment(opts.treatment, readFileSync(pinsPath, 'utf8'));
   const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: Number(opts.workers || 1) });
   const runId = opts.runId || `${command}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
@@ -107,13 +124,19 @@ export async function cmdBattery(opts) {
   // battery draws from the frozen pools, which must be given.
   if (!opts.shapes && !opts.pools) throw new Error('--pools <file> names the frozen T1 amounts and T5 shares the battery draws from');
   const pools = opts.pools ? JSON.parse(readFileSync(opts.pools, 'utf8')) : undefined;
-  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods }));
+  // The oracle is off unless asked for: it takes up to a minute per spend
+  // and change policy.
+  const oracleSettingsUsed = opts.oracle ? oracleSettings(parseOracleSettings(opts.oracleSettings)) : null;
+  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods, ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
   out.note({ event: 'start', wallets: wallets.length });
+  let oracle = null;
   try {
-    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools: pools && { t1: pools.t1.map(BigInt), t5: pools.t5.map((x) => x.map(BigInt)) } });
-    out.note({ event: 'end', totals, records: out.counts, workers: pool.stats });
-    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats } };
+    if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: Number(opts.oracleWorkers || 1), ...(opts.oracleLimitMs ? { limitMs: Number(opts.oracleLimitMs) } : {}), settings: oracleSettingsUsed });
+    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools: pools && { t1: pools.t1.map(BigInt), t5: pools.t5.map((x) => x.map(BigInt)) }, oracle });
+    out.note({ event: 'end', totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) });
+    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) } };
   } finally {
+    if (oracle) await oracle.close();
     out.close();
     await pool.close();
   }
