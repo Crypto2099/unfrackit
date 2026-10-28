@@ -13,7 +13,7 @@ import { crc32 } from 'node:zlib';
 import { decode, encUint, encBytes, encArray, encMap, encTag, head, NULL } from '../../../src/history/cbor.mjs';
 import { encodeValue, valueSize, decodeValue, sortAssets, mergeAssets, canonicalLine } from '../../../src/history/value.mjs';
 import { encodeOutput, decodeOutputBytes, withCoin, unspentOutput, autoForm } from '../../../src/history/output.mjs';
-import { decodeTx, assembleTx, inputs, outputs, redeemers, vkeyWitnesses, withdrawals, certificates, mint } from '../../../src/history/tx.mjs';
+import { decodeTx, assembleTx, inputs, outputs, redeemers, vkeyWitnesses, withdrawals, certificates, mint, compareRewardAccounts } from '../../../src/history/tx.mjs';
 import { ImmutableReader, LocalAccess, decodeBlock, parseSecondary, chunkName, ENTRY_SIZE } from '../../../src/history/immutable.mjs';
 import { blake2b256, blake2b224 } from '../../../src/history/blake2b.mjs';
 
@@ -179,6 +179,19 @@ function chunkFixture() {
   writeFileSync(join(dir, chunkName(2, 'secondary')), sec);
   return { dir, a, b, b1, b2, hash1: blake2b256(b1).toString('hex'), hash2: blake2b256(b2).toString('hex') };
 }
+
+test('reward accounts in the ledger\'s order: network, a script credential before a key, then the hash', () => {
+  // Header 0xe0 | network: a key credential; 0xf0 | network: a script one.
+  const acct = (header, byte) => Buffer.concat([Buffer.from([header]), Buffer.alloc(28, byte)]);
+  const keyMain = acct(0xe1, 0x01);
+  const scriptMain = acct(0xf1, 0xff);
+  const keyTest = acct(0xe0, 0xff);
+  const scriptTest = acct(0xf0, 0x02);
+  const scriptTestLow = acct(0xf0, 0x01);
+  const sorted = [keyMain, scriptMain, keyTest, scriptTest, scriptTestLow].sort(compareRewardAccounts);
+  assert.deepEqual(sorted.map((b) => b.toString('hex')), [scriptTestLow, scriptTest, keyTest, scriptMain, keyMain].map((b) => b.toString('hex')));
+  assert.equal(compareRewardAccounts(keyMain, Buffer.from(keyMain)), 0);
+});
 
 test('ImmutableDB: secondary index entries, block decoding, transaction reassembly', async () => {
   const f = chunkFixture();

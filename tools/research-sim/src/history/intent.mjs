@@ -54,6 +54,7 @@ import {
   referenceInputs,
   certificates,
   withdrawals,
+  compareRewardAccounts,
   mint,
   proposals,
   voters,
@@ -173,25 +174,14 @@ function deposits(tx, ep, row) {
 
 // The ledger's order of redeemer pointers: inputs as a Set of TxIn (by
 // transaction id bytes, then index), policies as Map keys (by bytes), reward
-// accounts by network, then credential (a script credential before a key,
-// cardano-ledger libs/cardano-ledger-core/src/Cardano/Ledger/Credential.hs:
-// 98-101), then hash; voters by constructor (committee, DRep, pool,
+// accounts by network, then credential, then hash (tx.mjs
+// compareRewardAccounts); voters by constructor (committee, DRep, pool,
 // eras/conway/impl/src/Cardano/Ledger/Conway/Governance/Procedures.hs:351-355)
 // and credential; certificates and proposals in their listed order.
 function redeemerTargets(tx) {
   const ins = inputs(tx).sort((a, b) => (a.txid < b.txid ? -1 : a.txid > b.txid ? 1 : a.index - b.index));
   const policies = [...new Set(mint(tx).map((a) => a.policy))].sort();
-  const wds = withdrawals(tx).sort((a, b) => {
-    const ka = Buffer.from(a.account, 'hex');
-    const kb = Buffer.from(b.account, 'hex');
-    const na = ka[0] & 15;
-    const nb = kb[0] & 15;
-    if (na !== nb) return na - nb;
-    const sa = ka[0] >> 4 === 15 ? 0 : 1;
-    const sb = kb[0] >> 4 === 15 ? 0 : 1;
-    if (sa !== sb) return sa - sb;
-    return Buffer.compare(ka.subarray(1), kb.subarray(1));
-  });
+  const wds = withdrawals(tx).sort((a, b) => compareRewardAccounts(Buffer.from(a.account, 'hex'), Buffer.from(b.account, 'hex')));
   const RANK = { 1: 0, 0: 1, 3: 2, 2: 3, 4: 4 };
   const vs = voters(tx).sort((a, b) => RANK[a.kind] - RANK[b.kind] || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
   const nCerts = certificates(tx).length;

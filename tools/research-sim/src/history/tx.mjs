@@ -165,6 +165,23 @@ export function withdrawals(tx) {
   return n.entries.map(([k, v]) => ({ account: asBytes(k, 'reward account').toString('hex'), coin: asUint(v, 'withdrawal'), raw: raw(tx.buf, k) }));
 }
 
+// The ledger's order of reward accounts (two reward addresses' bytes): by
+// network, then credential, a script credential before a key
+// (libs/cardano-ledger-core/src/Cardano/Ledger/Credential.hs:98-101), then
+// the hash. The order of a transaction's withdrawals, which their redeemer
+// pointers index (history/intent.mjs redeemerTargets), and the order the CSL
+// adapter adds them in (methods/csl.mjs), so that CSL's redeemer indexes are
+// the ledger's.
+export function compareRewardAccounts(a, b) {
+  const na = a[0] & 15;
+  const nb = b[0] & 15;
+  if (na !== nb) return na - nb;
+  const sa = a[0] >> 4 === 15 ? 0 : 1;
+  const sb = b[0] >> 4 === 15 ? 0 : 1;
+  if (sa !== sb) return sa - sb;
+  return Buffer.compare(a.subarray(1), b.subarray(1));
+}
+
 // Certificates in order, each { type, items, raw }.
 export function certificates(tx) {
   if (!tx.body.fields.has(4)) return [];

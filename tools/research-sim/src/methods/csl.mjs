@@ -73,7 +73,7 @@ import { totalCollateralFor } from '../replay/collateral.mjs';
 import { minFee } from '../kit/fee.mjs';
 import { decode, raw, asBytes, asUint, asInt, setItems } from '../history/cbor.mjs';
 import { blake2b224, blake2b256 } from '../history/blake2b.mjs';
-import { decodeTx } from '../history/tx.mjs';
+import { decodeTx, compareRewardAccounts } from '../history/tx.mjs';
 
 export const CSL_STRATEGIES = Object.freeze({ lf: 'LargestFirstMultiAsset', ri: 'RandomImproveMultiAsset' });
 
@@ -261,7 +261,8 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 //                      witness (certificates_builder.rs:16-78)
 //   withdrawals        WithdrawalsBuilder: add, or the script variants
 //                      (withdrawals_builder.rs:18-75), added in the ledger's
-//                      order of reward accounts so that CSL's redeemer
+//                      order of reward accounts (history/tx.mjs
+//                      compareRewardAccounts) so that CSL's redeemer
 //                      indexes, which follow insertion order, are the ledger's
 //   votes, proposals   VotingBuilder and VotingProposalBuilder, with their
 //                      script witnesses
@@ -399,18 +400,6 @@ export function redeemerKey(r) {
     default:
       throw new Error(`unknown redeemer target ${t.kind}`);
   }
-}
-
-// The ledger's order of reward accounts: network, then a script credential
-// before a key, then the hash (history/intent.mjs redeemerTargets).
-function cmpAccount(ka, kb) {
-  const na = ka[0] & 15;
-  const nb = kb[0] & 15;
-  if (na !== nb) return na - nb;
-  const sa = ka[0] >> 4 === 15 ? 0 : 1;
-  const sb = kb[0] >> 4 === 15 ? 0 : 1;
-  if (sa !== sb) return sa - sb;
-  return Buffer.compare(ka.subarray(1), kb.subarray(1));
 }
 
 const REDEEMER_TAGS = ['new_spend', 'new_mint', 'new_cert', 'new_reward', 'new_vote', 'new_voting_proposal'];
@@ -553,7 +542,7 @@ function addFixedParts(T, tb, intent, S, at) {
       const ra = k(keys.get(i));
       list.push({ ra, account: Buffer.from(k(ra.to_address()).to_bytes()), coin: k(ws.get(ra)) });
     }
-    list.sort((a, b) => cmpAccount(a.account, b.account));
+    list.sort((a, b) => compareRewardAccounts(a.account, b.account));
     const wb = k(C.WithdrawalsBuilder.new());
     for (const e of list) {
       const cred = k(e.ra.payment_cred());
