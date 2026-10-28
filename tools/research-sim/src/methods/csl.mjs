@@ -312,7 +312,10 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 // among the wallet inputs, the wallet's held fixed inputs, the collateral
 // input and the required signers that are wallet keys (as kit/replay.mjs
 // counts them), then the intent's other vkey witnesses and its bootstrap
-// witnesses as observed.
+// witnesses as observed. These are written after CSL priced the transaction;
+// when the transaction outgrows the one CSL priced, library.unpriced names
+// the observed ones, and a failed check names them in its detail
+// (replay/engine.mjs).
 //
 // A replayed intent carries no network id (body field 15), which the transaction
 // builder never writes (:2340, network_id: None): the engine leaves it out of
@@ -786,7 +789,19 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     const bytes = Buffer.from(full.to_bytes()).toString('hex');
     const fee = BigInt(k(body.fee()).to_str());
     const size = inspectTx(bytes).size;
-    return { ok: true, kind: 'single', txs: [txRecord(bytes, walletRefs, fee, size, n)], library: { fee, finalMinFee: minFee(params, size, f ? f.scriptFee : 0n) } };
+    // The parts written after CSL priced the transaction, which its fee need
+    // not count: the intent's other vkey witnesses and its bootstrap witnesses
+    // as observed. They are unpriced when the transaction outgrew the one CSL
+    // priced (full_size, :2355-2357: the transaction with fake witnesses for
+    // the keys CSL counts, :11-28, :33-89), as for a Shelley stake
+    // registration, whose witness CSL does not count (certificates_builder.rs:
+    // 241-247).
+    const unpriced = [];
+    if (f && bytes.length / 2 > tb.full_size()) {
+      if (f.witnesses[0] !== undefined) unpriced.push('observed vkey witnesses');
+      if (f.witnesses[2] !== undefined) unpriced.push('observed bootstrap witnesses');
+    }
+    return { ok: true, kind: 'single', txs: [txRecord(bytes, walletRefs, fee, size, n)], library: { fee, finalMinFee: minFee(params, size, f ? f.scriptFee : 0n), unpriced } };
   } finally {
     S.free();
   }

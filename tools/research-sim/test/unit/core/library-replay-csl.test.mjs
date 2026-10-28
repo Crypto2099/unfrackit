@@ -11,8 +11,10 @@
 // carry: a Plutus spend with its datum and redeemer, a Plutus mint whose
 // script is a reference script, a burn, a deregistration with its refund and a
 // reward withdrawal, a treasury donation, a deposit CSL counts differently,
-// a network id with an empty auxiliary data, which the engine leaves out, and
-// body field 6. Each spend builds, fails with a class other
+// a network id with an empty auxiliary data, which the engine leaves out, body
+// field 6, and a Shelley stake registration carrying its stake key's witness,
+// which CSL does not count, so that its failure names the observed witnesses.
+// Each spend builds, fails with a class other
 // than 'other', is infeasible (by balance or for collateral), or is not
 // replayable; every built one passes the kit's checks (the engine runs them)
 // and its four negative controls are caught; its fixed inputs are present and
@@ -68,7 +70,7 @@ async function replayCsl(source, { strategy, pure, rule = 'ledger', changePolicy
     ...m,
     build: (...a) => {
       const r = m.build(...a);
-      if (r.ok && r.library) fees.push(r.library);
+      if (r.ok && r.library) fees.push({ ...r.library, type: a[1].type });
       return r;
     }
   };
@@ -195,7 +197,7 @@ const payTo = (i, coin) => {
 };
 const hash32 = (s) => blake2b256(Buffer.from(s)).toString('hex');
 
-test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, a deregistration with a withdrawal, a donation, and a payment without its network id and empty auxiliary data, and refuses what it cannot express as not replayable', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
+test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, a deregistration with a withdrawal, a donation, and a payment without its network id and empty auxiliary data, names the witness it did not price when a Shelley registration fails, and refuses what it cannot express as not replayable', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
   const shape = shapeState(T, 'S8');
   const state = shape.state;
   // The synthetic parameters with a reference-script price, which the
@@ -293,7 +295,10 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
   const reg = replayIntent('c6', 60, { type: 'T7', fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(0), encBytes(Buffer.from(state.stakeCred, 'hex'))])])]).toString('hex') } }, implicit: { deposits: 3n * ADA } });
   const field6 = replayIntent('c7', 70, { type: 'T7', requested: [payTo(2, 2n * ADA)], fixed: { body: { 6: encArray([encMap([]), encUint(0)]).toString('hex') } } });
   const field15 = replayIntent('c8', 80, { type: 'T1', requested: [payTo(3, 2n * ADA)], fixed: { body: { 15: encUint(0).toString('hex') }, auxiliaryData: 'd90103a0' } });
-  const intents = [t6, t8mint, burnIntent, dereg, donation, reg, field6, field15];
+  // A Shelley stake registration (certificate kind 0) with the stake key's
+  // witness, which CSL counts for no kind-0 registration.
+  const shelleyReg = replayIntent('c9', 85, { type: 'T7', fixed: { body: { 4: encArray([encArray([encUint(0), encArray([encUint(0), encBytes(Buffer.from(state.stakeCred, 'hex'))])])]).toString('hex') }, witnesses: { 0: witnesses(stakeKey) } }, implicit: { deposits: P.keyDeposit } });
+  const intents = [t6, t8mint, burnIntent, dereg, donation, reg, field6, field15, shelleyReg];
   // A pure-ADA UTxO eligible as collateral under the ledger rule.
   const collateralUtxo = utxoFromOutput(hash32('csl collateral'), 0, outputBytes(T, { address: state.changeAddress, coin: 6n * ADA, assets: [] }), { origin: 'deposit' });
   const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values(), tokenUtxo, collateralUtxo], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 90, params: P };
@@ -334,8 +339,16 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
         assert.equal(tx(7).hasAux, false);
       }
       // CSL prices the script fee itself: its fee covers the final minimum,
-      // execution and reference-script terms included.
-      for (const f of r.fees) assert.ok(f.fee >= f.finalMinFee, `${f.fee} under ${f.finalMinFee}`);
+      // execution and reference-script terms included, unless an observed
+      // witness CSL did not count was written after it priced the
+      // transaction. Only the Shelley registration's is unpriced: the burn's
+      // and the deregistration's witnesses CSL counts.
+      for (const f of r.fees) if (!f.unpriced.length) assert.ok(f.fee >= f.finalMinFee, `${f.fee} under ${f.finalMinFee}`);
+      if (changePolicy === 'default') assert.deepEqual(r.fees.filter((f) => f.unpriced.length).map((f) => [f.type, f.unpriced]), r.spends[8].outcome === 'failed' && r.spends[8].class === CLASSES.feeMinimum ? [['T7', ['observed vkey witnesses']]] : []);
+      if (strategy === 'lf' && changePolicy === 'default') {
+        assert.equal(r.spends[8].class, CLASSES.feeMinimum, r.spends[8].detail);
+        assert.match(r.spends[8].detail, /^kit: fee: .*; parts the library did not price: observed vkey witnesses$/);
+      }
     }
   }
   t.diagnostic(JSON.stringify(out));

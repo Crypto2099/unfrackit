@@ -449,6 +449,11 @@ export async function replay(T, params, source, job) {
   return out;
 }
 
+// The parts a library's adapter wrote on its transaction after the library
+// priced it (the result's library.unpriced), by name, for a failed check's
+// detail; empty when there are none.
+const unpricedText = (r) => (r.library && r.library.unpriced && r.library.unpriced.length ? `; parts the library did not price: ${r.library.unpriced.join(', ')}` : '');
+
 // One intent by the method from the pool the set-aside leaves (setAside),
 // checked by the kit against the whole state and applied.
 async function buildOne(T, params, state, intent, method, opts, aside) {
@@ -482,7 +487,7 @@ async function buildOne(T, params, state, intent, method, opts, aside) {
     requested,
     heldInputs
   });
-  if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}`, ms };
+  if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}${unpricedText(r)}`, ms };
   return { ok: true, txs: r.txs, state: applied.state, inspected, requested, size: applied.checks[applied.checks.length - 1].facts.size, ms };
 }
 

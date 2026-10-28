@@ -270,9 +270,11 @@ test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a
   // The unpriced parts are on the transaction: a donation or a deposit the
   // library did not balance fails conservation, and a part it did not price
   // leaves its fee under the minimum.
-  for (const [id, cls] of [['b6', CLASSES.balance], ['c1', CLASSES.balance], ['c0', CLASSES.feeMinimum]]) {
+  // Each failure names the part the library did not price.
+  for (const [id, cls, part] of [['b6', CLASSES.balance, 'treasury donation'], ['c1', CLASSES.balance, 'certificates'], ['c0', CLASSES.feeMinimum, 'witness-set datums']]) {
     assert.equal(at(id).outcome, 'failed', `${id}: ${at(id).outcome}`);
     assert.equal(at(id).class, cls, `${id}: ${at(id).detail}`);
+    assert.ok(at(id).detail.startsWith('kit: ') && at(id).detail.endsWith(`; parts the library did not price: ${part}`), `${id}: ${at(id).detail}`);
   }
   const unpriced = {};
   for (const [id, part, field] of [['b6', 'treasury donation', 22], ['c0', 'witness-set datums', 11], ['c1', 'certificates', 4]]) {
