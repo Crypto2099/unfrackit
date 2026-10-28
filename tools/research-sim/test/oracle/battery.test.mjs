@@ -8,8 +8,8 @@
 //   1  every reference transaction passes the ledger kit, and each negative
 //      control is caught for its own reason;
 //   4  where the exhaustive path ran, the mixed-integer path over the same
-//      candidates gives the same fee, or a higher one (or none) only at the
-//      limit;
+//      candidates gives the exhaustive search's own fee over them, or a
+//      higher one (or none) only at the limit;
 //   5  the seeded reference fee is at most the fee of every method with the
 //      same policy whose transaction passed the kit;
 //   6  every method's change equals the policy's change on its own inputs,
@@ -17,18 +17,21 @@
 //      the test method; cardano-serialization-lib's change against the
 //      library selecting on its own);
 //   7  the run time and the share of best-at-limit and undecided runs per
-//      policy.
+//      policy, with each status's scope; under afterExhaustive 'mip-always'
+//      no run is optimal or infeasible over the candidate set alone.
 //
 // Needs RESEARCH_SIM_TREATMENT_DIR. RESEARCH_SIM_ORACLE_WORKERS (4),
 // RESEARCH_SIM_ORACLE_LIMIT_MS (60000), RESEARCH_SIM_ORACLE_SHAPES (all 21) and
 // RESEARCH_SIM_ORACLE_POLICIES (every policy this build evaluates) narrow a
-// run.
+// run; RESEARCH_SIM_ORACLE_SETTINGS sets the oracle's settings
+// (test/lib/outdir.mjs).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { treatment, skip, TREATMENT_DIR } from '../lib/treatment.mjs';
-import { oracleOutDir, envNumber } from '../lib/outdir.mjs';
+import { oracleOutDir, envNumber, envOracleOverrides } from '../lib/outdir.mjs';
+import { oracleSettings } from '../../src/oracle/settings.mjs';
 import { runBatteryOracle } from './battery-run.mjs';
 import { SHAPE_NAMES } from '../../src/shapes/shapes.mjs';
 import { SYNTHETIC_PARAMS } from '../../src/kit/params.mjs';
@@ -51,6 +54,8 @@ export function agree(e, m) {
 test('the oracle on the 21 shapes: kit, never above a method, change, paths, limits', { skip, timeout: 48 * 60 * 60 * 1000 }, async (t) => {
   const pinsText = process.env.RESEARCH_SIM_TREATMENT_PINS ? readFileSync(process.env.RESEARCH_SIM_TREATMENT_PINS, 'utf8') : undefined;
   const shapes = process.env.RESEARCH_SIM_ORACLE_SHAPES ? process.env.RESEARCH_SIM_ORACLE_SHAPES.split(',') : SHAPE_NAMES;
+  const settings = oracleSettings(envOracleOverrides());
+  t.diagnostic(`afterExhaustive ${settings.afterExhaustive}`);
   const { records, file } = await runBatteryOracle({
     T,
     treatmentDir: TREATMENT_DIR,
@@ -61,9 +66,10 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
     limitMs: envNumber('RESEARCH_SIM_ORACLE_LIMIT_MS', 60000),
     workers: envNumber('RESEARCH_SIM_ORACLE_WORKERS', 4),
     outDir: oracleOutDir(),
+    settings,
     log: (line) => t.diagnostic(line)
   });
-  const c = { records: records.length, file, check1: { references: 0, bad: [] }, check4: { compared: 0, equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: [] }, check5: { compared: 0, violations: [], missing: [] }, check6: { compared: 0, same: 0, differ: [] }, status: {} };
+  const c = { records: records.length, file, check1: { references: 0, bad: [] }, check4: { compared: 0, equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: [] }, check5: { compared: 0, violations: [], missing: [] }, check6: { compared: 0, same: 0, differ: [] }, status: {}, statusScope: {}, provenOverCandidates: [], bestFrom: {}, outsideCandidates: 0, atLimit: {}, stops: {} };
   const errors = records.filter((r) => r.error).map((r) => `${r.shape} ${r.spend} ${r.policy}: ${r.error.split('\n')[0]}`);
   for (const r of records) {
     if (r.error) continue;
@@ -74,7 +80,9 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
     }
     if (r.mipCandidates) {
       c.check4.compared++;
-      const e = r.unseeded;
+      // The exhaustive search's own result over the candidates, before any
+      // program over every spendable UTxO.
+      const e = r.unseeded.exhaustive || r.unseeded;
       const m = r.mipCandidates;
       const v = agree(e, m);
       c.check4[v]++;
@@ -93,7 +101,20 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
       const key = `${r.policy} ${k}`;
       c.status[key] = c.status[key] || {};
       c.status[key][o.status] = (c.status[key][o.status] || 0) + 1;
+      c.statusScope[key] = c.statusScope[key] || {};
+      c.statusScope[key][`${o.status}/${o.scope}`] = (c.statusScope[key][`${o.status}/${o.scope}`] || 0) + 1;
+      if (settings.afterExhaustive === 'mip-always' && (o.status === 'optimal' || o.status === 'infeasible') && o.scope !== 'spendable') c.provenOverCandidates.push(`${tag} ${k}: ${o.status} over ${o.scope}`);
+      const stop = o.detail && (o.detail.mip ? o.detail.mip.stop : o.detail.stop);
+      if (stop) c.stops[`${k} ${stop}`] = (c.stops[`${k} ${stop}`] || 0) + 1;
     }
+    const sd = r.seeded;
+    c.bestFrom[sd.bestFrom] = (c.bestFrom[sd.bestFrom] || 0) + 1;
+    if (sd.bestInCandidates === false) c.outsideCandidates++;
+    c.atLimit[r.policy] = c.atLimit[r.policy] || { runs: 0, atLimit: 0, terminated: 0, ms: 0 };
+    c.atLimit[r.policy].runs++;
+    if (sd.status === 'best-at-limit' || sd.status === 'undecided') c.atLimit[r.policy].atLimit++;
+    if (sd.terminated) c.atLimit[r.policy].terminated++;
+    c.atLimit[r.policy].ms += sd.ms;
   }
   c.errors = errors;
   t.diagnostic(JSON.stringify(c));
@@ -102,4 +123,5 @@ test('the oracle on the 21 shapes: kit, never above a method, change, paths, lim
   assert.deepEqual(c.check4.bad, []);
   assert.deepEqual(c.check5.violations, []);
   assert.deepEqual(c.check5.missing, []);
+  assert.deepEqual(c.provenOverCandidates, []);
 });

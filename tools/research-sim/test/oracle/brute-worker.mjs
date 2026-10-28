@@ -5,7 +5,8 @@
 // battery spend of the wallet under every policy, every subset of its
 // spendable UTxOs evaluated exactly (the policy's own transaction, checked by
 // the ledger kit) beside the lower bound of the oracle, and the oracle's own
-// answer by each path. Posts one record per spend and policy.
+// answer by each path, under the settings the check passes. Posts one record
+// per spend and policy.
 
 import { parentPort, workerData } from 'node:worker_threads';
 import { loadTreatment } from '../../src/treatment/bridge.mjs';
@@ -22,7 +23,7 @@ import { searchOracle } from '../../src/oracle/search.mjs';
 import { settle } from '../../src/kit/heap.mjs';
 
 const T = await loadTreatment(workerData.treatmentDir, workerData.pinsText || undefined);
-const settings = oracleSettings();
+const settings = oracleSettings(workerData.settings || {});
 const lib = await loadLibraryPolicies();
 
 // A sub-wallet of k spendable UTxOs, 8 <= k <= 12, drawn with mulberry32.
@@ -55,7 +56,7 @@ parentPort.on('message', async (job) => {
         const ev = makeEvaluator(T, { state, spend, params: P, policy, settings, lib });
         const cs = candidateSet(state, spend);
         const candKeys = new Set(cs.all.map((u) => u.ref));
-        const rec = { shape: job.shape, seed: job.seed, utxos: pool.length, spend: spend.id, policy, candidates: cs.all.length, subsets: 0, feasible: 0, boundAbove: 0, boundInfeasibleButBuilt: 0, minBoundGap: null, maxBoundGap: null };
+        const rec = { shape: job.shape, seed: job.seed, utxos: pool.length, spend: spend.id, policy, candidates: cs.all.length, exhaustivePath: cs.exhaustive, subsets: 0, feasible: 0, boundAbove: 0, boundInfeasibleButBuilt: 0, minBoundGap: null, maxBoundGap: null };
         let globalBest = null;
         let candBest = null;
         const n = pool.length;
@@ -89,7 +90,21 @@ parentPort.on('message', async (job) => {
         rec.candidateMin = candBest ? candBest.fee.toString() : null;
         const run = async (path, mipSpace) => {
           const o = await searchOracle(T, state, spend, P, policy, { timeLimitMs: job.limitMs, path, mipSpace, settings });
-          return { status: o.status, fee: o.fee === null ? null : o.fee.toString(), ms: Math.round(o.ms), candidates: o.candidates, scope: o.scope, evaluations: o.evaluations.evaluations, detail: o.detail };
+          const str = (x) => (x === null || x === undefined ? null : x.toString());
+          return {
+            status: o.status,
+            fee: str(o.fee),
+            bound: str(o.bound),
+            ms: Math.round(o.ms),
+            candidates: o.candidates,
+            scope: o.scope,
+            paths: o.paths,
+            bestFrom: o.bestFrom,
+            bestInCandidates: o.bestInCandidates,
+            exhaustive: o.exhaustive && { complete: o.exhaustive.complete, status: o.exhaustive.status, fee: str(o.exhaustive.fee) },
+            evaluations: o.evaluations.evaluations,
+            detail: o.detail
+          };
         };
         rec.auto = await run('auto');
         if (cs.exhaustive) rec.exhaustive = rec.auto;

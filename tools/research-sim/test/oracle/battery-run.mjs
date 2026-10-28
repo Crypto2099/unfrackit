@@ -13,8 +13,9 @@
 //   check 6  each method's change equals the policy's change on the method's
 //            own inputs, byte for byte
 //   check 4  where the exhaustive path ran, the mixed-integer path over the
-//            same candidates, unseeded, beside it
-//   check 7  the time, the path and the status
+//            same candidates, unseeded, beside the exhaustive search's own
+//            result over them
+//   check 7  the time, the paths, the status and its scope
 //
 // Records are JSON Lines in the output directory, bigint as decimal strings.
 
@@ -40,12 +41,17 @@ function slim(o) {
   return {
     status: o.status,
     path: o.path,
+    paths: o.paths ?? null,
     scope: o.scope,
     candidates: o.candidates,
+    candidateSet: o.candidateSet ?? null,
     fee: o.fee,
+    bound: o.bound ?? null,
     inputs: o.best ? o.best.inputs.length : null,
     bestFrom: o.bestFrom ?? null,
     bestInSpace: o.bestInSpace ?? null,
+    bestInCandidates: o.bestInCandidates ?? null,
+    exhaustive: o.exhaustive ?? null,
     ms: Math.round(o.ms),
     wallMs: Math.round(o.wallMs || 0),
     terminated: o.terminated,
@@ -56,9 +62,9 @@ function slim(o) {
 }
 
 // opts: { T, treatmentDir, pinsText, params, shapes, policies, limitMs,
-// workers, outDir, log }
+// workers, outDir, settings (the oracle's, its defaults when absent), log }
 export async function runBatteryOracle(opts) {
-  const { T, params: P, shapes, limitMs, outDir, log = () => {} } = opts;
+  const { T, params: P, shapes, limitMs, outDir, settings, log = () => {} } = opts;
   const policies = opts.policies || (await availablePolicies());
   mkdirSync(outDir, { recursive: true, mode: 0o700 });
   const file = join(outDir, 'oracle-battery.jsonl');
@@ -80,8 +86,8 @@ export async function runBatteryOracle(opts) {
               let unseeded;
               try {
                 [seeded, unseeded] = await Promise.all([
-                  oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents }),
-                  oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents: [] })
+                  oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents, settings }),
+                  oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents: [], settings })
                 ]);
               } catch (e) {
                 // A call that fails is recorded and the run goes on; the
@@ -95,7 +101,7 @@ export async function runBatteryOracle(opts) {
               const rec = { shape: name, spend: spend.id, type: spend.type, policy, limitMs, methods: answers.map((a) => ({ name: a.name, ok: a.ok, kitOk: a.kitOk ?? null, fee: a.fee ?? null, class: a.class ?? null, inputs: a.walletInputs ? a.walletInputs.length : null })), seeded: slim(seeded), unseeded: slim(unseeded) };
               // Check 4: where the exhaustive path ran, the mixed-integer
               // path over the same candidates, unseeded.
-              if (unseeded.path === 'exhaustive') rec.mipCandidates = slim(await oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents: [], path: 'mip', mipSpace: 'candidates' }));
+              if (unseeded.path === 'exhaustive') rec.mipCandidates = slim(await oracle.oracle(s, spend, P, policy, { timeLimitMs: limitMs, incumbents: [], path: 'mip', mipSpace: 'candidates', settings }));
               rec.check1 = {};
               for (const [k, o] of [['seeded', seeded], ['unseeded', unseeded]]) if (o.tx) rec.check1[k] = controlsOk(s, P, o.tx);
               rec.check5 = answers.filter((a) => a.ok && a.kitOk && seeded.fee !== null && seeded.fee > a.fee).map((a) => a.name);
@@ -103,7 +109,7 @@ export async function runBatteryOracle(opts) {
               rec.check6 = seeded.incumbents ? seeded.incumbents.map((i) => ({ name: i.name, result: i.result, sameChange: i.sameChange ?? null, methodFee: i.fee, oracleFee: i.oracleFee ?? null })) : [];
               appendFileSync(file, json(rec) + '\n', { mode: 0o600 });
               records.push(rec);
-              log(`${name} ${spend.id} ${policy}: ${seeded.status}/${unseeded.status} ${seeded.path} n=${seeded.candidates} fee ${seeded.fee}/${unseeded.fee} ${Math.round(seeded.ms)}ms${seeded.terminated ? ' terminated' : ''}`);
+              log(`${name} ${spend.id} ${policy}: ${seeded.status}/${unseeded.status} over ${seeded.scope} ${seeded.paths ? seeded.paths.join('+') : seeded.path} n=${seeded.candidates} fee ${seeded.fee}/${unseeded.fee} ${Math.round(seeded.ms)}ms${seeded.terminated ? ' terminated' : ''}`);
             })()
           );
         }
