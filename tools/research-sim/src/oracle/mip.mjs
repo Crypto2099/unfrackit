@@ -51,6 +51,17 @@
 // optimum over the pool, or there is none) or the time limit passes. A
 // rebuild whose transaction fails a check, or whose exact fee differs from
 // the program's, is recorded as a rejection.
+//
+// The program's bound: the highest dual bound any solve reported, in
+// lovelace rounded down. Cuts and a lower cutoff only shrink the program, so
+// a bound reported by any solve holds for every set still admitted, and
+// every set excluded was rebuilt exactly, refuted by the bound's exact
+// conditions, or costs at least the best fee; the optimum over the pool is
+// therefore at least the lower of the best fee and this bound. The loop records why it stopped: 'proven' (the program is
+// infeasible, or the pool cannot hold the spend), 'limit' (the time limit),
+// 'solver-error' (a second solver failure), 'status' (a solve ended without
+// a set for another reason, named in statuses) or 'empty' (a solve chose no
+// input).
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -263,9 +274,22 @@ export function buildProgram(highs, M, pool) {
   };
 }
 
+// The dual bound of the last solve in lovelace, rounded down, or null when
+// the solve reported none.
+function dualBound(model) {
+  let v;
+  try {
+    v = model.info.get('mip_dual_bound');
+  } catch {
+    return null;
+  }
+  return typeof v === 'number' && Number.isFinite(v) ? Math.floor(v * ADA) : null;
+}
+
 // The loop. pool: UTxO records; evaluate(S): policies.mjs, resolving to an
 // evaluation; best: the incumbent evaluation or null. Resolves to { proven,
-// best, iterations, rejections, solverErrors, cols, rows, solverMs }.
+// stop, bound, best, iterations, rejections, solverErrors, cols, rows,
+// solverMs }.
 //
 // HiGHS 1.15.4's presolve aborts on some of these programs once enough cuts
 // have been added (a RuntimeError from the WebAssembly runtime, which leaves
@@ -279,9 +303,10 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
   const prog = buildProgram(H, M, pool);
   // feeBelow counts exact fees under the program's value, which would mean
   // the relaxation is not a lower bound; the checks require it to stay 0.
-  const out = { proven: false, best, iterations: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
+  const out = { proven: false, stop: null, bound: null, best, iterations: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
   if (!prog) {
     out.proven = true;
+    out.stop = 'proven';
     return out;
   }
   out.cols = prog.cols;
@@ -319,7 +344,10 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
     let uncapped = false;
     for (;;) {
       const left = deadline - performance.now();
-      if (left <= 0) break;
+      if (left <= 0) {
+        out.stop = 'limit';
+        break;
+      }
       const t0 = performance.now();
       let st;
       try {
@@ -336,7 +364,10 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
         // The instance is replaced either way, so that later runs in this
         // thread start from a working solver.
         H = await loadSolver({ fresh: true });
-        if (out.solverErrors.length > 1) break;
+        if (out.solverErrors.length > 1) {
+          out.stop = 'solver-error';
+          break;
+        }
         presolve = 'off';
         open();
         continue;
@@ -347,8 +378,11 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       out.statuses[st] = (out.statuses[st] || 0) + 1;
       if (st === ms.infeasible) {
         out.proven = true;
+        out.stop = 'proven';
         break;
       }
+      const db = dualBound(model);
+      if (db !== null && (out.bound === null || db > out.bound)) out.bound = db;
       let sol = null;
       if ((st === ms.optimal || st === ms.timeLimit || st === ms.objectiveBound) && model.info.get('primal_solution_status') === 2) {
         const sv = model.getSolution();
@@ -360,13 +394,17 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
           uncapped = true;
           continue;
         }
+        out.stop = st === ms.timeLimit ? 'limit' : 'status';
         break;
       }
       const idx = [];
       prog.x.forEach((j, i) => {
         if (sol[j] > 0.5) idx.push(i);
       });
-      if (!idx.length) break;
+      if (!idx.length) {
+        out.stop = 'empty';
+        break;
+      }
       const S = idx.map((i) => pool[i]);
       const relaxed = sol[prog.F] * ADA;
       // The program can propose a set that fails the bound's exact

@@ -6,7 +6,8 @@
 //   const o = createOracle({ treatmentDir, pinsText, workers })
 //   await o.oracle(state, spend, params, policy, { timeLimitMs, incumbents,
 //     settings, path })
-//     resolves to { status, path, scope, candidates, fee, tx, ms, ... }
+//     resolves to { status, path, paths, scope, candidates, fee, bound, tx,
+//     ms, ... } (search.mjs)
 //   await o.close()
 //
 // Each call runs in a worker thread (worker.mjs) that the parent terminates
@@ -132,10 +133,12 @@ export function createOracle({ treatmentDir, pinsText = readFileSync(DEFAULT_PIN
           resolve({
             status: best ? 'best-at-limit' : 'undecided',
             path: null,
+            paths: null,
             scope: null,
             candidates: null,
             policy,
             fee: best ? best.fee : null,
+            bound: null,
             tx: best ? tx : null,
             best,
             ms: performance.now() - t0,

@@ -11,8 +11,8 @@ export const ORACLE_SETTINGS = Object.freeze({
   // The search space. 'requested-plus-20': when the spendable UTxOs holding
   // any requested asset plus the 20 largest spendable pure-ADA UTxOs (by
   // coin, ties by txid#index ascending) number at most 24, exhaustive search
-  // over exactly that set; otherwise the mixed-integer program over every
-  // spendable UTxO.
+  // over exactly that set, followed as the setting afterExhaustive says;
+  // otherwise the mixed-integer program over every spendable UTxO.
   searchSpace: 'requested-plus-20',
   // How a candidate set's change and fee are known. 'library-forced': the
   // change policy's own code builds the transaction with the set forced as
@@ -39,11 +39,15 @@ export const ORACLE_SETTINGS = Object.freeze({
   // 'ledger-minimum': minFeeA times the transaction's ledger size plus
   // minFeeB, whatever fee the transaction carries.
   setFee: 'as-built',
-  // When the exhaustive path finds no feasible set among its candidates.
-  // 'report': the status is infeasible, its scope the candidate set, as the
-  // search space is defined above. 'mip': the remaining time goes to the
-  // mixed-integer program over every spendable UTxO.
-  exhaustiveEmpty: 'report'
+  // What follows an exhaustive search that completes within the limit.
+  // 'mip-always': the mixed-integer program over every spendable UTxO takes
+  // the rest of the time limit, starting from the best found so far (the
+  // exhaustive result and the incumbents), and the lower fee is kept; the
+  // status then speaks for every spendable UTxO, so a spend the candidate set
+  // cannot build is not reported infeasible. 'mip': the program runs only
+  // when the exhaustive search finds no feasible set. 'report': the
+  // exhaustive result stands, its status speaking for the candidate set only.
+  afterExhaustive: 'mip-always'
 });
 
 const IMPLEMENTED = {
@@ -52,7 +56,7 @@ const IMPLEMENTED = {
   solver: ['highs-1.15.4'],
   incumbents: ['all-methods'],
   setFee: ['as-built', 'ledger-minimum'],
-  exhaustiveEmpty: ['report', 'mip']
+  afterExhaustive: ['mip-always', 'mip', 'report']
 };
 
 // The exhaustive path's constants: the pure-ADA UTxOs it adds, and the

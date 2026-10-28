@@ -11,20 +11,38 @@
 // same spend that passed the kit's checks, each evaluated exactly by the
 // policy, so the reference is never above a fee a method reached. It then
 // takes the exhaustive path when the candidate set numbers at most 24, and
-// the mixed-integer path otherwise (setting searchSpace). Statuses:
+// the mixed-integer path over every spendable UTxO otherwise (setting
+// searchSpace). An exhaustive search that completes within the limit is
+// followed by the program over every spendable UTxO for the rest of the
+// limit, starting from the best found so far, and the lower fee is kept
+// (setting afterExhaustive 'mip-always'; 'mip' runs the program only when
+// the exhaustive search finds nothing, 'report' never). Statuses, from the
+// last search that ran:
 //
 //   optimal        the search completed: the exhaustive path's queue ran out
 //                  at a bound at or above the best fee, or the program with
 //                  its cutoff became infeasible; the reference is the optimum
 //                  over the search space (or an incumbent below it)
-//   best-at-limit  a feasible solution exists, the time limit was reached
-//                  before the search completed
+//   best-at-limit  a feasible solution exists, and the search stopped before
+//                  it completed: at the time limit, or for a reason the
+//                  program's stop names (mip.mjs), such as a second solver
+//                  failure
 //   infeasible     the search completed without a feasible set: there is none
 //                  in the search space
-//   undecided      the time limit was reached with no feasible solution
+//   undecided      the search stopped before it completed, with no feasible
+//                  solution
 //
-// `scope` names the search space a completed status speaks for: 'candidates'
-// on the exhaustive path, 'spendable' on the mixed-integer path.
+// `scope` names the search space the status speaks for: 'spendable' when the
+// program ran over every spendable UTxO, 'candidates' when the search covered
+// the candidate set only (the exhaustive search alone, or the program forced
+// onto the candidates for the comparison of the paths). So under 'mip-always' a run is optimal or
+// infeasible over every spendable UTxO only when the program proves it, and
+// a completed exhaustive search alone proves nothing over the pool; the
+// exhaustive search's own result over the candidates is kept beside it as
+// `exhaustive`. `bound` is a lower bound on the optimum over the scope: the
+// fee when optimal, the lower of the fee and the program's bound when the
+// program stopped unproven, and null when nothing bounds it. `bestFrom` names
+// what produced the reference: 'incumbent', 'exhaustive' or 'mip'.
 
 import { checkSpend, candidateSet, OracleRefusal } from './spend.mjs';
 import { makeBoundModel } from './bound.mjs';
@@ -86,54 +104,68 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
       } else rec.detail = e.detail;
       incumbents.push(rec);
     }
-    phase = 'search';
     const cs = candidateSet(state, spend);
     const chosen = path === 'auto' ? (cs.exhaustive ? 'exhaustive' : 'mip') : path;
-    let status;
+    const paths = [];
+    let result;
     let scope;
     let detail = {};
     let candidates;
+    let exhaustive = null;
     if (chosen === 'exhaustive') {
+      phase = 'exhaustive';
+      paths.push('exhaustive');
       candidates = cs.all.length;
       scope = 'candidates';
       const r = await exhaustiveSearch({ model, candidates: cs.all, evaluate: ev.evaluate, best, deadline, onImprove: improve });
       best = r.best;
       detail = { nodes: r.nodes, popped: r.popped, evaluated: r.evaluated, pruned: r.pruned };
-      status = r.complete ? (best ? 'optimal' : 'infeasible') : best ? 'best-at-limit' : 'undecided';
-      if (r.complete && !best && settings.exhaustiveEmpty === 'mip' && path === 'auto') {
+      result = statusOf({ proven: r.complete, best });
+      exhaustive = { complete: r.complete, status: result.status, fee: best ? best.fee : null };
+      if (path === 'auto' && programFollows(settings.afterExhaustive, r.complete, best !== null)) {
+        phase = 'mip';
+        paths.push('mip');
         const pool = spendable(state);
         const m = await mipSearch({ highs: highs || (await loadSolver()), model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
         best = m.best;
-        detail.fallback = mipDetail(m);
+        detail.mip = mipDetail(m);
         candidates = pool.length;
         scope = 'spendable';
-        status = m.proven ? (best ? 'optimal' : 'infeasible') : best ? 'best-at-limit' : 'undecided';
+        result = statusOf({ proven: m.proven, best, programBound: m.bound });
       }
     } else {
+      phase = 'mip';
+      paths.push('mip');
       const pool = opts.mipSpace === 'candidates' ? cs.all : spendable(state);
       candidates = pool.length;
       scope = opts.mipSpace === 'candidates' ? 'candidates' : 'spendable';
       const m = await mipSearch({ highs, model, pool, evaluate: ev.evaluate, best, deadline, iterationMs, onImprove: improve });
       best = m.best;
       detail = mipDetail(m);
-      status = m.proven ? (best ? 'optimal' : 'infeasible') : best ? 'best-at-limit' : 'undecided';
+      result = statusOf({ proven: m.proven, best, programBound: m.bound });
     }
     const ms = performance.now() - t0;
     // Whether the reference lies in the search space a completed status
     // speaks for (an incumbent may lie outside the exhaustive path's
     // candidates).
     const space = new Set((scope === 'candidates' ? cs.all : spendable(state)).map((u) => u.ref));
+    const inCandidates = new Set(cs.all.map((u) => u.ref));
     return {
-      status,
+      status: result.status,
       path: chosen,
+      paths,
       scope,
       candidates,
+      candidateSet: cs.all.length,
       policy,
       fee: best ? best.fee : null,
+      bound: result.bound,
       tx: best ? best.bytes : null,
       best: summary(best),
       bestFrom,
       bestInSpace: best ? best.inputs.every((r) => space.has(r)) : null,
+      bestInCandidates: best ? best.inputs.every((r) => inCandidates.has(r)) : null,
+      exhaustive,
       ms,
       incumbents,
       evaluations: { ...ev.stats },
@@ -146,8 +178,29 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
   }
 }
 
+// Whether the program over every spendable UTxO follows a completed
+// exhaustive search, by the setting afterExhaustive; found: whether a
+// feasible set is known.
+export function programFollows(afterExhaustive, complete, found) {
+  if (!complete) return false;
+  if (afterExhaustive === 'mip-always') return true;
+  if (afterExhaustive === 'mip') return !found;
+  if (afterExhaustive === 'report') return false;
+  throw new Error(`afterExhaustive ${afterExhaustive} is not implemented`);
+}
+
+// The status and the lower bound of a run from its last search: proven,
+// whether that search completed; best, the best evaluation or null;
+// programBound, the program's bound in lovelace when the program ran.
+export function statusOf({ proven, best, programBound = null }) {
+  if (proven) return best ? { status: 'optimal', bound: best.fee } : { status: 'infeasible', bound: null };
+  const pb = programBound === null ? null : BigInt(programBound);
+  if (best) return { status: 'best-at-limit', bound: pb === null ? null : pb < best.fee ? pb : best.fee };
+  return { status: 'undecided', bound: pb };
+}
+
 function mipDetail(m) {
-  return { iterations: m.iterations, strict: m.strict, rejections: m.rejections, solverErrors: m.solverErrors, feeDiffers: m.feeDiffers, maxFeeAbove: m.maxFeeAbove, feeBelow: m.feeBelow, cols: m.cols, rows: m.rows, solverMs: Math.round(m.solverMs), statuses: m.statuses };
+  return { stop: m.stop, bound: m.bound, iterations: m.iterations, strict: m.strict, rejections: m.rejections, solverErrors: m.solverErrors, feeDiffers: m.feeDiffers, maxFeeAbove: m.maxFeeAbove, feeBelow: m.feeBelow, cols: m.cols, rows: m.rows, solverMs: Math.round(m.solverMs), statuses: m.statuses };
 }
 
 // Whether a method's transaction carries the same change outputs, byte for

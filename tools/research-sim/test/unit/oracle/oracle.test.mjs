@@ -13,6 +13,7 @@ import { checkSpend, OracleRefusal } from '../../../src/oracle/spend.mjs';
 import { inputBytes } from '../../../src/oracle/bound.mjs';
 import { leastCount } from '../../../src/oracle/mip.mjs';
 import { policyOfMethod } from '../../../src/oracle/policies.mjs';
+import { programFollows, statusOf } from '../../../src/oracle/search.mjs';
 
 const spend = (over = {}) => ({ source: 'battery', requested: [{ cbor: '82', address: 'x', coin: 1n, assets: [], datum: null, scriptRef: null }], implicit: { withdrawals: 0n, refunds: 0n, deposits: 0n, donation: 0n, mint: [], burn: [] }, fixed: null, collateral: { required: false }, ...over });
 
@@ -22,7 +23,11 @@ test('settings: the defaults are the recommended answers, other values are refus
   assert.equal(ORACLE_SETTINGS.exactness, 'library-forced');
   assert.equal(ORACLE_SETTINGS.solver, 'highs-1.15.4');
   assert.equal(ORACLE_SETTINGS.incumbents, 'all-methods');
+  assert.equal(ORACLE_SETTINGS.afterExhaustive, 'mip-always');
   assert.equal(oracleSettings({ setFee: 'ledger-minimum' }).setFee, 'ledger-minimum');
+  assert.equal(oracleSettings({ afterExhaustive: 'mip' }).afterExhaustive, 'mip');
+  assert.equal(oracleSettings({ afterExhaustive: 'report' }).afterExhaustive, 'report');
+  assert.throws(() => oracleSettings({ afterExhaustive: 'never' }), /not implemented/);
   assert.throws(() => oracleSettings({ searchSpace: 'all' }), /not implemented/);
   assert.throws(() => oracleSettings({ nope: 1 }), /unknown oracle setting/);
 });
@@ -63,4 +68,27 @@ test('each method maps to the change policy its reference uses', () => {
   assert.equal(policyOfMethod('unfrackit-h12', 'default'), 'layout');
   assert.equal(policyOfMethod('cjs-rrri', 'layout'), 'layout');
   assert.equal(policyOfMethod('csl-lf', 'single'), null);
+});
+
+test('the program follows a completed exhaustive search as afterExhaustive says', () => {
+  for (const found of [true, false]) {
+    assert.equal(programFollows('mip-always', true, found), true);
+    assert.equal(programFollows('report', true, found), false);
+    for (const v of ['mip-always', 'mip', 'report']) assert.equal(programFollows(v, false, found), false, `${v} after an incomplete search`);
+  }
+  assert.equal(programFollows('mip', true, false), true);
+  assert.equal(programFollows('mip', true, true), false);
+  assert.throws(() => programFollows('never', true, true), /not implemented/);
+});
+
+test('statuses and bounds: proven only when the last search completed', () => {
+  const best = { fee: 170000n };
+  assert.deepEqual(statusOf({ proven: true, best }), { status: 'optimal', bound: 170000n });
+  assert.deepEqual(statusOf({ proven: true, best: null }), { status: 'infeasible', bound: null });
+  // Unproven: the lower of the fee and the program's bound, or none.
+  assert.deepEqual(statusOf({ proven: false, best, programBound: 168500 }), { status: 'best-at-limit', bound: 168500n });
+  assert.deepEqual(statusOf({ proven: false, best, programBound: 171000 }), { status: 'best-at-limit', bound: 170000n });
+  assert.deepEqual(statusOf({ proven: false, best }), { status: 'best-at-limit', bound: null });
+  assert.deepEqual(statusOf({ proven: false, best: null, programBound: 168500 }), { status: 'undecided', bound: 168500n });
+  assert.deepEqual(statusOf({ proven: false, best: null }), { status: 'undecided', bound: null });
 });
