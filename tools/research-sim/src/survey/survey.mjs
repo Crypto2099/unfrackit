@@ -27,7 +27,7 @@
 // Subjects: cardano-serialization-lib with both strategies, with and without
 // prefer_pure_change; cardano-js-sdk 0.14.35 as cjs-rrri; Mesh 1.9.1 at its
 // default and with its LargestFirstInputSelector, with Mesh's own callbacks;
-// the Evolution SDK 0.6.0 at its default and with its unfrack option at the
+// the Evolution SDK 0.8.0 at its default and with its unfrack option at the
 // option's defaults. A random subject runs randomRuns times (csl-ri cannot be
 // seeded; cjs-rrri and mesh-default take seeds 1 to randomRuns).
 

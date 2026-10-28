@@ -37,7 +37,7 @@ test('every study baseline is made by name, with its library version and determi
     assert.throws(() => makeMethod(T, name, { bundleCoin: 'shortest' }), /takes no options/);
   }
   assert.equal(CJS_VERSION, '0.14.35');
-  assert.equal(EVO_VERSION, '0.6.0');
+  assert.equal(EVO_VERSION, '0.8.0');
 });
 
 test('the builder survey\'s other subjects are not registered', () => {

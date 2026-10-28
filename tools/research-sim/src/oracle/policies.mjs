@@ -40,13 +40,13 @@
 //            does. No UTxO is available to draw, so the random source is a
 //            fixed one that is never called upon to choose.
 //   evo      the Evolution SDK's change, the change of the evo-lf baseline:
-//            @evolution-sdk/evolution 0.6.0's builder (IntersectMBO/
-//            evolution-sdk at c4139df12e099dbd4742d3e2c10dc52f50a4bd41,
+//            @evolution-sdk/evolution 0.8.0's builder (IntersectMBO/
+//            evolution-sdk at 4aaf6c3dc75a967fae168e28f42d1306c1a22a90,
 //            packages/evolution/src/sdk/builders/) given the set through
 //            collectFrom, in the order its largest-first selection holds a
 //            selection (it writes a change output's assets in the order its
 //            inputs brought them), and no available UTxOs, so its change
-//            creation (phases/ChangeCreation.ts:261-379) runs on the set
+//            creation (phases/ChangeCreation.ts:263-382) runs on the set
 //            alone; the transaction is the library's own, with its own fake
 //            witnesses, as the adapter takes it (methods/evo.mjs).
 //

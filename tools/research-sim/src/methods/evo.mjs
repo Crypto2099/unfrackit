@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The Evolution SDK baseline, evo-lf: @evolution-sdk/evolution 0.6.0
-// (IntersectMBO/evolution-sdk at c4139df12e099dbd4742d3e2c10dc52f50a4bd41,
-// packages/evolution/src/sdk/builders/), its transaction builder at its
-// defaults: no coinSelection option, so largest-first, and no unfrack option.
-// The builder is made with no wallet and no provider (makeTxBuilder,
-// TransactionBuilder.ts:1783-1792) and given the change address, the available
-// UTxOs and the run's protocol parameters at build time (BuildOptions,
-// :472-601). It serves H-7 and H-12 only, so it takes no change substitution.
+// The Evolution SDK baseline, evo-lf: @evolution-sdk/evolution 0.8.0
+// (IntersectMBO/evolution-sdk at 4aaf6c3dc75a967fae168e28f42d1306c1a22a90, the
+// tag @evolution-sdk/evolution@0.8.0, packages/evolution/src/sdk/builders/),
+// its transaction builder at its defaults: no coinSelection option, so
+// largest-first, no unfrack option, and no codecOptions, so the library's
+// default encoding. The builder is made with no wallet and no provider
+// (makeTxBuilder, TransactionBuilder.ts:1850-1859) and given the change
+// address, the available UTxOs and the run's protocol parameters at build time
+// (BuildOptions, :475-668). It serves H-7 and H-12 only, so it takes no change
+// substitution.
 //
 // The library, at that commit:
 //   CoinSelection.ts:67-113, largestFirstSelection: every available UTxO
@@ -19,16 +21,16 @@
 //   CoinSelectionError when a unit is still short.
 //   phases/Selection.ts:58-86: no option resolves to largestFirstSelection;
 //   the names "random-improve" and "optimal" throw "not yet implemented".
-//   phases/ChangeCreation.ts:261-379: every leftover asset goes into one
+//   phases/ChangeCreation.ts:263-382: every leftover asset goes into one
 //   change output; when its lovelace is under that output's minimum the
 //   builder selects again, up to three attempts, then fails when the leftover
 //   carries tokens. The builder's ProtocolParameters (TransactionBuilder.ts:
-//   302-323) carry no value-size limit, so a change output over it is built as
+//   303-324) carry no value-size limit, so a change output over it is built as
 //   one output and the kit's value-size check fails it; the adapter never
 //   splits it.
-//   internal/txBuilder.ts:1119-1321: the fee is priced with one fake vkey
+//   internal/txBuilder.ts:1272-1480: the fee is priced with one fake vkey
 //   witness per distinct payment key hash among the inputs, and sizes are the
-//   serialized length (:1071-1072), validity flag included.
+//   serialized length (:1222-1225), validity flag included.
 //
 // Witnesses (setting serialization 'own'): the transaction the library returns
 // with its own fake witnesses (TransactionResult toTransactionWithFakeWitnesses),
@@ -38,29 +40,30 @@
 // Errors to failure classes (setting unclassified 'other' for the rest):
 //   TransactionBuilderError caused by CoinSelectionError       balance
 //   "Cannot balance transaction: Native assets present in leftover but
-//   insufficient lovelace" (ChangeCreation.ts:306-324)          change-minimum
+//   insufficient lovelace" (ChangeCreation.ts:309-327)          change-minimum
 //   "Cannot create valid change: Insufficient funds" (the ADA-only leftover
-//   under its minimum with no fallback, :326-345)               change-minimum
+//   under its minimum with no fallback, :329-348)               change-minimum
 //   "Transaction size (...) exceeds protocol maximum" (internal/build.ts:
-//   119-127)                                                    tx-size
+//   123-131)                                                    tx-size
 //   "No suitable UTxOs available for collateral", "Insufficient collateral
 //   available", "Collateral return (...) is below minimum UTxO requirement"
-//   (phases/Collateral.ts:157-165, :203-209, :273-281): the library's own
+//   (phases/Collateral.ts:157-165, :203-209, :274-282): the library's own
 //   collateral choice fails                                     collateral
 //
 // The replay path: every intent the history reader writes (source 'replay')
 // is built with the run's parameters as the library's full protocol
 // parameters (BuildOptions.fullProtocolParameters, TransactionBuilder.ts:
-// 485-498; internal/resolve.ts:18-33 derives the fee parameters from them,
+// 488-501; internal/resolve.ts:18-33 derives the fee parameters from them,
 // the reference-script price included, which otherwise defaults to 44,
 // phases/FeeCalculation.ts:91), and its fixed parts through the library's
-// own operations (TransactionBuilder.ts:875-1543), as follows:
+// own operations (TransactionBuilder.ts:942-1610), as follows:
 //   requested outputs   payToAddress with the output's address, value, datum
 //                       and script reference read from its bytes, coins as
 //                       written (operations/Pay.ts; autoMinUtxo off)
 //   fixed inputs        collectFrom, one input per call so that each script
-//                       input carries its own redeemer (operations/
-//                       Collect.ts:38-139); never offered as available UTxOs
+//                       input carries its own redeemer and, when it holds a
+//                       datum hash, its datum (operations/Collect.ts:39-147;
+//                       spendDatums below); never offered as available UTxOs
 //   reference inputs    readFrom (operations/ReadFrom.ts:33-75)
 //   mint and burn       mintAssets per policy, a burn as a negative quantity,
 //                       with the policy's redeemer (operations/Mint.ts)
@@ -91,11 +94,17 @@
 //   scripts             attachScript for each native and Plutus script of
 //                       the witness set, before the inputs are collected so
 //                       that a native-script input needs no redeemer
-//                       (Collect.ts:60-81)
+//                       (Collect.ts:63-84)
 //   redeemers           with their operations; the execution units through
 //                       BuildOptions.evaluator, returning the intent's
 //                       observed units for each redeemer at the index the
 //                       library gives it (phases/Evaluation.ts:264-778)
+//   witness-set datums  the datum of each fixed input that holds a datum hash
+//                       at a Plutus script address, through collectFrom's
+//                       datums with its observed bytes, which the library
+//                       writes in the witness set and counts in its fee
+//                       (internal/txBuilder.ts:351-523, :1003-1008,
+//                       :1474-1475; spendDatums below)
 // The transaction's vkey witnesses are the library's fake witnesses for the
 // wallet's payment keys (its inputs, its held fixed inputs and required
 // signers among its keys) and the intent's other vkey witnesses as observed:
@@ -106,10 +115,12 @@
 // A part the library's builder can neither write nor price (unpricedParts) is
 // written on the transaction it built, through the library's own types, as
 // every library's replay does: the treasury fields (TransactionBody.ts; no
-// operation sets them, internal/txBuilder.ts:1009-1027), auxiliary data
-// carrying scripts, which attachMetadata cannot write, witness-set datums
-// (:851-863) with the script-data hash from the library's
-// Redeemers.toScriptDataHash, bootstrap witnesses (:1030-1039), and the
+// operation sets them, internal/txBuilder.ts:1159-1177), auxiliary data
+// carrying scripts, which attachMetadata cannot write, the witness-set datums
+// no spent input needs (an output's or a reference input's, which collectFrom
+// refuses, internal/txBuilder.ts:409-425, and no operation takes), written
+// with every observed datum and the script-data hash from the library's
+// Redeemers.toScriptDataHash, bootstrap witnesses (:1180-1189), and the
 // certificates or withdrawals when one is a script stake credential's with no
 // redeemer, which the stake operations refuse (operations/Stake.ts:43-50,
 // :119-126, :717-724). The library's fee does not count such a part, and a
@@ -124,14 +135,14 @@
 // or reference input, and the pre-Conway genesis-delegation and MIR
 // certificates.
 //
-// Collateral: the library chooses its own (phases/Collateral.ts:116-317): the
+// Collateral: the library chooses its own (phases/Collateral.ts:116-318): the
 // UTxOs among availableUtxos without a reference script, pure ADA first and
 // then by lovelace, largest first (:57-69, :150-155), taken until they reach
 // setCollateral (5 ADA by default, :131; internal/state.ts:11-15), at most
 // three (:33, :183-200), with that fixed amount as the total collateral
-// (:220) and the rest returned to the change address (:289-294); a selected
+// (:220) and the rest returned to the change address (:290-295); a selected
 // input may serve (:147-149). No operation or build option names a
-// collateral UTxO (BuildOptions, TransactionBuilder.ts:472-601), so the
+// collateral UTxO (BuildOptions, TransactionBuilder.ts:475-668), so the
 // library cannot be given the UTxO the engine would set aside. Its script
 // spends take the library's own choice (ownCollateral; methods/contract.mjs
 // choosesOwnCollateral): the engine sets nothing aside, the library selects
@@ -153,7 +164,8 @@ import { makeTxBuilder, voterToKey } from '@evolution-sdk/evolution/sdk/builders
 import * as CostModel from '@evolution-sdk/evolution/CostModel';
 import { CLASSES } from '../kit/check.mjs';
 import { unspentOutputParts, inspectTx } from '../kit/inspect.mjs';
-import { replayRefusal, emptyAuxiliaryData, listItems, requiredSigners, replayWitnessKeys, redeemerKey, targetKey } from '../kit/replay.mjs';
+import { replayRefusal, emptyAuxiliaryData, listItems, requiredSigners, replayWitnessKeys, redeemerKey, targetKey, intentScripts } from '../kit/replay.mjs';
+import { blake2b256 } from '../history/blake2b.mjs';
 import { minFee } from '../kit/fee.mjs';
 import { need } from '../kit/params.mjs';
 import { decode, raw, head, encUint, asUint } from '../history/cbor.mjs';
@@ -161,7 +173,7 @@ import { NOT_REPLAYABLE } from './contract.mjs';
 import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 export const EVO_VERSION = JSON.parse(readFileSync(createRequire(import.meta.url).resolve('@evolution-sdk/evolution/package.json'), 'utf8')).version;
-if (EVO_VERSION !== '0.6.0') throw new Error(`@evolution-sdk/evolution ${EVO_VERSION} is installed; the baseline is 0.6.0`);
+if (EVO_VERSION !== '0.8.0') throw new Error(`@evolution-sdk/evolution ${EVO_VERSION} is installed; the baseline is 0.8.0`);
 
 export function classOfEvoError(e) {
   const m = errorText(e);
@@ -179,7 +191,7 @@ const chainOf = (network) => (network === 'preprod' ? E.preprod : E.mainnet);
 
 // An output's script reference (ScriptRef, the tag-24 bytes) as the Script
 // that UTxO.scriptRef and payToAddress take (UTxO.ts:30, operations/
-// Operations.ts:44-52; internal/txBuilder.ts:243-254 wraps it again).
+// Operations.ts:45-53; internal/txBuilder.ts:248-259 wraps it again).
 const scriptOf = (ref) => (ref ? E.Script.fromCBORHex(Buffer.from(ref.bytes).toString('hex')) : undefined);
 
 // A UTxO in the library's type from its TransactionUnspentOutput bytes: a
@@ -212,7 +224,7 @@ const orUndefined = (x) => (x === null ? undefined : x);
 // (provider/Provider.ts:24-45), for the replay path. The simulator holds no
 // cost models, so each language's is empty; the library uses them only for
 // the script-data hash and the evaluation context (internal/txBuilder.ts:
-// 925-950, phases/Evaluation.ts:44-62), and the evaluator here reads none. A
+// 1070-1096, phases/Evaluation.ts:44-62), and the evaluator here reads none. A
 // parameter the run does not state is left out rather than filled in.
 export const evoFullProtocolParameters = (params) => ({
   minFeeA: Number(params.minFeeA),
@@ -295,21 +307,66 @@ export function evoRefusal(intent) {
   if (kit) return kit;
   const f = intent.fixed;
   if (!f) return null;
-  for (const x of [...f.inputs, ...f.referenceInputs]) if (unspentOutputParts(x.cbor).addr.type === 8) return `a Byron address on ${x.ref}: the library reads a payment credential from every input (internal/txBuilder.ts:1102-1108)`;
+  for (const x of [...f.inputs, ...f.referenceInputs]) if (unspentOutputParts(x.cbor).addr.type === 8) return `a Byron address on ${x.ref}: the library reads a payment credential from every input (internal/txBuilder.ts:1255-1261)`;
   if (certificateKinds(f).some((k) => k === 5 || k === 6)) return 'a genesis-delegation or MIR certificate: the library\'s certificate type has none';
   if (f.body[15] !== undefined) return 'body field 15 (network id): no operation writes it, and a replayed intent carries none';
   if (f.auxiliaryData && emptyAuxiliaryData(f.auxiliaryData)) return 'auxiliary data without metadata or scripts: no operation writes it, and a replayed intent carries none';
   return null;
 }
 
+// The intent's witness-set datums (field 4), each decoded by the library with
+// its observed bytes recorded (OriginalBytes.record), as the library's own
+// providers return a datum (provider/internal/KoiosEffect.ts:256), so that the
+// library writes and hashes those bytes, the ones its datum hash covers
+// (internal/txBuilder.ts:351-361); and the ones the library takes through
+// collectFrom's datums (byInput): the datum of each fixed input that holds a
+// datum hash at a script address whose script is not a native script, once
+// per hash, which is the library's own test of the datums a spend needs
+// (requiredDatums, :369-381; a script it cannot classify counts as Plutus).
+// `rest` counts the datums no spent input needs (an output's or a reference
+// input's): the library refuses them in collectFrom (:409-425), so they are
+// written after the build, unpriced. A datum whose input is missing from the
+// witness set fails the library's build (:394-407).
+const DATUMS = new WeakMap();
+export function spendDatums(fixed) {
+  if (DATUMS.has(fixed)) return DATUMS.get(fixed);
+  const out = { all: [], byInput: new Map(), rest: 0 };
+  if (fixed.witnesses[4] !== undefined) {
+    const items = listItems(fixed.witnesses[4]);
+    const byHash = new Map();
+    out.all = items.map((bytes) => {
+      const d = E.Data.fromCBORHex(hexOf(bytes));
+      if (typeof d !== 'bigint') E.OriginalBytes.record(d, bytes);
+      const h = hexOf(blake2b256(bytes));
+      if (!byHash.has(h)) byHash.set(h, d);
+      return d;
+    });
+    const scripts = intentScripts(fixed);
+    const taken = new Set();
+    for (const x of fixed.inputs) {
+      const p = unspentOutputParts(x.cbor);
+      if (!p.datum || p.datum.kind !== 'hash' || p.addr.paymentKind !== 'script') continue;
+      const script = scripts.get(p.addr.payment);
+      if (script && script.lang === 0) continue;
+      if (taken.has(p.datum.hash) || !byHash.has(p.datum.hash)) continue;
+      taken.add(p.datum.hash);
+      out.byInput.set(x.ref, [byHash.get(p.datum.hash)]);
+    }
+    out.rest = items.filter((bytes) => !taken.has(hexOf(blake2b256(bytes)))).length;
+  }
+  DATUMS.set(fixed, out);
+  return out;
+}
+
 // The parts of the intent the library's builder can neither write nor price,
 // which go on the transaction it built through its own types (unpriced): the
 // treasury fields, which its transaction body carries (TransactionBody.ts) but
-// no operation sets (internal/txBuilder.ts:1009-1027); auxiliary data carrying
-// scripts, which attachMetadata cannot write; witness-set datums (:851-863)
-// and bootstrap witnesses (:1030-1039); and the certificates or withdrawals
-// when one of them is a script stake credential's with no redeemer, which the
-// stake operations refuse (operations/Stake.ts:43-50, :119-126, :717-724).
+// no operation sets (internal/txBuilder.ts:1159-1177); auxiliary data carrying
+// scripts, which attachMetadata cannot write; the witness-set datums no spent
+// input needs (spendDatums) and bootstrap witnesses (:1180-1189); and the
+// certificates or withdrawals when one of them is a script stake credential's
+// with no redeemer, which the stake operations refuse (operations/Stake.ts:
+// 43-50, :119-126, :717-724).
 export function unpricedParts(intent) {
   const f = intent.fixed;
   if (!f) return [];
@@ -317,7 +374,7 @@ export function unpricedParts(intent) {
   if (f.body[21] !== undefined) out.push('current treasury value');
   if (f.body[22] !== undefined) out.push('treasury donation');
   if (f.auxiliaryData && metadataOf(f).refusal) out.push('auxiliary data');
-  if (f.witnesses[4] !== undefined) out.push('witness-set datums');
+  if (f.witnesses[4] !== undefined && spendDatums(f).rest > 0) out.push('witness-set datums');
   if (f.witnesses[2] !== undefined) out.push('bootstrap witnesses');
   const unredeemed = scriptStakeWithoutRedeemer(f);
   if (unredeemed === 'a certificate') out.push('certificates');
@@ -434,7 +491,8 @@ function withFixedParts(b, intent, params, chain, unpriced) {
   const ws = witnessesOf(f, [1, 3, 6, 7]);
   if (ws) for (const k of ['nativeScripts', 'plutusV1Scripts', 'plutusV2Scripts', 'plutusV3Scripts']) for (const script of ws[k] || []) b = b.attachScript({ script });
   if (f.referenceInputs.length) b = b.readFrom({ referenceInputs: f.referenceInputs.map(evoUtxo) });
-  for (const x of f.inputs) b = b.collectFrom({ inputs: [evoUtxo(x)], ...red.input(x.ref) });
+  const datums = spendDatums(f).byInput;
+  for (const x of f.inputs) b = b.collectFrom({ inputs: [evoUtxo(x)], ...red.input(x.ref), ...(datums.has(x.ref) ? { datums: datums.get(x.ref) } : {}) });
   if (f.body[9] !== undefined) {
     const byPolicy = new Map();
     const add = (a, q) => {
@@ -477,12 +535,12 @@ function withFixedParts(b, intent, params, chain, unpriced) {
   return b;
 }
 
-// The evaluator (BuildOptions.evaluator, TransactionBuilder.ts:201-213): the
+// The evaluator (BuildOptions.evaluator, TransactionBuilder.ts:202-214): the
 // intent's observed execution units for each of its redeemers, at the index
 // the library's transaction gives the redeemer's target (the sorted inputs,
 // the sorted mint policies, the certificates in order, the withdrawals sorted
 // by credential and the voters by key as the library sorts them,
-// internal/txBuilder.ts:686-849, and the proposals in order).
+// internal/txBuilder.ts:782-852, and the proposals in order).
 export function observedEvaluator(intent) {
   const reds = intent.fixed ? intent.fixed.redeemers : [];
   const TAGS = ['spend', 'mint', 'cert', 'reward', 'vote', 'propose'];
@@ -594,7 +652,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   const mine = (fake.witnessSet.vkeyWitnesses || []).filter((w) => keys.has(hexOf(w.vkey.bytes).slice(0, 56)));
   if (mine.length !== keys.size) throw new Error(`${name}: the library's fake witness set has ${mine.length} of the wallet's ${keys.size} payment keys`);
   const f = intent.fixed;
-  const others = f ? witnessesOf(f, [0, 2, 4]) : null;
+  const others = f ? witnessesOf(f, [0, 2]) : null;
   const ws = tx.witnessSet;
   const after = (part) => unpriced.includes(part);
   const witnessSet = new E.TransactionWitnessSet.TransactionWitnessSet({
@@ -602,7 +660,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
     nativeScripts: ws.nativeScripts,
     bootstrapWitnesses: after('bootstrap witnesses') ? others.bootstrapWitnesses : ws.bootstrapWitnesses,
     plutusV1Scripts: ws.plutusV1Scripts,
-    plutusData: after('witness-set datums') ? others.plutusData : ws.plutusData,
+    plutusData: after('witness-set datums') ? spendDatums(f).all : ws.plutusData,
     redeemers: ws.redeemers,
     plutusV2Scripts: ws.plutusV2Scripts,
     plutusV3Scripts: ws.plutusV3Scripts
@@ -621,10 +679,11 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
       auxiliaryData = E.AuxiliaryData.fromCBORHex(f.auxiliaryData);
       set.auxiliaryDataHash = E.AuxiliaryData.toHash(auxiliaryData);
     }
-    // With witness-set datums, the script-data hash by the library's own
-    // function (Redeemers.ts:585-622) over its redeemers, those datums and
-    // the empty cost models the run holds.
-    if (after('witness-set datums')) set.scriptDataHash = E.Redeemers.toScriptDataHash(ws.redeemers ?? E.Redeemers.makeRedeemerMap([]), EMPTY_COST_MODELS, others.plutusData);
+    // With witness-set datums it did not take, every observed datum and the
+    // script-data hash by the library's own function (Redeemers.ts:692-729)
+    // over its redeemers, those datums and the empty cost models the run
+    // holds.
+    if (after('witness-set datums')) set.scriptDataHash = E.Redeemers.toScriptDataHash(ws.redeemers ?? E.Redeemers.makeRedeemerMap([]), EMPTY_COST_MODELS, spendDatums(f).all);
     body = new E.TransactionBody.TransactionBody(set);
   }
   const bytes = E.Transaction.toCBORHex(new E.Transaction.Transaction({ body, witnessSet, isValid: tx.isValid, auxiliaryData }));

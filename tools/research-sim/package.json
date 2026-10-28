@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@cardano-sdk/input-selection": "0.14.35",
-    "@evolution-sdk/evolution": "0.6.0",
+    "@evolution-sdk/evolution": "0.8.0",
     "@meshsdk/transaction": "1.9.1",
     "highs": "1.15.4",
     "pg": "8.23.0"

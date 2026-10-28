@@ -22,7 +22,6 @@ import { replay, fixedExtraWitnesses, setAside } from '../../../src/replay/engin
 import { loadSource } from '../../../src/replay/source.mjs';
 import { fixedResolver } from '../../../src/kit/apply.mjs';
 import { inspectTx, unspentOutputParts } from '../../../src/kit/inspect.mjs';
-import { outputBytes } from '../../../src/kit/assemble.mjs';
 import { CLASSES } from '../../../src/kit/check.mjs';
 import { NOT_REPLAYABLE, choosesOwnCollateral, checkMethod } from '../../../src/methods/contract.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
@@ -31,6 +30,8 @@ import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
 import { encodeOutput, unspentOutput } from '../../../src/history/output.mjs';
 import { encUint, encInt, encBytes, encArray, encMap } from '../../../src/history/cbor.mjs';
+import { listItems } from '../../../src/kit/replay.mjs';
+import { replayIntent, payTo as payToOf, zeroRedeemerIntents, EX_UNITS } from '../../lib/script-intents.mjs';
 import { blake2b224 } from '../../../src/history/blake2b.mjs';
 import { recipientAddress } from '../../../src/battery/recipients.mjs';
 import { shapeState } from '../../../src/shapes/shapes.mjs';
@@ -125,7 +126,7 @@ function checkBuilt(source, r) {
   for (const f of r.fees) if (!f.unpriced.length) assert.ok(f.fee >= f.finalMinFee, `${f.type}: fee ${f.fee} under the minimum ${f.finalMinFee}`);
 }
 
-test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, fails their script spends under the minimum for the witness-set datum it cannot price, and miscounts a legacy registration\'s deposit', { skip }, async (t) => {
+test('the Evolution SDK replays the synthetic streams\' mints, fixed inputs and datum-hash script spends, and miscounts a legacy registration\'s deposit', { skip }, async (t) => {
   const seen = {};
   for (const name of ['S1', 'S7', 'S8', 'M1', 'M7']) {
     const source = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
@@ -143,11 +144,16 @@ test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, 
       const t1 = r.spends.find((s) => s.type === 'T1' && intents[s.intent].fixed && intents[s.intent].fixed.inputs.some((x) => x.held));
       assert.equal(t1.outcome, 'built');
       // The script spend reaches the library, which chooses its own
-      // collateral; its witness-set datum, written after the library priced
-      // the transaction, leaves the fee under the minimum, and the failure
-      // names it. The phase-2-invalid one is a forfeit.
-      assert.equal(o['T6:failed:fee-minimum'], 1);
-      assert.match(r.spends.find((s) => s.type === 'T6' && s.outcome === 'failed').detail, /; parts the library did not price: witness-set datums$/);
+      // collateral. Its script input holds a datum hash: the library takes
+      // the datum through collectFrom, writes it in the witness set with its
+      // observed bytes and prices it, so the spend builds with nothing
+      // unpriced. The phase-2-invalid one is a forfeit.
+      assert.equal(o['T6:built'], 1);
+      const t6 = r.spends.find((s) => s.type === 'T6' && s.outcome === 'built');
+      const t6tx = inspectTx(t6.built.txs[0].bytes);
+      assert.ok(t6tx.witnessKeys.includes(4) && t6tx.bodyFields.includes(11));
+      assert.equal(Buffer.from(inspectTx(t6.built.txs[0].bytes).tx.wits.fields.get(4).raw).toString('hex').endsWith('d87980'), true);
+      assert.ok(r.fees.some((f) => f.type === 'T6' && !f.unpriced.length && f.fee >= f.finalMinFee));
       assert.equal(o['T6:forfeit'], 1);
       // The T7 is a legacy stake registration (certificate kind 0): the
       // library counts no deposit for it, so its change keeps the deposit and
@@ -162,30 +168,7 @@ test('the Evolution SDK replays the synthetic streams\' mints and fixed inputs, 
   t.diagnostic(JSON.stringify(seen));
 });
 
-// A replay intent of the given parts at time t.
-function replayIntent(id, t, { type, requested = [], fixed = null, implicit = {}, collateral = false }) {
-  return {
-    id: id.padEnd(64, '0'),
-    source: 'replay',
-    type,
-    time: { slot: t, blockTime: t, blockIndex: 0, epoch: 0, block: t },
-    requested,
-    implicit: { ...ZERO_IMPLICIT, ...implicit },
-    fixed: fixed && { inputs: [], referenceInputs: [], body: {}, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: 0n, fixedBytes: 0, refScriptBytes: 0, ...fixed },
-    collateral: { required: collateral, observed: null },
-    invalid: null,
-    burst: null,
-    observed: { tx: id, size: 0, fee: 300000n, epoch: 0, protocolMajor: null, minFeeA: 44n, minFeeB: 155381n, walletInputs: [], walletOutputs: [], walletWitnesses: [] },
-    classes: {},
-    derived: null,
-    meta: null
-  };
-}
-
-const payTo = (i, coin, extra = {}) => {
-  const address = recipientAddress('synthetic', 300 + i);
-  return { cbor: outputBytes(T, { address, coin, assets: [] }).toString('hex'), address, coin, assets: [], datum: null, scriptRef: null, raised: null, wallet: false, scriptPayment: false, index: null, from: null, inflow: false, ...extra };
-};
+const payTo = (i, coin, extra = {}) => payToOf(T, i, coin, extra);
 
 const sourceOf = (state, intents, params = SYNTHETIC_PARAMS) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 1000, params });
 
@@ -386,4 +369,44 @@ test('a replay repeats byte for byte', { skip }, async () => {
   const source = loadSource(T, { kind: 'shape', name: 'S8', stream: 'synthetic' });
   const bytes = (r) => r.spends.filter((s) => s.outcome === 'built').map((s) => s.built.txs[0].bytes);
   assert.deepEqual(bytes(await replayEvo(source)), bytes(await replayEvo(source)));
+});
+
+test('the Evolution SDK builds a mint and a zero-amount script withdrawal whose redeemers are the integer 0, and prices a datum-hash spend\'s witness datum', { skip }, async () => {
+  const state = shapeState(T, 'S1').state;
+  const P = SYNTHETIC_PARAMS;
+  const intents = zeroRedeemerIntents(T, state, P);
+  const source = sourceOf(state, intents);
+  const r = await replayEvo(source);
+  assert.deepEqual(controlsOf(source, r), []);
+  checkBuilt(source, r);
+  for (const [i, tag] of [[0, 1], [1, 3]]) {
+    const s = r.spends[i];
+    assert.equal(s.outcome, 'built', `${intents[i].id.slice(0, 2)}: ${s.detail}`);
+    const tx = inspectTx(s.built.txs[0].bytes);
+    assert.deepEqual(tx.redeemers.map((x) => [x.tag, x.index, x.data, x.exUnits]), [[tag, 0, '00', EX_UNITS]]);
+    assert.ok(tx.bodyFields.includes(11) && tx.collateralInputs.length === 1);
+  }
+  assert.equal(inspectTx(r.spends[1].built.txs[0].bytes).withdrawals[0].coin, 0n);
+  for (const f of r.fees) assert.deepEqual(f.unpriced, []);
+
+  // A datum-hash spend: the stream's script input holds the hash of d87980.
+  // The library takes the datum through collectFrom and writes it with its
+  // observed bytes; its fee covers it, and nothing is unpriced. A datum no
+  // spent input needs is the library's to refuse, so it goes on the
+  // transaction after the build, unpriced, with every observed datum.
+  const stream = loadSource(T, { kind: 'shape', name: 'S1', stream: 'synthetic' });
+  const t6 = stream.events.filter((e) => e.kind === 'intent').map((e) => e.intent).find((i) => i.type === 'T6' && i.fixed);
+  assert.equal(unspentOutputParts(t6.fixed.inputs[0].cbor).datum.kind, 'hash');
+  const spend = await buildEvo(state, t6, P, { changePolicy: 'default', seed: 1 });
+  assert.equal(spend.ok, true, spend.detail);
+  assert.deepEqual(spend.library.unpriced, []);
+  assert.ok(spend.library.fee >= spend.library.finalMinFee);
+  const datumsOf = (bytes) => listItems(Buffer.from(inspectTx(bytes).tx.wits.fields.get(4).raw)).map((b) => b.toString('hex'));
+  assert.deepEqual(datumsOf(spend.txs[0].bytes), ['d87980']);
+  const extra = { ...t6, fixed: { ...t6.fixed, witnesses: { ...t6.fixed.witnesses, 4: encArray([Buffer.from('d87980', 'hex'), Buffer.from('d87a80', 'hex')]).toString('hex') } } };
+  const mixed = await buildEvo(state, extra, P, { changePolicy: 'default', seed: 1 });
+  assert.equal(mixed.ok, true, mixed.detail);
+  assert.deepEqual(mixed.library.unpriced, ['witness-set datums']);
+  assert.deepEqual(datumsOf(mixed.txs[0].bytes), ['d87980', 'd87a80']);
+  assert.ok(mixed.library.fee < mixed.library.finalMinFee);
 });
