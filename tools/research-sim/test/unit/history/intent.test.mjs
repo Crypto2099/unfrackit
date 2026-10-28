@@ -3,7 +3,8 @@
 
 // Intents of constructed transactions: requested outputs as observed, raised
 // to the minimum, and from an inflow; fixed parts; the implicit values; the
-// rebuild check; a self-reorganization; and a phase-2-invalid transaction.
+// rebuild check; a self-reorganization, one with a reward withdrawal; and a
+// phase-2-invalid transaction.
 //
 // cardano-serialization-lib comes only through the treatment's cslkit.mjs,
 // so these tests run when RESEARCH_SIM_TREATMENT_DIR and
@@ -129,6 +130,32 @@ test('a self-reorganization, and the checks that stop on a wrong part', { skip }
   assert.throws(() => spendEvent(ctx, w, bundle(tx, { fee: fee + 1n, consumed: [`${TXA}#0`], outputs })), IntentCheck);
   assert.throws(() => spendEvent(ctx, w, bundle(tx, { fee, consumed: [`${TXB}#3`], outputs })), /consumed inputs differ/);
   assert.throws(() => spendEvent(ctx, w, bundle(tx, { fee, deposit: 1, consumed: [`${TXA}#0`], outputs })), /net deposit/);
+});
+
+test('a reward withdrawal whose outputs are only the wallet\'s change is a self-reorganization carrying its withdrawal', { skip }, async () => {
+  const { ctx, w } = await setup();
+  const account = Buffer.concat([Buffer.from([0xe0]), STAKE]);
+  const withdrawn = 3000000n;
+  const fee = 200000n;
+  const o1 = encodeOutput({ address: WALLET_ADDR, coin: 10000000n + withdrawn - fee, assets: [] }, 'array');
+  const body = encMap([
+    [encUint(0), encArray([input(TXA, 0)])],
+    [encUint(1), encArray([o1])],
+    [encUint(2), encUint(fee)],
+    [encUint(5), encMap([[encBytes(account), encUint(withdrawn)]])]
+  ]);
+  const tx = assembleTx({ body, wits: wits(1), aux: null, isValid: true, alonzo: true });
+  const outputs = new Map([[0, row({ txHash: 'x', index: 0, coin: 10000000n + withdrawn - fee, address: 'w', paymentCred: K, stakeAddressId: 1 })]]);
+  const withdrawals = [{ account: account.toString('hex'), coin: withdrawn }];
+  const ev = spendEvent(ctx, w, bundle(tx, { fee, consumed: [`${TXA}#0`], outputs, withdrawals }));
+  assert.equal(ev.kind, 'self-reorganization');
+  assert.equal(ev.withdrawal, withdrawn);
+  assert.equal(ev.implicit.withdrawals, withdrawn);
+  // The withdrawal is replayed apart, so it is not value the self-
+  // reorganization brought in unreplayed.
+  assert.equal(ev.valueChange.coin, 0n);
+  assert.deepEqual(ev.observed.walletOutputs.map((o) => o.index), [0]);
+  assert.throws(() => spendEvent(ctx, w, bundle(tx, { fee, consumed: [`${TXA}#0`], outputs, withdrawals: [] })), /withdrawals differ/);
 });
 
 test('a phase-2-invalid spend forfeits its collateral', { skip }, async () => {

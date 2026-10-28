@@ -12,7 +12,8 @@
 //            settings, the byte source
 //   state    the UTxO set at the window's start
 //   events   in chain order: deposit, held-consumed, intent,
-//            self-reorganization, mark
+//            self-reorganization (with `withdrawal`, the reward withdrawals
+//            it carries, which the replay deposits), mark
 //   end      the UTxO set's count and digest at the window's last block, and
 //            the event counts
 //
@@ -34,7 +35,7 @@ import { intentFromHistory } from './intent.mjs';
 import { latestKeyBase, annotateChangeAddresses } from './state.mjs';
 import { parseAddress, addressBytes } from '../history/address.mjs';
 
-export const HISTORY_FORMAT = 'unfrackit-research-sim history 3';
+export const HISTORY_FORMAT = 'unfrackit-research-sim history 4';
 
 // A record's creating transaction id, which every record must carry.
 function createdId(r, created) {
@@ -67,7 +68,8 @@ export function readHistory(text, { analysisFreezeTx = null } = {}) {
     else if (e.kind === 'intent') events.push({ kind: 'intent', txId: e.txId, intent: intentFromHistory(e.intent) });
     else if (e.kind === 'self-reorganization') {
       const vc = e.valueChange || { coin: '0', assets: [] };
-      events.push({ kind: 'self-reorganization', tx: e.tx, txId: e.txId, time: e.time, burst: e.burst || null, heldConsumed: [...(e.heldConsumed || [])], valueChange: { coin: BigInt(vc.coin), assets: (vc.assets || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }, walletOutputs: (e.observed ? e.observed.walletOutputs : []).map((o) => ({ index: o.index, cbor: o.cbor })) });
+      if (e.withdrawal === undefined) throw new Error(`history file: self-reorganization ${e.tx} carries no withdrawal`);
+      events.push({ kind: 'self-reorganization', tx: e.tx, txId: e.txId, time: e.time, burst: e.burst || null, heldConsumed: [...(e.heldConsumed || [])], withdrawal: BigInt(e.withdrawal), valueChange: { coin: BigInt(vc.coin), assets: (vc.assets || []).map((a) => ({ policy: a.policy, name: a.name, qty: BigInt(a.qty) })) }, walletOutputs: (e.observed ? e.observed.walletOutputs : []).map((o) => ({ index: o.index, cbor: o.cbor })) });
     }
     else events.push({ kind: 'mark', n: e.n, blockTime: e.blockTime });
   }

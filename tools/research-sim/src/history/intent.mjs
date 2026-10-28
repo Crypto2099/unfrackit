@@ -443,7 +443,10 @@ export function spendEvent(ctx, w, b) {
   rebuildCheck(tx, { fixedInputs, selectable, requested, walletOutputs, fixed, collateral, walletWitnesses, otherWitnesses: otherW });
 
   // A self-reorganization: no requested output, no certificate or
-  // governance action, no mint or burn, no script.
+  // governance action, no mint or burn, no script. Its reward withdrawals,
+  // which its outputs, all the wallet's change, received, are replayed as a
+  // deposit of the withdrawn ADA (`withdrawal`); its reshuffle of the wallet's
+  // inputs is not replayed.
   if (!requested.length && !governance && !mints.length && !reds.length) {
     return {
       kind: 'self-reorganization',
@@ -453,6 +456,7 @@ export function spendEvent(ctx, w, b) {
       implicit,
       heldConsumed: fixedInputs.filter((x) => x.held).map((x) => x.ref),
       fixedInputs: fixedInputs.filter((x) => !x.held).map((x) => x.ref),
+      withdrawal: implicit.withdrawals,
       valueChange: implicitValueChange(implicit, fixedInputs, ctx),
       observed
     };
@@ -478,11 +482,12 @@ export function spendEvent(ctx, w, b) {
   };
 }
 
-// Whether a self-reorganization changed the wallet's value beyond its fee:
-// non-wallet inputs, withdrawals, refunds, deposits or a donation.
+// Whether a self-reorganization changed the wallet's value beyond its fee and
+// its withdrawals (which are replayed apart): non-wallet inputs, refunds,
+// deposits or a donation.
 function implicitValueChange(implicit, fixedInputs, ctx) {
   const nonWallet = fixedInputs.filter((x) => !x.held).map((x) => ctx.resolved.get(x.ref));
-  const coin = sum(nonWallet.map((r) => r.coin)) + implicit.withdrawals + implicit.refunds - implicit.deposits - implicit.donation;
+  const coin = sum(nonWallet.map((r) => r.coin)) + implicit.refunds - implicit.deposits - implicit.donation;
   return { coin, assets: mergeAssets(nonWallet.flatMap((r) => r.assets)) };
 }
 

@@ -232,7 +232,8 @@ export const CHANGE_GAPS = Object.freeze({
 });
 
 // Where a replay needs a change address the rule does not name: the wallet
-// spends, or holds a spendable UTxO a plan could spend, before the first
+// spends (a self-reorganization whose withdrawal the replay deposits among
+// the spends), or holds a spendable UTxO a plan could spend, before the first
 // output the rule can name, or never receives one. Returns null or the
 // reason, the same in every arm, so that a wallet is refused in all of them
 // or in none. Before the first such output a state holds no spendable UTxO,
@@ -245,7 +246,7 @@ export function changeAddressGap({ changeAddress, changeAddressEnd, start, event
     if (e.changeAddress !== undefined) address = e.changeAddress;
     if (address !== null) return null;
     if (spendableN) return CHANGE_GAPS.spendable;
-    if (e.kind === 'intent') return CHANGE_GAPS.spend;
+    if (e.kind === 'intent' || (e.kind === 'self-reorganization' && e.withdrawal)) return CHANGE_GAPS.spend;
     if (e.kind === 'deposit') spendableN += e.utxos.filter((u) => u.held === null).length;
   }
   if ((changeAddressEnd !== undefined ? changeAddressEnd : address) !== null) return null;

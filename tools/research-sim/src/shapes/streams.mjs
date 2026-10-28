@@ -30,6 +30,8 @@
 //   day 47     held-consumed: the deposit's held datum UTxO, when the day 45
 //              spend has not consumed it, is consumed by another transaction
 //   day 50     self-reorganization (counted, not replayed)
+//   day 52     self-reorganization with a reward withdrawal of 4 ADA: its
+//              withdrawal is replayed as a deposit at the change address
 //   day 55     T8   mint 1 unit of a token under a native script policy into
 //              a wallet output at its minimum, with the policy's key witness
 //   day 58     T7   a stake registration certificate with its 2 ADA deposit
@@ -239,7 +241,8 @@ export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
   intent(45 * DAY, 'T1', t1.requested, { fixed: t1Fixed });
   events.push({ kind: 'held-consumed', tx: hash32(`${name} held`), txId: n++, time: time(47 * DAY), refs: [heldRef], whenPresent: true });
 
-  events.push({ kind: 'self-reorganization', tx: hash32(`${name} reorg`), txId: n++, time: time(50 * DAY), burst: null, heldConsumed: [], valueChange: { coin: 0n, assets: [] } });
+  events.push({ kind: 'self-reorganization', tx: hash32(`${name} reorg`), txId: n++, time: time(50 * DAY), burst: null, heldConsumed: [], withdrawal: 0n, valueChange: { coin: 0n, assets: [] }, walletOutputs: [] });
+  events.push({ kind: 'self-reorganization', tx: hash32(`${name} withdrawal`), txId: n++, time: time(52 * DAY), burst: null, heldConsumed: [], withdrawal: 4n * ADA, valueChange: { coin: 0n, assets: [] }, walletOutputs: [] });
 
   // A mint under a native script policy (one key), into the wallet.
   const mintKey = Buffer.alloc(32, 0x6b);

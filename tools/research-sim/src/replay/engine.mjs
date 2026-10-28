@@ -17,8 +17,12 @@
 //   held-consumed        the held UTxOs leave the state
 //   intent               built by the method, checked by the ledger kit and
 //                        applied (below)
-//   self-reorganization  counted and not replayed; held UTxOs it consumed
-//                        leave the state
+//   self-reorganization  counted, its reshuffle of the wallet's inputs not
+//                        replayed; held UTxOs it consumed leave the state,
+//                        and its reward withdrawals, when it carries any, are
+//                        deposited in every arm as one UTxO of the withdrawn
+//                        ADA at the change address in effect at it; its fee
+//                        is charged to no arm
 //   mark                 every 30 days of block time: the maintained-tidy arm
 //                        re-plans and applies any proposed plan, charged
 // Every arm replays the same intents in the same order. An intent:
@@ -121,7 +125,7 @@ export async function replay(T, params, source, job) {
   }
   const settings = armSettings(arm, variant, repetition);
   let state = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress ?? null, utxos: source.start, at: { slot: null, time: source.windowStart }, franken: source.franken });
-  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
+  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, withdrawalDeposits: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
   // The change address the source names at a point of the replay.
   const follow = (address) => {
     if (address === undefined || address === state.changeAddress) return;
@@ -129,6 +133,7 @@ export async function replay(T, params, source, job) {
     state = withChangeAddress(state, address);
   };
   const fees = { spends: 0n, walletControlled: 0n, plans: 0n, forfeits: 0n };
+  let withdrawn = 0n;
   const trajectory = [];
   const lock = job.policyLock ? new PolicyLock(params) : null;
   let lastTime = source.windowStart;
@@ -213,6 +218,11 @@ export async function replay(T, params, source, job) {
       if (e.valueChange && (e.valueChange.coin !== 0n || e.valueChange.assets.length)) counts.selfReorganizationsWithValue++;
       const present = (e.heldConsumed || []).filter((r) => state.utxos.has(r));
       if (present.length) state = removeHeld(state, present);
+      if (e.withdrawal) {
+        state = addUtxos(state, [withdrawalDeposit(state, e)]);
+        counts.withdrawalDeposits++;
+        withdrawn += e.withdrawal;
+      }
       continue;
     }
     if (e.kind === 'mark') {
@@ -329,6 +339,7 @@ export async function replay(T, params, source, job) {
   out.summary = {
     counts,
     fees,
+    withdrawn,
     failuresPer100: attempted ? (100 * counts.failed) / attempted : null,
     bursts: { parallel: out.bursts.length, feasible: out.bursts.filter((b) => b.feasible).length },
     triggers: out.triggers.length,
@@ -394,6 +405,15 @@ async function burstPass(T, params, start, events, method, opts) {
     built++;
   }
   return { spends: events.length, built, feasible: built === events.length };
+}
+
+// A self-reorganization's withdrawals as the UTxO every arm receives: the
+// withdrawn ADA at the change address in effect, under the transaction's id
+// and the index after its last output, a reference no output of the chain
+// has, so it can never meet an observed UTxO in any arm.
+export function withdrawalDeposit(state, e) {
+  const bytes = changeOutputBytes({ address: state.changeAddress, coin: e.withdrawal, assets: [] });
+  return utxoFromOutput(e.tx, (e.walletOutputs || []).length, bytes, { franken: state.franken, origin: 'deposit' });
 }
 
 function removeSpent(s, refs) {

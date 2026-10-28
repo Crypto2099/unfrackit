@@ -105,7 +105,7 @@ One JSON Lines file per wallet and window. Amounts are decimal strings; hashes, 
    - `deposit`: the wallet outputs created by a transaction that is not the wallet's spend, as UTxO records;
    - `held-consumed`: the held wallet UTxOs consumed by a transaction that is not the wallet's spend;
    - `intent`: a spend and its intent;
-   - `self-reorganization`: a spend with no requested output, no certificate, vote or proposal, no mint or burn and no script; counted and not replayed. It carries its implicit values, the held UTxOs it consumed, the net value it brought in from outside the wallet, and the observed wallet parts;
+   - `self-reorganization`: a spend with no requested output, no certificate, vote or proposal, no mint or burn and no script; counted, its reshuffle of the wallet's inputs not replayed. It carries its implicit values, the held UTxOs it consumed, `withdrawal` (its reward withdrawals, which the replay deposits), the net value it brought in from outside the wallet other than those, and the observed wallet parts;
    - `mark`: every 30 days of block time from the window's first block, placed before the first event at or after its time.
 4. `end`: the UTxO set's count and digest at the window's last block, and the event counts.
 
@@ -179,7 +179,7 @@ A run plan lists which arms run in which window under which selectors and change
 
 ### The replay engine
 
-Each (wallet, arm, variant, selector, change policy, collateral rule, repetition) replay runs in a worker thread, at most 300 seconds of wall-clock time; CSL's calls are synchronous, so a replay past its limit is stopped by terminating its thread, recorded as a time-out, and the pool starts a fresh worker. Workers are also replaced after 40 jobs, since CSL's asm.js heap only grows to the largest wallet a worker has built for; a worker on the 3,005-UTxO shapes holds about 0.8 GiB, so `--workers` should leave that much memory per worker. Deposits enter every arm when they occurred; held UTxOs leave every arm when anything consumes them; self-reorganizations are counted and not replayed; at a mark the maintained-tidy arm re-plans. Every arm replays the same intents in the same order:
+Each (wallet, arm, variant, selector, change policy, collateral rule, repetition) replay runs in a worker thread, at most 300 seconds of wall-clock time; CSL's calls are synchronous, so a replay past its limit is stopped by terminating its thread, recorded as a time-out, and the pool starts a fresh worker. Workers are also replaced after 40 jobs, since CSL's asm.js heap only grows to the largest wallet a worker has built for; a worker on the 3,005-UTxO shapes holds about 0.8 GiB, so `--workers` should leave that much memory per worker. Deposits enter every arm when they occurred; held UTxOs leave every arm when anything consumes them; self-reorganizations are counted and their reshuffles not replayed, but one that carries a reward withdrawal deposits the withdrawn ADA in every arm, as one UTxO at the change address in effect at it, so that every arm receives what the real wallet received, its fee charged to no arm; at a mark the maintained-tidy arm re-plans. Every arm replays the same intents in the same order:
 
 - A phase-2-invalid intent forfeits the observed total collateral from collateral chosen under the arm's rule, its return output coming back to the wallet.
 - An intent the arm's balance cannot fund, by the H-12 rule's exact test with the intent's implicit values and fixed inputs counted, is recorded as infeasible by balance and is not a selector failure.
@@ -195,7 +195,7 @@ At the snapshot, from the observed layout: an ADA payment drawn from the pooled 
 
 ### Synthetic shapes and streams
 
-The 17 shapes of the preprod seeder (byte for byte the treatment harness's) and the claim and merchant shapes CL1, CL3, E1 and E2 are generated deterministically with mulberry32. Each shape has a synthetic intent stream of fixed test values for the engine's tests, over 75 days: payments of each type T1 to T8 that its holdings allow, a deposit with a held datum UTxO, a parallel burst, a deposit at a second base address of the wallet, to which the change address moves, a Plutus spend with a script input, redeemer, script and datum, a phase-2-invalid forfeit, a payment with a validity interval, a message and a held fixed input, a self-reorganization, a native-script mint, a stake registration with its deposit, and two 30-day marks.
+The 17 shapes of the preprod seeder (byte for byte the treatment harness's) and the claim and merchant shapes CL1, CL3, E1 and E2 are generated deterministically with mulberry32. Each shape has a synthetic intent stream of fixed test values for the engine's tests, over 75 days: payments of each type T1 to T8 that its holdings allow, a deposit with a held datum UTxO, a parallel burst, a deposit at a second base address of the wallet, to which the change address moves, a Plutus spend with a script input, redeemer, script and datum, a phase-2-invalid forfeit, a payment with a validity interval, a message and a held fixed input, a self-reorganization, one with a reward withdrawal, a native-script mint, a stake registration with its deposit, and two 30-day marks.
 
 ## Baselines
 

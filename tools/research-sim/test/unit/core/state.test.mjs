@@ -118,7 +118,7 @@ const PARAMS = paramsFromRow('preprod', { epoch_no: 300, protocol_major: 10, min
 
 const LKB_A1 = { address: addressTextOf(A1), txId: 1, index: 10 };
 
-function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId = false, latestKeyBase = LKB_A1, franken = [] } = {}) {
+function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId = false, latestKeyBase = LKB_A1, franken = [], withdrawal = '3000000' } = {}) {
   const r = (txid, i, address, coin, assets = [], origin = 'initial', held = null, txId = 1) => {
     const u = utxoFromCbor(rec(txid, i, address, coin, assets), { origin });
     const h = held !== null ? held : franken.includes(u.cred) ? 'franken' : null;
@@ -139,7 +139,7 @@ function historyText({ split = 'exploration', withEnd = true, count = 1, noTxId 
     { kind: 'deposit', tx: T2, txId: 3, time: {}, utxos: [r(T2, 0, A0, 4000000n, [], 'deposit', null, 3)] },
     { kind: 'mark', n: 1, blockTime: 900 },
     { kind: 'intent', txId: 4, intent },
-    { kind: 'self-reorganization', tx: T3, txId: 5, time: {}, burst: null, observed: { walletOutputs: [{ index: 0, cbor: out(A0, 2800000n).toString('hex') }] } }
+    { kind: 'self-reorganization', tx: T3, txId: 5, time: {}, burst: null, ...(withdrawal === null ? {} : { withdrawal }), observed: { walletOutputs: [{ index: 0, cbor: out(A0, 2800000n).toString('hex') }] } }
   ];
   if (withEnd) lines.push({ kind: 'end', at: { tx: 9 }, utxos: 2, digest: '00', counts: { deposit: 1, 'held-consumed': 0, intent: count, 'self-reorganization': 1, mark: 1, skippedInvalid: 0, raised: 0 } });
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
@@ -171,6 +171,10 @@ test('a history file reads into parameters, the start state, events and intents'
   assert.equal(h.changeAddressEnd, addressTextOf(A0));
   assert.equal(h.stakeCred, STAKE);
   assert.equal(h.events[3].walletOutputs.length, 1);
+  // A self-reorganization carries its reward withdrawals, which the replay
+  // deposits; a file without them is refused.
+  assert.equal(h.events[3].withdrawal, 3000000n);
+  assert.throws(() => readHistory(historyText({ withdrawal: null })), /carries no withdrawal/);
   // A franken-flagged credential is passed over at every step: with A1's key
   // flagged, the start falls back to A0 (the header the extraction writes
   // then names A0's latest output), and the spend's change at A1 never moves
@@ -210,8 +214,12 @@ test('the change address follows the outputs received; a wallet is refused only 
   // An empty start, then a deposit: the spend after it has an address.
   const a = run([], [dep(3, [u(T2, 0, A0, 5000000n)]), intent(4)]);
   assert.deepEqual(a, { gap: null, at: [null, addressTextOf(A0)], end: addressTextOf(A0) });
-  // A spend before any output the rule can name.
+  // A spend before any output the rule can name, and a withdrawal the replay
+  // would deposit; a self-reorganization without one needs no address.
   assert.equal(run([], [intent(4), dep(5, [u(T2, 0, A0, 5000000n)])]).gap, CHANGE_GAPS.spend);
+  const reorg = (txId, withdrawal) => ({ kind: 'self-reorganization', txId, withdrawal, walletOutputs: [] });
+  assert.equal(run([], [reorg(4, 2000000n), dep(5, [u(T2, 0, A0, 5000000n)])]).gap, CHANGE_GAPS.spend);
+  assert.equal(run([], [reorg(4, 0n), dep(5, [u(T2, 0, A0, 5000000n)])]).gap, null);
   // A spendable UTxO at a pointer address, which the rule cannot name.
   assert.equal(run([u(T1, 0, ptr, 5000000n)], []).gap, CHANGE_GAPS.spendable);
   assert.equal(run([], [dep(3, [u(T1, 0, ptr, 5000000n)]), { kind: 'mark', n: 1 }, dep(5, [u(T2, 0, A0, 5000000n)])]).gap, CHANGE_GAPS.spendable);

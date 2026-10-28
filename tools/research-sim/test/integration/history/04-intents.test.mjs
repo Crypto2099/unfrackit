@@ -18,7 +18,9 @@
 // the files: the wallets whose start state holds no UTxO the change-address
 // rule can name (the rule over the start state alone), those the rule over
 // every output received still refuses, by reason, and how often the change
-// address moves within the window.
+// address moves within the window; and the self-reorganizations that carry a
+// reward withdrawal, which the replay deposits, with those that also bring
+// other value in.
 //
 // Selection, reproducible: key stake credentials ranked by the number of
 // transactions among the last 100,000 before the snapshot that consume one of
@@ -48,7 +50,7 @@ const TYPES = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8'];
 
 test(`every spend of the funder and ${N} preprod wallets is an intent that rebuilds its transaction`, { timeout: 24 * 3600 * 1000 }, async () => {
   const ctx = await context();
-  const out = { wallets: 0, intents: 0, selfReorganizations: 0, types: {}, raised: 0, phase2Invalid: 0, fixedNull: 0, withRedeemers: 0, perWallet: [], created: { records: 0, differ: 0 }, changeAddress: { startStateNone: 0, beforeWindowNone: 0, refused: 0, reasons: {}, moves: 0, walletsMoving: 0 } };
+  const out = { wallets: 0, intents: 0, selfReorganizations: 0, withdrawals: { selfReorganizations: 0, withOtherValue: 0, lovelace: 0n }, types: {}, raised: 0, phase2Invalid: 0, fixedNull: 0, withRedeemers: 0, perWallet: [], created: { records: 0, differ: 0 }, changeAddress: { startStateNone: 0, beforeWindowNone: 0, refused: 0, reasons: {}, moves: 0, walletsMoving: 0 } };
   // Bursts on real histories: their count by kind, the chained bursts with
   // two spends in one block, and every pair of consecutive spends 59 to 61
   // seconds apart with whether they share a burst.
@@ -100,7 +102,14 @@ test(`every spend of the funder and ${N} preprod wallets is an intent that rebui
       for (const line of readFileSync(path, 'utf8').trim().split('\n')) {
         const e = JSON.parse(line);
         if (e.kind === 'intent' || e.kind === 'self-reorganization') spendsSeen.push({ time: e.kind === 'intent' ? e.intent.time : e.time, burst: e.kind === 'intent' ? e.intent.burst : e.burst });
-        if (e.kind === 'self-reorganization') out.selfReorganizations++;
+        if (e.kind === 'self-reorganization') {
+          out.selfReorganizations++;
+          if (BigInt(e.withdrawal) > 0n) {
+            out.withdrawals.selfReorganizations++;
+            out.withdrawals.lovelace += BigInt(e.withdrawal);
+            if (BigInt(e.valueChange.coin) !== 0n || e.valueChange.assets.length) out.withdrawals.withOtherValue++;
+          }
+        }
         if (e.kind !== 'intent') continue;
         const it = e.intent;
         out.intents++;

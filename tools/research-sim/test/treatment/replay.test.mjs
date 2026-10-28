@@ -11,7 +11,9 @@
 //   - events land where they belong: the deposits before the spends that use
 //     them, held consumption, the two 30-day marks, the maintained-tidy arm's
 //     re-plans at exactly those marks and no other arm's, the burst pass, the
-//     forfeit and the self-reorganization counted;
+//     forfeit and the two self-reorganizations counted, the reward withdrawal
+//     of one deposited at the change address the stream names at it and held
+//     by the next spend's state;
 //   - the change address moves once, at the deposit to the wallet's second
 //     address, and every change output of a replayed spend lands at the
 //     address the stream names at it;
@@ -23,7 +25,7 @@ import { treatment, skip } from '../lib/treatment.mjs';
 import { negativeControls, EXPECTED } from '../lib/controls.mjs';
 import { SHAPE_NAMES } from '../../src/shapes/shapes.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
-import { replay, fixedExtraWitnesses } from '../../src/replay/engine.mjs';
+import { replay, fixedExtraWitnesses, withdrawalDeposit } from '../../src/replay/engine.mjs';
 import { makeMethod } from '../../src/methods/registry.mjs';
 import { testPlan, mergePlan } from '../../src/arms/plan.mjs';
 import { fixedResolver } from '../../src/kit/apply.mjs';
@@ -64,7 +66,16 @@ test('the synthetic streams replay under every arm the planner expresses, every 
         const label = `${name} ${e.arm}/${e.variant}/${e.change}/${collateralRule}`;
         // Events in place.
         const s = r.summary.counts;
-        if (s.deposits !== 2 || s.marks !== 2 || s.selfReorganizations !== 1) bad.push(`${label}: deposits ${s.deposits}, marks ${s.marks}, reorganizations ${s.selfReorganizations}`);
+        if (s.deposits !== 2 || s.marks !== 2 || s.selfReorganizations !== 2 || s.withdrawalDeposits !== 1) bad.push(`${label}: deposits ${s.deposits}, marks ${s.marks}, reorganizations ${s.selfReorganizations}, withdrawal deposits ${s.withdrawalDeposits}`);
+        // The withdrawal's deposit, as the first built spend after it sees it.
+        const wd = src.events.find((ev) => ev.kind === 'self-reorganization' && ev.withdrawal);
+        const after = r.spends.find((x) => x.outcome === 'built' && x.t > wd.time.blockTime);
+        if (after) {
+          const want = withdrawalDeposit({ changeAddress: wd.changeAddress, franken: new Set() }, wd);
+          const got = after.built.before.utxos.get(want.ref);
+          if (!got || got.coin !== wd.withdrawal || got.address !== wd.changeAddress) bad.push(`${label}: the withdrawal's deposit is not in the state of the next spend`);
+          else counts.withdrawalsSeen = (counts.withdrawalsSeen || 0) + 1;
+        }
         if (s.changeAddressMoves !== 1) bad.push(`${label}: the change address moved ${s.changeAddressMoves} times`);
         if (s.heldConsumed + s.heldMissing !== 1) bad.push(`${label}: the held UTxO is consumed ${s.heldConsumed} times and missing ${s.heldMissing}`);
         const ts = r.spends.map((x) => x.t);

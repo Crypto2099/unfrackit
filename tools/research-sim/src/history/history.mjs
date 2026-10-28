@@ -18,8 +18,10 @@
 //                  intent               a spend event and its intent
 //                  self-reorganization  a spend with no requested output, no
 //                                       certificate or governance action, no
-//                                       mint or burn and no script; counted
-//                                       and not replayed
+//                                       mint or burn and no script; counted,
+//                                       its reshuffle not replayed, its
+//                                       reward withdrawals replayed as a
+//                                       deposit of the withdrawn ADA
 //                  mark                 every 30 days of block time from the
 //                                       window's first block
 //   end          the UTxO set's count and digest at the window's last block
@@ -39,7 +41,7 @@ import { loadLife, aliveAt, frankenFlags, holdingsOf, arrivalTable, loadExtras, 
 import { loadBundles } from './txdata.mjs';
 import { spendEvent, timeOf, IntentCheck } from './intent.mjs';
 
-export const FORMAT = 'unfrackit-research-sim history 3';
+export const FORMAT = 'unfrackit-research-sim history 4';
 const BUNDLE_BATCH = 400;
 
 export function bursts(spends, settings) {
