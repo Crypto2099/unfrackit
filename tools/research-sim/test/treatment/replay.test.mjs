@@ -41,10 +41,6 @@ import { settle } from '../../src/kit/heap.mjs';
 
 const T = await treatment();
 const DAY = 86400;
-// Left out, and reported: on M3, the planner at the random grouping exhausts
-// the JavaScript heap planning the end state for the conformity measure,
-// after every intent has built. The treatment's case, not the engine's.
-const LEFT_OUT = new Set(['M3 tidy-once grouping-random']);
 
 // An output by what it holds: address, coin, assets as a set, datum and script
 // reference.
@@ -65,10 +61,6 @@ test('the synthetic streams replay under every arm the planner expresses, every 
     const src = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
     counts.shapes++;
     for (const e of entries) {
-      if (LEFT_OUT.has(`${name} ${e.arm} ${e.variant}`)) {
-        counts.leftOut = (counts.leftOut || 0) + 1;
-        continue;
-      }
       await settle();
       for (const collateralRule of ['ledger', 'practice']) {
         const r = await replay(T, src.params, src, { arm: e.arm, variant: e.variant, repetition: 1, method, opts: { seed: 1, changePolicy: e.change, collateralRule }, settleEvery: 25, policyLock: e.policyLock, keepTx: true });

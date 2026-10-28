@@ -4,7 +4,7 @@
 # record exists, these are the digests of the treatment as it stood on
 # 2026-10-27, after its fee moved to the ledger's size for fees; the
 # record's rows replace them.
-7db2a542131ca84180d534828d9795a65d34ab839a415925a66ff8757508f6b0  planner2.mjs
+fcca2bc04ce043c0601b52cb9592dc47add688878bcc694c997354ce4fcaf100  planner2.mjs
 80856e26d3209efd1dad39234385ef79402bd682f856ee1920ebf92f12ab2f67  labels.mjs
 47719dcb1759ff0cf9b46674823b05099d731876f1973bc5a66d2800fa9de022  adapter2.mjs
 11c2928756f331482899b526eb721aa24c5ec04f0ec5ab196c794a877c16fcc1  build.mjs

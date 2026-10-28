@@ -324,7 +324,7 @@ The intent tests and the kit's CSL tests build transactions with CSL, so they ru
 
 - the bridge against a fresh run of the treatment harness's own runners, plan for plan and battery result for battery result, on a digest-checked copy;
 - every transaction built on the 21 shapes (plans, battery spends by the H-12 rule and the test method under each change policy) meeting the kit's checks, read back by CSL to the same bytes, at exactly the ledger's minimum fee when the treatment built it, with the four negative controls caught on each;
-- the replay engine on every shape's synthetic stream under every arm and variant, each replayed transaction checked, read by CSL and its negative controls caught, and its events in place; one case is left out and named in the test, M3's tidy-once arm at the random grouping, where the planner exhausts the JavaScript heap planning the end state;
+- the replay engine on every shape's synthetic stream under every arm and variant, each replayed transaction checked, read by CSL and its negative controls caught, and its events in place; on M3's tidy-once arm at the random grouping the planner refuses the end state's plan, so that replay's conformity is recorded as refused;
 - a replay run repeated through the worker pool with the same seeds writing byte-identical records;
 - the battery runner with its H-12 records and the oracle hook;
 - the time limits, forced (shortened to 2 seconds by default; `RESEARCH_SIM_REAL_LIMITS=1` runs them at 300 and 60 seconds);
