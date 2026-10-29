@@ -234,7 +234,10 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     for (const d of b.report.draw) assert.ok(d.n_d !== undefined && d.n_d <= d.n_a, `${d.frame}: (d) counts token-holding wallets`);
     const s3peak = await row('peak', sa.S3);
     const franken = (await c.query('SELECT sa_id, bool_or(flagged) AS f, max(n_creds) AS n FROM study.franken WHERE sa_id = ANY($1) GROUP BY sa_id', [[sa.S1, sa.S3, sa.M2]])).rows;
-    assert.equal(franken.length, 3);
+    // The franken step covers sampled wallets only: S3 and M2 are sampled, and
+    // S1, never token-holding, only if the ADA-only draw took it.
+    const sampled = (await c.query('SELECT DISTINCT sa_id FROM study.sample WHERE sa_id = ANY($1)', [[sa.S1, sa.S3, sa.M2]])).rows.map((r) => String(r.sa_id)).sort();
+    assert.deepEqual(franken.map((f) => String(f.sa_id)).sort(), sampled);
     for (const f of franken) assert.equal(f.f, false, `no franken flag on ${f.sa_id}`);
 
     // The reconstruction check ran with the direct read, for the sample.
