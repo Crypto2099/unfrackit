@@ -1,0 +1,169 @@
+{
+  "version": 1,
+  "primitive": "canonical-cbor-encode",
+  "source": "RFC 8949 \u00a7A (Examples of Encoded CBOR Data Items)",
+  "vectors": [
+    {
+      "name": "uint-0",
+      "input_json": "0",
+      "expected_cbor_hex": "00"
+    },
+    {
+      "name": "uint-1",
+      "input_json": "1",
+      "expected_cbor_hex": "01"
+    },
+    {
+      "name": "uint-10",
+      "input_json": "10",
+      "expected_cbor_hex": "0a"
+    },
+    {
+      "name": "uint-23",
+      "input_json": "23",
+      "expected_cbor_hex": "17"
+    },
+    {
+      "name": "uint-24",
+      "input_json": "24",
+      "expected_cbor_hex": "1818"
+    },
+    {
+      "name": "uint-25",
+      "input_json": "25",
+      "expected_cbor_hex": "1819"
+    },
+    {
+      "name": "uint-100",
+      "input_json": "100",
+      "expected_cbor_hex": "1864"
+    },
+    {
+      "name": "uint-1000",
+      "input_json": "1000",
+      "expected_cbor_hex": "1903e8"
+    },
+    {
+      "name": "uint-1000000",
+      "input_json": "1000000",
+      "expected_cbor_hex": "1a000f4240"
+    },
+    {
+      "name": "nint-minus-1",
+      "input_json": "-1",
+      "expected_cbor_hex": "20"
+    },
+    {
+      "name": "nint-minus-10",
+      "input_json": "-10",
+      "expected_cbor_hex": "29"
+    },
+    {
+      "name": "nint-minus-100",
+      "input_json": "-100",
+      "expected_cbor_hex": "3863"
+    },
+    {
+      "name": "nint-minus-1000",
+      "input_json": "-1000",
+      "expected_cbor_hex": "3903e7"
+    },
+    {
+      "name": "byte-empty",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bytes",
+        "hex": ""
+      },
+      "expected_cbor_hex": "40"
+    },
+    {
+      "name": "byte-deadbeef",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bytes",
+        "hex": "deadbeef"
+      },
+      "expected_cbor_hex": "44deadbeef"
+    },
+    {
+      "name": "byte-01020304",
+      "input_json": "null",
+      "input_value_spec": {
+        "type": "bytes",
+        "hex": "01020304"
+      },
+      "expected_cbor_hex": "4401020304"
+    },
+    {
+      "name": "text-empty",
+      "input_json": "\"\"",
+      "expected_cbor_hex": "60"
+    },
+    {
+      "name": "text-a",
+      "input_json": "\"a\"",
+      "expected_cbor_hex": "6161"
+    },
+    {
+      "name": "text-IETF",
+      "input_json": "\"IETF\"",
+      "expected_cbor_hex": "6449455446"
+    },
+    {
+      "name": "array-empty",
+      "input_json": "[]",
+      "expected_cbor_hex": "80"
+    },
+    {
+      "name": "array-1-2-3",
+      "input_json": "[1, 2, 3]",
+      "expected_cbor_hex": "83010203"
+    },
+    {
+      "name": "array-nested",
+      "input_json": "[1, [2, 3], [4, 5]]",
+      "expected_cbor_hex": "8301820203820405"
+    },
+    {
+      "name": "array-1-25",
+      "input_json": "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
+      "expected_cbor_hex": "98190102030405060708090a0b0c0d0e0f101112131415161718181819"
+    },
+    {
+      "name": "map-empty",
+      "input_json": "{}",
+      "expected_cbor_hex": "a0"
+    },
+    {
+      "name": "map-ab-out-of-order",
+      "input_json": "{\"b\": 1, \"a\": 2}",
+      "expected_cbor_hex": "a2616102616201"
+    },
+    {
+      "name": "map-strings",
+      "input_json": "{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}",
+      "expected_cbor_hex": "a56161614161626142616361436164614461656145"
+    },
+    {
+      "name": "array-mixed",
+      "input_json": "[\"a\", {\"b\": \"c\"}]",
+      "expected_cbor_hex": "826161a161626163"
+    },
+    {
+      "name": "bool-false",
+      "input_json": "false",
+      "expected_cbor_hex": "f4"
+    },
+    {
+      "name": "bool-true",
+      "input_json": "true",
+      "expected_cbor_hex": "f5"
+    },
+    {
+      "name": "null",
+      "input_json": "null",
+      "expected_cbor_hex": "f6"
+    }
+  ]
+}
