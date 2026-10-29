@@ -4,13 +4,13 @@
 // The commands that read a database: history files and snapshot states, and
 // the census, near-cap, collateral and battery-pool reports.
 //
-// Every command connects read only, refuses mainnet (db.mjs), and writes only
-// under the private run directory (paths.mjs).
+// Every command connects read only, reads mainnet only through the gate
+// (db.mjs), and writes only under the private run directory (paths.mjs).
 
 import { readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { connect, q } from './db.mjs';
+import { connect, q, Refusal } from './db.mjs';
 import { loadAll } from './sqlfile.mjs';
 import { settingsWith, parseSets } from './settings.mjs';
 import { loadTreatmentCsl } from './csl.mjs';
@@ -55,9 +55,36 @@ export function refuseWallets(wallets, samples, analysisFreezeTx) {
   }
 }
 
-export async function makeContext(opts) {
+// The run a mainnet grant fixes, with the options that would name another
+// refused: a --snapshot other than the grant's block (by id or hash), and an
+// --extraction-run other than the grant's run or snapshot. Without a grant
+// (a test network), the --extraction-run file's run, or null.
+export function runOf(grant, opts) {
+  const given = opts.extractionRun ? fromExtractionRun(opts.extractionRun) : null;
+  if (!grant) return given;
+  const g = grant.run;
+  if (opts.snapshot !== undefined && String(opts.snapshot) !== String(g.snapshot.id) && String(opts.snapshot).toLowerCase() !== g.snapshot.hash) {
+    throw new Refusal(`refusing: on mainnet the snapshot is the block the extraction's study run ${g.runId} fixed (id ${g.snapshot.id}); give no --snapshot`);
+  }
+  if (given && (given.runId !== g.runId || given.network !== g.network || given.snapshot.hash !== g.snapshot.hash)) {
+    throw new Refusal(`refusing: --extraction-run names another run than the extraction's study run ${g.runId} for the final freeze`);
+  }
+  return g;
+}
+
+// gate: the mainnet path the calling code runs under (db.mjs connect).
+export async function makeContext(opts, { gate } = {}) {
   const blocks = loadAll();
-  const client = await connect({ expectNetwork: opts.expectNetwork });
+  const client = await connect({ expectNetwork: opts.expectNetwork, blocks }, gate ? { gate } : {});
+  try {
+    return await contextOn(client, blocks, opts);
+  } catch (e) {
+    await client.end().catch(() => {});
+    throw e;
+  }
+}
+
+async function contextOn(client, blocks, opts) {
   const settings = settingsWith(parseSets(list(opts.set)));
   const ctx = { client, blocks, settings, network: client.network, datums: new Map(), scripts: new Map(), nativeRefs: new Map(), resolved: new Map(), epochParams: new Map() };
   if (opts.treatment) {
@@ -72,7 +99,8 @@ export async function makeContext(opts) {
     immutable = new ImmutableReader(access, { chunkSlots: settings.chunkSlots });
   }
   ctx.bytes = new TxBytes({ client, blocks, mode, immutable });
-  ctx.run = opts.extractionRun ? fromExtractionRun(opts.extractionRun) : null;
+  ctx.gate = client.gate;
+  ctx.run = runOf(client.gate, opts);
   if (ctx.run && ctx.run.network !== client.network) throw new Error(`the extraction run is ${ctx.run.network}, the database ${client.network}`);
   ctx.snapshot = ctx.run ? await snapshotBlock(ctx, String(ctx.run.snapshot.id)) : await snapshotBlock(ctx, opts.snapshot);
   if (ctx.run && (ctx.snapshot.hash !== ctx.run.snapshot.hash || ctx.snapshot.tx !== ctx.run.snapshot.tx)) throw new Error('the extraction run\'s snapshot differs from the database\'s');
