@@ -25,7 +25,7 @@ import { sha256hex } from './freeze.mjs';
 import { Koios } from './koios.mjs';
 import { captureStrata } from './strata-capture.mjs';
 
-const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync database.
+export const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync database.
 
   init-secret                     make secret/hmac.key (32 random bytes) once; prints its path, never the key
   run [options]                   frames, draw, samples, split, flags, the reconstruction check and the manifest
@@ -113,29 +113,109 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
 Connection: --host --port --database --user, or PGHOST PGPORT PGDATABASE PGUSER; the password comes
 from the file PGPASSFILE names. Outputs: \${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/.`;
 
-// Options an earlier version took. parseArgs would otherwise read them as any
-// other --name value and drop them without a word, and a run would go on
-// without the wallets the person named.
+// Options an earlier version took. They are refused by name, with the reason,
+// wherever they appear.
 const REMOVED = new Set(['case', 'cases']);
 const FLAGS = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain', 'sim-wallets']);
+// Options that may be given more than once; every other option once only.
+const REPEATABLE = new Set(['set', 'redo', 'stake', 'node-stake']);
 
-export function parseArgs(argv) {
+const CONNECTION = ['host', 'port', 'database', 'user'];
+const SESSION = ['work-mem', 'maintenance-work-mem', 'parallel-workers', 'temp-tablespaces'];
+const FREEZE = ['freeze-tx', 'hypotheses-tx', 'from-block', 'prereg', 'study-key', 'code-manifest', 'drawkey'];
+
+// The options each command reads, from the help text. A command line is
+// checked against its own command's set before anything runs.
+export const COMMAND_OPTIONS = {
+  'init-secret': [],
+  run: [
+    ...CONNECTION, ...SESSION, ...FREEZE,
+    'run-id', 'snapshot', 'stand-in-tx', 'live-fire', 'test-h', 'purpose', 'keep-for-debug', 'sim-wallets', 'explain',
+    'strata', 'scam-clone', 'scam-list', 'hmac-key', 'set', 'redo', 'capture', 'expect-network'
+  ],
+  'verify-freeze': [...CONNECTION, ...FREEZE],
+  cleanup: [...CONNECTION, 'run-id', 'start-seq', 'network'],
+  'own-drawn': [...CONNECTION, 'list', 'run'],
+  'check-log': ['network', 'finding', 'commit', 'entry'],
+  'capture-strata': ['out', 'named-from', 'rulings', 'own-sources', 'max-candidates', 'spacing-ms'],
+  'capture-scam-list': ['clone', 'commit', 'out', 'extract-out'],
+  'scam-recheck': [...CONNECTION, 'run', 'scam-list', 'scam-clone'],
+  'confirm-snapshot': [...CONNECTION, 'run-id'],
+  'source-check': [
+    ...CONNECTION, ...FREEZE,
+    'run-id', 'from-run', 'count', 'node-count', 'stake', 'node-stake', 'node-container', 'node-socket', 'magic',
+    'live-fire', 'purpose', 'expect-network', 'keep-for-debug'
+  ],
+  explain: [...CONNECTION, ...SESSION, 'expect-network', 'purpose', 'snapshot', 'capture'],
+  health: [...CONNECTION],
+  project: ['timings', 'preprod-rows', 'mainnet-rows'],
+  hash: []
+};
+// Commands that take a positional word (check-log verify|fix).
+const POSITIONALS = { 'check-log': 1 };
+
+const ALL_OPTIONS = new Set(Object.values(COMMAND_OPTIONS).flat());
+
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_x, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function closest(k, known) {
+  let best = null;
+  let bestD = 3;
+  for (const x of known) {
+    const d = editDistance(k, x);
+    if (d < bestD) {
+      best = x;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+// Reads a command line against the options of `command`; without a command,
+// against every command's options. An option the command does not define,
+// a value option with no value (nothing after it, or another --option), a flag
+// given a value or a stray word, and an option given twice that is not
+// repeatable are refused with an error, so a typo stops the command before
+// anything runs. Values are taken as given: a value that begins with -- is
+// never a value.
+export function parseArgs(argv, command) {
+  if (command !== undefined && !Object.hasOwn(COMMAND_OPTIONS, command)) throw new Error(`unknown command ${command}`);
+  const known = command === undefined ? ALL_OPTIONS : new Set(COMMAND_OPTIONS[command]);
+  const maxWords = command === undefined ? 1 : POSITIONALS[command] || 0;
   const out = { _: [], set: [], redo: [], stake: [], nodeStake: [] };
+  const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith('--')) {
+      if (out._.length >= maxWords) throw new Error(`unexpected argument ${JSON.stringify(a)}${command ? ` for ${command}` : ''}; options start with --, and a flag takes no value`);
       out._.push(a);
       continue;
     }
     const k = a.slice(2);
     if (REMOVED.has(k)) throw new Error(`${a} is not an option: the per-wallet steps run for the drawn wallets only`);
+    if (!known.has(k)) {
+      const near = closest(k.split('=')[0], known);
+      const eq = k.includes('=') ? '; write the option and its value as two words' : '';
+      throw new Error(`unknown option ${a}${command ? ` for ${command}` : ''}${near ? `; did you mean --${near}?` : ''}${eq}`);
+    }
+    if (seen.has(k) && !REPEATABLE.has(k)) throw new Error(`${a} given more than once`);
+    seen.add(k);
     const camel = k.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
     if (FLAGS.has(k)) {
       out[camel] = true;
       continue;
     }
-    const v = argv[++i];
-    if (v === undefined) throw new Error(`${a} needs a value`);
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('--')) throw new Error(`${a} needs a value`);
+    i++;
     if (k === 'set') out.set.push(v);
     else if (k === 'redo') out.redo.push(v);
     else if (k === 'stake') out.stake.push(v);
@@ -369,7 +449,8 @@ export function snapshotRuleHolds(rs, error, hash) {
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
-  const a = parseArgs(rest);
+  // An unknown or missing command prints the usage; its arguments are not read.
+  const a = Object.hasOwn(COMMAND_OPTIONS, cmd) ? parseArgs(rest, cmd) : { _: [] };
   const command = redactCommand(process.argv.slice(2));
   switch (cmd) {
     case 'init-secret': {

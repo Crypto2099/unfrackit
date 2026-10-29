@@ -26,7 +26,7 @@ import { checkLogPath, verifyLog, appendEntry } from '../../src/checklog.mjs';
 import { logPrefixDigests } from '../../src/freeze.mjs';
 import { sha, keypair, record, metadataBytes, chain } from '../lib/records.mjs';
 import { STUDY_KEY } from '../../src/params.mjs';
-import { verifyFreezeCommand, sourceCheckCommand, parseArgs, runOptions } from '../../src/cli.mjs';
+import { verifyFreezeCommand, sourceCheckCommand, parseArgs, runOptions, USAGE, COMMAND_OPTIONS } from '../../src/cli.mjs';
 import { freezeOf } from '../../src/manifest.mjs';
 import { fixtureRepo } from '../lib/gitfixture.mjs';
 import { captureScamList } from '../../src/scam-list.mjs';
@@ -222,23 +222,89 @@ test('verify-freeze and source-check on mainnet refuse --from-block and another 
   assert.deepEqual(verifyLog('mainnet').unclosed, []);
 }));
 
-// The pin's only stand-in is the unit tests' studyKeyPin. parseArgs takes any
-// --name value, so `run` must name each option it passes to runPipeline: the
-// parsed --study-key-pin never reaches it, and --study-key arrives as given.
-test('run passes runPipeline its options one by one, so --study-key-pin never reaches it', () => {
+// The pin's only stand-in is the unit tests' studyKeyPin. parseArgs refuses
+// it as an unknown option; runOptions also names each option it passes to
+// runPipeline, so an object that carries it anyway never hands it on.
+test('--study-key-pin is refused on the command line and runOptions never passes it on', () => {
   const pin = 'cc'.repeat(32);
-  const a = parseArgs(['--run-id', 'r1', '--study-key-pin', pin, '--study-key', 'DD'.repeat(32), '--freeze-tx', 'AA'.repeat(32)]);
-  assert.equal(a.studyKeyPin, pin, 'parseArgs maps the flag');
-  const o = runOptions(a, 'run');
+  assert.throws(() => parseArgs(['--run-id', 'r1', '--study-key-pin', pin], 'run'), /unknown option --study-key-pin for run/);
+  const a = parseArgs(['--run-id', 'r1', '--study-key', 'DD'.repeat(32), '--freeze-tx', 'AA'.repeat(32)], 'run');
+  const o = runOptions({ ...a, studyKeyPin: pin }, 'run');
   assert.equal(Object.hasOwn(o, 'studyKeyPin'), false);
   assert.ok(!JSON.stringify(o).includes(pin));
   assert.deepEqual([o.runId, o.studyKey, o.freezeTx], ['r1', 'dd'.repeat(32), 'aa'.repeat(32)]);
 });
 
 test('--case and --cases are refused like options the tool never had', () => {
-  assert.throws(() => parseArgs(['--run-id', 'r1', '--case', 'stake_test1uqabc']), /--case is not an option/);
-  assert.throws(() => parseArgs(['--cases', '/path/cases.txt']), /--cases is not an option/);
-  assert.equal(parseArgs(['--run-id', 'r1']).runId, 'r1');
+  assert.throws(() => parseArgs(['--run-id', 'r1', '--case', 'stake_test1uqabc'], 'run'), /--case is not an option/);
+  assert.throws(() => parseArgs(['--cases', '/path/cases.txt'], 'run'), /--cases is not an option/);
+  assert.throws(() => parseArgs(['--case', 'x']), /--case is not an option/);
+  assert.equal(parseArgs(['--run-id', 'r1'], 'run').runId, 'r1');
+});
+
+test('an option the command does not define is refused by name, with the nearest known option', () => {
+  assert.throws(() => parseArgs(['--run-id', 'r1', '--expect-netwrok', 'mainnet'], 'run'), /unknown option --expect-netwrok for run; did you mean --expect-network\?/);
+  assert.throws(() => parseArgs(['--run-id', 'r1', '--redoo', 'frames'], 'run'), /unknown option --redoo for run; did you mean --redo\?/);
+  assert.throws(() => parseArgs(['--zzzzzzzz', 'x'], 'run'), (e) => /unknown option --zzzzzzzz for run$/.test(e.message));
+  assert.throws(() => parseArgs(['--expect-network=mainnet'], 'run'), /unknown option --expect-network=mainnet.*two words/);
+  // An option another command defines is unknown here.
+  assert.throws(() => parseArgs(['--timings', 'f'], 'run'), /unknown option --timings for run/);
+  assert.throws(() => parseArgs(['--capture'], 'hash'), /unknown option --capture for hash/);
+  assert.throws(() => parseArgs([], 'nosuch'), /unknown command nosuch/);
+  assert.throws(() => parseArgs(['--explian']), /unknown option --explian; did you mean --explain\?/);
+});
+
+test('an unknown flag before a known option is refused, not given the next option as its value', () => {
+  assert.throws(() => parseArgs(['--explian', '--run-id', 'r1'], 'run'), /unknown option --explian for run; did you mean --explain\?/);
+});
+
+test('a value option with nothing after it, or another option, is refused as missing its value', () => {
+  assert.throws(() => parseArgs(['--run-id'], 'run'), /--run-id needs a value/);
+  assert.throws(() => parseArgs(['--run-id', '--redo', 'all'], 'run'), /--run-id needs a value/);
+  assert.throws(() => parseArgs(['--redo', 'frames', '--set'], 'run'), /--set needs a value/);
+  assert.throws(() => parseArgs(['--stake', '--live-fire'], 'source-check'), /--stake needs a value/);
+});
+
+test('a flag given a value, a stray word, and a repeated single-value option are refused', () => {
+  assert.throws(() => parseArgs(['--run-id', 'r1', '--explain', 'true'], 'run'), /unexpected argument "true" for run/);
+  assert.throws(() => parseArgs(['extra'], 'health'), /unexpected argument "extra" for health/);
+  assert.throws(() => parseArgs(['verify', 'again', '--network', 'preprod'], 'check-log'), /unexpected argument "again"/);
+  assert.throws(() => parseArgs(['--run-id', 'a', '--run-id', 'b'], 'run'), /--run-id given more than once/);
+  assert.throws(() => parseArgs(['--capture', '--capture'], 'run'), /--capture given more than once/);
+  const ok = parseArgs(['--set', 'a=1', '--set', 'b=2', '--redo', 'frames', '--redo', 'draw'], 'run');
+  assert.deepEqual([ok.set, ok.redo], [['a=1', 'b=2'], ['frames', 'draw']]);
+  const sc = parseArgs(['--stake', 's1', '--stake', 's2', '--node-stake', 'n1'], 'source-check');
+  assert.deepEqual([sc.stake, sc.nodeStake], [['s1', 's2'], ['n1']]);
+  assert.deepEqual(parseArgs(['verify', '--network', 'preprod'], 'check-log')._, ['verify']);
+});
+
+test('every option the help text documents is accepted by some command, and by the command that documents it', () => {
+  const documented = new Set(USAGE.match(/--[a-z][a-z-]*/g).map((x) => x.slice(2)));
+  for (const k of documented) assert.ok(COMMAND_OPTIONS && Object.values(COMMAND_OPTIONS).some((o) => o.includes(k)), `--${k} is documented but no command takes it`);
+  // Each command's documented options, as the help text lists them.
+  const doc = {
+    run: ['run-id', 'snapshot', 'freeze-tx', 'hypotheses-tx', 'from-block', 'prereg', 'study-key', 'code-manifest', 'drawkey', 'stand-in-tx', 'live-fire', 'test-h', 'purpose', 'keep-for-debug', 'sim-wallets', 'explain', 'strata', 'scam-clone', 'scam-list', 'hmac-key', 'set', 'redo', 'capture', 'expect-network', 'work-mem', 'maintenance-work-mem', 'parallel-workers', 'temp-tablespaces', 'host', 'port', 'database', 'user'],
+    'verify-freeze': ['prereg', 'study-key', 'code-manifest', 'freeze-tx', 'hypotheses-tx', 'from-block', 'drawkey'],
+    cleanup: ['run-id', 'start-seq', 'network'],
+    'own-drawn': ['list', 'run'],
+    'check-log': ['network', 'finding', 'commit', 'entry'],
+    'capture-strata': ['out', 'named-from', 'rulings', 'own-sources', 'max-candidates', 'spacing-ms'],
+    'capture-scam-list': ['clone', 'commit', 'out', 'extract-out'],
+    'scam-recheck': ['run', 'scam-list', 'scam-clone'],
+    'confirm-snapshot': ['run-id'],
+    'source-check': ['from-run', 'count', 'node-count', 'stake', 'node-stake', 'node-container', 'node-socket', 'magic', 'live-fire', 'purpose', 'expect-network', 'hypotheses-tx', 'keep-for-debug', 'freeze-tx', 'prereg', 'code-manifest'],
+    explain: ['expect-network', 'purpose', 'snapshot'],
+    health: ['host', 'port', 'database', 'user'],
+    project: ['timings', 'preprod-rows', 'mainnet-rows']
+  };
+  const flags = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain', 'sim-wallets']);
+  for (const [cmd, opts] of Object.entries(doc)) {
+    const argv = opts.flatMap((k) => (flags.has(k) ? [`--${k}`] : [`--${k}`, 'v']));
+    if (cmd === 'check-log') argv.unshift('verify');
+    assert.doesNotThrow(() => parseArgs(argv, cmd), `${cmd} accepts its documented options`);
+  }
+  assert.doesNotThrow(() => parseArgs([], 'init-secret'));
+  assert.doesNotThrow(() => parseArgs([], 'hash'));
 });
 
 test('a test network takes run-time options the mainnet refuses', () => {

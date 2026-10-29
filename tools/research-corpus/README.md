@@ -56,6 +56,8 @@ Connection: `--host --port --database --user`, or `PGHOST`, `PGPORT`, `PGDATABAS
 | `project --timings <file> --preprod-rows <file> --mainnet-rows <file>` | Scales a preprod run's step times by mainnet row counts. |
 | `hash` | SHA-256 of every hashed file, the pinned dependencies and the Node version. Also `npm run hash`. |
 
+Every command refuses, before it runs anything, an option it does not define, an option with no value and a stray word (except the one `check-log` takes). It also refuses an option given twice, except `--set`, `--redo`, `--stake` and `--node-stake`, which repeat.
+
 Options of `run`:
 
 | Option | Meaning |
