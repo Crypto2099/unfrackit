@@ -489,6 +489,32 @@ test('the code manifest and the check-log prefix are the ones the document names
   }
 });
 
+test("the simulator's live-fire runs count: the first live-fire start of either tool must follow the hypotheses block", async () => {
+  // The hypotheses block is dated 2026-10-01; each log is frozen whole, so
+  // only the live-fire check can fail.
+  const entry = (seq, type, date) => JSON.stringify({ seq, type, date, run_id: type.startsWith('sim-') ? 'sim-a' : 'a' });
+  const logs = {
+    simBefore: [entry(1, 'health', '2001-01-01T00:00:00Z'), entry(2, 'sim-live-fire-start', '2001-06-01T00:00:00Z'), entry(3, 'sim-live-fire', '2001-06-01T01:00:00Z')],
+    simAfter: [entry(1, 'health', '2001-01-01T00:00:00Z'), entry(2, 'sim-live-fire-start', '2999-01-01T00:00:00Z'), entry(3, 'sim-live-fire', '2999-01-01T01:00:00Z')],
+    simBeforeCorpusAfter: [entry(1, 'sim-live-fire-start', '2001-06-01T00:00:00Z'), entry(2, 'live-fire-start', '2999-01-01T00:00:00Z')],
+    corpusBeforeSimAfter: [entry(1, 'live-fire-start', '2001-06-01T00:00:00Z'), entry(2, 'sim-live-fire-start', '2999-01-01T00:00:00Z')],
+    bothAfter: [entry(1, 'sim-live-fire-start', '2999-01-01T00:00:00Z'), entry(2, 'live-fire-start', '2999-01-02T00:00:00Z')]
+  };
+  const want = { simBefore: ['live_fire_after_hypotheses'], simAfter: [], simBeforeCorpusAfter: ['live_fire_after_hypotheses'], corpusBeforeSimAfter: ['live_fire_after_hypotheses'], bothAfter: [] };
+  for (const [name, lines] of Object.entries(logs)) {
+    const text = lines.join('\n') + '\n';
+    const s = await scenario({ listed: () => listing({ log: logPrefixDigests(text).at(-1) }) });
+    try {
+      const v = await verifyFinalFreeze({ ...s.args, checkLogText: text });
+      assert.deepEqual(failed(v), want[name], name);
+      const first = lines.map((l) => JSON.parse(l)).find((e) => e.type.endsWith('live-fire-start'));
+      assert.match(detail(v, 'live_fire_after_hypotheses'), new RegExp(`^first live-fire run ${first.date} \\(${first.type}\\)`), name);
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
 test('the snapshot by rule: the last block of epoch N - 1 before its cutoff, with the first block of N deep enough in the database and in Koios', async () => {
   const { db, block } = await chain();
   const E = 432000;

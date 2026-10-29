@@ -20,7 +20,7 @@ import { runDir, writeJson, writePrivate } from './paths.mjs';
 import { FIXED } from './params.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, ruleSnapshot } from './freeze.mjs';
 import { codeManifestErrors, NODE_MAJOR, studyKeyFor } from './guards.mjs';
-import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath, redactCommand, closeStart } from './checklog.mjs';
+import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath, redactCommand, closeStart, refuseSimRunId } from './checklog.mjs';
 import { sha256hex } from './freeze.mjs';
 import { Koios } from './koios.mjs';
 import { captureStrata } from './strata-capture.mjs';
@@ -29,7 +29,8 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
 
   init-secret                     make secret/hmac.key (32 random bytes) once; prints its path, never the key
   run [options]                   frames, draw, samples, split, flags, the reconstruction check and the manifest
-      --run-id <id>               required; a rerun with the same id resumes
+      --run-id <id>               required; a rerun with the same id resumes; an id beginning with sim-
+                                  is the simulator's and refused
       --snapshot tip|rule|<hash> the snapshot block: on the final freeze always the rule (the last block of
                                   epoch N - 1 before its randomness stabilization cutoff, with the first block of
                                   N 2,160 blocks deep); otherwise the tip by default (stop db-sync there first),
@@ -217,6 +218,7 @@ export async function verifyFreezeCommand(a, command, { client = null } = {}) {
 export async function sourceCheckCommand(a, command, { client = null } = {}) {
   const blocks = loadAll();
   const t0 = performance.now();
+  refuseSimRunId(a.runId);
   const runId = a.runId || `source-check-${new Date().toISOString().replace(/[:.]/g, '')}`;
   // A live-fire source-check logs its gate (connection, the hypotheses record
   // on mainnet) as a query before its first query, and its start entry once the
@@ -457,6 +459,7 @@ async function main() {
     }
     case 'scam-recheck': {
       if (!a.run || !a.scamList || !a.scamClone) throw new Error('scam-recheck --run <id> --scam-list <file> --scam-clone <dir>');
+      refuseSimRunId(a.run);
       const c = await connect(dbOpts(a));
       try {
         const meta = await dbMeta(c, loadAll());
@@ -470,6 +473,7 @@ async function main() {
     }
     case 'confirm-snapshot': {
       if (!a.runId) throw new Error('--run-id is required');
+      refuseSimRunId(a.runId);
       const blocks = loadAll();
       const c = await connect(dbOpts(a));
       try {

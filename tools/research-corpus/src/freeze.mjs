@@ -69,8 +69,8 @@
 //     at run time must be that item, and on mainnet that item must be a
 //     prefix of the check log ending at a line (the log as it stood at the
 //     final freeze; it only grows), after which every entry is dated after
-//     the final freeze block, and whose first live-fire run postdates the
-//     hypotheses block;
+//     the final freeze block, and whose first live-fire run, of this tool or
+//     the simulator, postdates the hypotheses block;
 //   - its block is at least security_k (2,160) blocks below the database tip.
 //
 // The draw key h is the epoch nonce of epoch N, where E is the epoch of the
@@ -100,6 +100,7 @@ import { readFileSync } from 'node:fs';
 import { decode, CborMap, withoutKeys, encodeBytes, encodeText } from './cbor.mjs';
 import { q } from './db.mjs';
 import { FIXED, GENESIS, FREEZE_ITEM_NAMES } from './params.mjs';
+import { LIVE_FIRE_STARTS } from './checklog.mjs';
 
 const HEX32 = /^[0-9a-f]{64}$/;
 const SIG_DOMAIN = Buffer.from('cardano-poe-record-sig-v1', 'utf8');
@@ -222,8 +223,8 @@ export function logPrefixDigests(text) {
 
 // A live-fire start entry is written only once the run's gate (connection,
 // probes, the hypotheses record on mainnet) has passed, so a refused attempt
-// does not count as a live-fire run.
-const LIVE_FIRE_STARTS = new Set(['live-fire-start', 'source-check-live-fire-start']);
+// does not count as a live-fire run. LIVE_FIRE_STARTS holds the start types
+// of both tools, so the first live-fire run is the first of either.
 const CITATION = /web\+cardano:\/\/transaction\/([0-9a-fA-F]{64})\/metadata\/309(?![0-9])/g;
 const blockTime = (t) => Date.parse(`${String(t).replace(' ', 'T')}Z`);
 
@@ -373,7 +374,7 @@ export async function verifyFinalFreeze({ client, blocks, freezeTx, hypothesesTx
       const early = at >= 0 ? entries.slice(at).filter((e) => !(Date.parse(e.date) > freezeTime)) : [];
       check('check_log_tail_after_freeze', at >= 0 && early.length === 0, early.length ? `entries after the frozen log dated before the final freeze: ${early.map((e) => e.seq).join(', ')}` : null);
       const first = entries.find((e) => LIVE_FIRE_STARTS.has(e.type));
-      check('live_fire_after_hypotheses', !first || Date.parse(first.date) > blockTime(h.block.time), first ? `first live-fire run ${first.date}, hypotheses block ${h.block.time}` : 'no live-fire run');
+      check('live_fire_after_hypotheses', !first || Date.parse(first.date) > blockTime(h.block.time), first ? `first live-fire run ${first.date} (${first.type}), hypotheses block ${h.block.time}` : 'no live-fire run');
     }
   }
   const ok = checks.every((c) => c.ok);

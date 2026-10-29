@@ -7,11 +7,12 @@
 // Mary-era epochs read from protocol_major, a phase-2-invalid spend counted as
 // executing a script; and the run's refusals and the check log: the flag
 // outside a live-fire run, a second selection on mainnet, the kept selection
-// reported until cleanup deletes it.
+// reported until cleanup deletes it; and the simulator's own live-fire runs,
+// which this tool's cleanup refuses and its second-selection refusal ignores.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
@@ -93,14 +94,14 @@ function withHome(fn) {
   };
 }
 
-test('--sim-wallets: only in a live-fire run, once on mainnet, kept until cleanup', withHome(async (home) => {
-  await assert.rejects(runPipeline({ runId: 'x', simWallets: true, log: () => {} }), /--sim-wallets is for a live-fire run/);
-  // A mainnet database whose check log records a selection already made.
+// A mainnet database stand-in: db-sync's meta and probes, a study schema in
+// PGlite, and an error for any other chain query.
+async function mainnetClient() {
   const db = await PGlite.create();
   await db.exec(`CREATE SCHEMA study;
     CREATE TABLE study.run (run_id text PRIMARY KEY, network text NOT NULL, created timestamptz DEFAULT now());
     CREATE TABLE study.param (run_id text NOT NULL REFERENCES study.run ON DELETE CASCADE, key text NOT NULL, value jsonb NOT NULL, PRIMARY KEY (run_id, key));`);
-  const client = {
+  return {
     async query(sql, params) {
       if (/FROM public\.meta m/.test(sql)) return { rows: [{ network_name: 'mainnet', version: 'v', start_time: 't', schema_version: '{"id":1}', extra_migrations: '[]' }] };
       if (/AS inline_datum/.test(sql)) return { rows: [{ tx_in: true, multi_asset: true, ma_tx_out: true, ma_tx_mint: true, metadata_674: true, redeemer: true, inline_datum: true, epoch_nonce: true }] };
@@ -109,6 +110,12 @@ test('--sim-wallets: only in a live-fire run, once on mainnet, kept until cleanu
     },
     async end() {}
   };
+}
+
+test('--sim-wallets: only in a live-fire run, once on mainnet, kept until cleanup', withHome(async (home) => {
+  await assert.rejects(runPipeline({ runId: 'x', simWallets: true, log: () => {} }), /--sim-wallets is for a live-fire run/);
+  // A mainnet database whose check log records a selection already made.
+  const client = await mainnetClient();
   const start = appendEntry('mainnet', 'live-fire-start', { run_id: 'lf-sim', purpose: 'p' });
   const end = appendEntry('mainnet', 'live-fire', { run_id: 'lf-sim', start_seq: start.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-10-25T00:00:00Z', sim_wallets: SIM_KEPT });
   writeJson(join(runDir('mainnet', 'lf-sim'), 'sim', 'wallets.json'), { wallets: [] });
@@ -124,4 +131,26 @@ test('--sim-wallets: only in a live-fire run, once on mainnet, kept until cleanu
   assert.equal(ce.outcome, 'succeeded');
   assert.ok(!existsSync(join(runDir('mainnet', 'lf-sim'), 'sim')));
   assert.deepEqual(verifyLog('mainnet').kept_not_cleaned, []);
+}));
+
+test("the simulator's runs: this tool's cleanup refuses one and deletes nothing, and a second selection is refused only for this tool's own", withHome(async (home) => {
+  const client = await mainnetClient();
+  // A simulator run kept for debugging; its end entry even carries the
+  // selection's word, which only this tool's live-fire entries are read for.
+  const st = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-1', purpose: 'p' });
+  const end = appendEntry('mainnet', 'sim-live-fire', { run_id: 'sim-1', start_seq: st.seq, outcome: 'failed', wallet_level_output: 'kept for debugging', sim_wallets: SIM_KEPT });
+  // Directories under this tool's home at the run ID's place.
+  for (const d of ['work', 'sim']) mkdirSync(join(runDir('mainnet', 'sim-1'), d), { recursive: true });
+  const before = readFileSync(checkLogPath('mainnet'), 'utf8');
+  await assert.rejects(cleanupRun({ client, runId: 'sim-1', command: 'cleanup' }), /run sim-1 is the simulator's; the simulator's cleanup deletes its output/);
+  assert.equal(readFileSync(checkLogPath('mainnet'), 'utf8'), before, 'no cleanup entry');
+  for (const d of ['work', 'sim']) assert.ok(existsSync(join(runDir('mainnet', 'sim-1'), d)), d);
+  assert.deepEqual(verifyLog('mainnet').kept_not_cleaned, [{ run_id: 'sim-1', seq: end.seq }]);
+  // With the simulator's entries alone in the log, a mainnet selection is not
+  // refused as a second one: the run passes that refusal and stops at its
+  // first chain query.
+  await assert.rejects(
+    runPipeline({ client, runId: 'lf-pick', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), scamClone: home, liveFire: { testH: 'ab'.repeat(32), purpose: 'p', simWallets: true } }),
+    (e) => /a chain query was reached/.test(e.message) && !/picked by run/.test(e.message)
+  );
 }));

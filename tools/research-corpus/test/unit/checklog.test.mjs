@@ -3,15 +3,20 @@
 
 // The check log: entries appended in order with a digest chain, an edit to an
 // earlier line detected, kept outputs listed until a cleanup entry closes
-// them, and numbers kept out of logged error text.
+// them, and numbers kept out of logged error text. The simulator's live-fire
+// runs are read as live-fire runs, and the two tools' run IDs are kept apart.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { appendEntry, verifyLog, sanitize, sanitizeError, refuse, checkLogPath, loggedQuery, redactCommand, closeStart, CODE_NAMES } from '../../src/checklog.mjs';
 import { stripPlan } from '../../src/db.mjs';
+import { runPipeline } from '../../src/pipeline.mjs';
+import { sourceCheckCommand } from '../../src/cli.mjs';
 
 test('append, chain, tamper detection, kept outputs', () => {
   const home = mkdtempSync(join(tmpdir(), 'rc-log-'));
@@ -218,6 +223,114 @@ test('unclosed starts and failed deletions are reported; loggedQuery logs mainne
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Runs fn with a fresh tool home, so each test writes its own check log.
+function inHome(fn) {
+  return async () => {
+    const home = mkdtempSync(join(tmpdir(), 'rc-log-sim-'));
+    const prev = process.env.RESEARCH_CORPUS_HOME;
+    process.env.RESEARCH_CORPUS_HOME = home;
+    try {
+      await fn(home);
+    } finally {
+      if (prev === undefined) delete process.env.RESEARCH_CORPUS_HOME;
+      else process.env.RESEARCH_CORPUS_HOME = prev;
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+}
+
+// The simulator's cleanup entry carries the fields this tool's cleanup
+// writes.
+const simCleanup = (runId, startSeq, ok) =>
+  appendEntry('mainnet', 'cleanup', { run_id: runId, start_seq: startSeq, command: 'simulator cleanup', outcome: ok ? 'succeeded' : 'failed', error: ok ? null : 'disk full', wallet_level_output: ok ? 'deleted 2026-11-08T00:00:00.000Z' : 'deletion failed: disk full', tables_dropped: 0 });
+
+test("the simulator's live-fire runs: closed by the end entry, unclosed, kept until its cleanup, failed deletions", inHome(() => {
+  // A run closed by its end entry, its output deleted.
+  const a = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-a', purpose: 'p' });
+  appendEntry('mainnet', 'sim-live-fire', { run_id: 'sim-a', start_seq: a.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-11-07T00:00:00.000Z' });
+  let v = verifyLog('mainnet');
+  assert.deepEqual([v.errors, v.unclosed, v.kept_not_cleaned, v.failed_deletions], [[], [], [], []]);
+  // A run killed before its end entry, one kept for debugging and one whose
+  // deletion failed.
+  const b = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-b' });
+  const k = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-k' });
+  const kEnd = appendEntry('mainnet', 'sim-live-fire', { run_id: 'sim-k', start_seq: k.seq, outcome: 'failed', wallet_level_output: 'kept for debugging' });
+  const d = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-d' });
+  const dEnd = appendEntry('mainnet', 'sim-live-fire', { run_id: 'sim-d', start_seq: d.seq, outcome: 'succeeded', wallet_level_output: 'deletion failed: permission denied' });
+  v = verifyLog('mainnet');
+  assert.deepEqual(v.errors, []);
+  assert.deepEqual(v.unclosed, [{ seq: b.seq, type: 'sim-live-fire-start', run_id: 'sim-b', date: b.date }]);
+  assert.deepEqual(v.kept_not_cleaned, [{ run_id: 'sim-k', seq: kEnd.seq }]);
+  assert.deepEqual(v.failed_deletions, [{ run_id: 'sim-d', seq: dEnd.seq, wallet_level_output: 'deletion failed: permission denied' }]);
+  // This tool's cleanup --start-seq does not close a simulator run.
+  assert.throws(() => closeStart('mainnet', b.seq), /the simulator's cleanup closes its runs/);
+  // A failed cleanup is reported too, and the kept output stays listed.
+  simCleanup('sim-k', null, false);
+  v = verifyLog('mainnet');
+  assert.deepEqual(v.kept_not_cleaned.map((x) => x.run_id), ['sim-k']);
+  assert.deepEqual(v.failed_deletions.map((x) => x.run_id), ['sim-d', 'sim-k']);
+  // The cleanups that succeed settle their runs; the killed run is run again
+  // to a clean finish, which settles its earlier start.
+  simCleanup('sim-k', null, true);
+  simCleanup('sim-d', null, true);
+  const b2 = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-b' });
+  appendEntry('mainnet', 'sim-live-fire', { run_id: 'sim-b', start_seq: b2.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-11-08T00:00:00.000Z' });
+  v = verifyLog('mainnet');
+  assert.deepEqual([v.errors, v.unclosed, v.kept_not_cleaned, v.failed_deletions], [[], [], [], []]);
+  // An interrupted run closed by the simulator's cleanup, which names its start.
+  const c = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-c' });
+  assert.deepEqual(verifyLog('mainnet').unclosed.map((x) => x.seq), [c.seq]);
+  simCleanup('sim-c', c.seq, true);
+  assert.deepEqual(verifyLog('mainnet').unclosed, []);
+}));
+
+test("the two tools' runs are kept apart: neither settles the other's, and a run ID beginning with sim- is the simulator's only", inHome(async (home) => {
+  // Each tool has a run kept for debugging, a run killed before its end
+  // entry and a run whose deletion failed.
+  for (const [start, end, prefix] of [['live-fire-start', 'live-fire', ''], ['sim-live-fire-start', 'sim-live-fire', 'sim-']]) {
+    const k = appendEntry('mainnet', start, { run_id: `${prefix}k` });
+    appendEntry('mainnet', end, { run_id: `${prefix}k`, start_seq: k.seq, outcome: 'failed', wallet_level_output: 'kept for debugging' });
+    appendEntry('mainnet', start, { run_id: `${prefix}i` });
+    const d = appendEntry('mainnet', start, { run_id: `${prefix}d` });
+    appendEntry('mainnet', end, { run_id: `${prefix}d`, start_seq: d.seq, outcome: 'failed', wallet_level_output: 'deletion failed: lost' });
+  }
+  const report = () => {
+    const v = verifyLog('mainnet');
+    return [v.kept_not_cleaned.map((x) => x.run_id), v.unclosed.map((x) => x.run_id), v.failed_deletions.map((x) => x.run_id)];
+  };
+  assert.deepEqual(report(), [['k', 'sim-k'], ['i', 'sim-i'], ['d', 'sim-d']]);
+  // The simulator settles its own three; this tool's stay reported.
+  for (const id of ['sim-k', 'sim-d']) simCleanup(id, null, true);
+  const i2 = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'sim-i' });
+  appendEntry('mainnet', 'sim-live-fire', { run_id: 'sim-i', start_seq: i2.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-11-08T00:00:00.000Z' });
+  assert.deepEqual(report(), [['k'], ['i'], ['d']]);
+  assert.deepEqual(verifyLog('mainnet').errors, []);
+  // A simulator entry whose run ID lacks the prefix, and one of this tool's
+  // live-fire entries whose run ID has it, are errors.
+  const bad1 = appendEntry('mainnet', 'sim-live-fire-start', { run_id: 'k' });
+  const bad2 = appendEntry('mainnet', 'sim-live-fire', { run_id: 'k', start_seq: bad1.seq, outcome: 'succeeded', wallet_level_output: 'none written' });
+  const bad3 = appendEntry('mainnet', 'source-check-live-fire-start', { run_id: 'sim-s' });
+  assert.deepEqual(verifyLog('mainnet').errors, [
+    `line ${bad1.seq}: a sim-live-fire-start entry whose run ID does not begin with sim-`,
+    `line ${bad2.seq}: a sim-live-fire entry whose run ID does not begin with sim-`,
+    `line ${bad3.seq}: a source-check-live-fire-start entry with a simulator run ID`
+  ]);
+  // This tool refuses a simulator run ID before it writes any entry: run (any
+  // mode), source-check, scam-recheck and confirm-snapshot.
+  const before = readFileSync(checkLogPath('mainnet'), 'utf8');
+  const simId = /run IDs beginning with sim- are the simulator's/;
+  await assert.rejects(runPipeline({ runId: 'sim-r', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), liveFire: { testH: 'ab'.repeat(32), purpose: 'p' } }), simId);
+  await assert.rejects(runPipeline({ runId: 'sim-r', log: () => {} }), simId);
+  await assert.rejects(sourceCheckCommand({ runId: 'sim-r', liveFire: true, purpose: 'p', expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), stake: [], nodeStake: [] }, 'source-check'), simId);
+  const cli = fileURLToPath(new URL('../../src/cli.mjs', import.meta.url));
+  for (const args of [['scam-recheck', '--run', 'sim-r', '--scam-list', 'x.json', '--scam-clone', home], ['confirm-snapshot', '--run-id', 'sim-r']]) {
+    const r = spawnSync(process.execPath, [cli, ...args], { env: { ...process.env, RESEARCH_CORPUS_HOME: home, PGHOST: '127.0.0.1', PGPORT: '1' }, encoding: 'utf8' });
+    assert.equal(r.status, 1, args[0]);
+    assert.match(r.stderr, simId, args[0]);
+  }
+  assert.equal(readFileSync(checkLogPath('mainnet'), 'utf8'), before, 'nothing logged');
+}));
 
 test('a stripped plan keeps its shape and drops every number derived from the data', () => {
   const plan = [{ Plan: { 'Node Type': 'Hash Join', 'Plan Rows': 1200, 'Plan Width': 8, 'Startup Cost': 1.5, 'Total Cost': 99, 'Hash Cond': '(a.id = b.id)', 'Workers Planned': 4, Plans: [{ 'Node Type': 'Aggregate', Strategy: 'Hashed', 'Planned Partitions': 32, 'Group Key': ['sa_id'], Plans: [{ 'Node Type': 'Seq Scan', 'Relation Name': 'tx_out', 'Plan Rows': 5 }] }] }, JIT: { Functions: 12 }, Planning: { 'Shared Hit Blocks': 3 } }];

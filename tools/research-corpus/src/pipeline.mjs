@@ -31,7 +31,7 @@ import { buildManifest } from './manifest.mjs';
 import { reconstructionCheck } from './reconstruction-check.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
 import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, studyKeyFor } from './guards.mjs';
-import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog, SIM_KEPT } from './checklog.mjs';
+import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog, SIM_KEPT, isSimRunId, refuseSimRunId } from './checklog.mjs';
 import { Koios } from './koios.mjs';
 import { loadScamList, descendsFrom, fingerprintMismatches } from './scam-list.mjs';
 
@@ -149,6 +149,8 @@ export async function takeLock(client) {
 
 export async function runPipeline(opts) {
   const live = opts.liveFire || null;
+  // A run ID of the simulator's is refused before anything is logged.
+  refuseSimRunId(opts.runId);
   if (!live && opts.simWallets) throw refuse('refusing: --sim-wallets is for a live-fire run');
   if (opts.scamList && !opts.scamClone) throw refuse('refusing: --scam-list needs --scam-clone, the clone its extract is read from');
   const t0 = performance.now();
@@ -647,9 +649,10 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
     const entries = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
     // A live-fire run is found by its mode row, or, once its rows are gone (a
     // run that finished after being kept, a source-check run), by its check-log
-    // entries.
+    // entries. The simulator's entry types are not read here: its runs are
+    // cleaned up by the simulator, never by this tool.
     const logged = entries.some((e) => e.run_id === runId && ['live-fire', 'live-fire-start', 'source-check-live-fire', 'source-check-live-fire-start'].includes(e.type));
-    if (!mode && !logged) throw refuse(`refusing: no live-fire run ${runId} in this database or the check log`);
+    if (!mode && !logged) throw refuse(isSimRunId(runId) ? `refusing: run ${runId} is the simulator's; the simulator's cleanup deletes its output` : `refusing: no live-fire run ${runId} in this database or the check log`);
     if (mode && mode.m !== 'live-fire') throw refuse(`refusing: run ${runId} is a ${mode.m} run; cleanup is for live-fire runs`);
     await takeLock(client);
     let outcome = 'succeeded';

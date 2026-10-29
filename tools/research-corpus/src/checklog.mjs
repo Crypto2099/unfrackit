@@ -18,6 +18,14 @@
 // end entry naming the start's sequence number; an interrupted run leaves the
 // start unclosed, which `verifyLog` reports, as it reports kept or undeleted
 // wallet-level output.
+//
+// The simulator appends its live-fire runs on the selected wallets to the same
+// log, in its sequence and digest chain, under start and end types of its own
+// (SIM_LIVE_FIRE_START, SIM_LIVE_FIRE), and a cleanup entry with the fields
+// cleanupRun writes when it deletes output kept from a run. Its runs are
+// live-fire runs like this tool's: the final freeze's first live-fire run is
+// the first start of either tool, and `verifyLog` reads its entries as it
+// reads this tool's.
 
 import { readFileSync, existsSync, appendFileSync, chmodSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -89,6 +97,24 @@ export const sanitizeError = (e) => sanitize(e && e.message !== undefined ? e.me
 // simulator's checks, reported until cleanup deletes it.
 export const SIM_KEPT = 'kept for the simulator checks';
 
+// The start and end types of live-fire runs: this tool's runs, its
+// source-check runs, and the simulator's runs.
+export const SIM_LIVE_FIRE_START = 'sim-live-fire-start';
+export const SIM_LIVE_FIRE = 'sim-live-fire';
+export const LIVE_FIRE_STARTS = new Set(['live-fire-start', 'source-check-live-fire-start', SIM_LIVE_FIRE_START]);
+export const LIVE_FIRE_ENDS = new Set(['live-fire', 'source-check-live-fire', SIM_LIVE_FIRE]);
+
+// `verifyLog` keys kept output, cleanups and settled starts by run ID, so the
+// two tools' run IDs must never meet: every simulator run ID begins with
+// SIM_RUN_PREFIX, and this tool refuses a run ID that does before it writes
+// any entry. An entry of one tool can then never settle a run of the other,
+// and `verifyLog` reports a live-fire entry that breaks the rule.
+export const SIM_RUN_PREFIX = 'sim-';
+export const isSimRunId = (id) => typeof id === 'string' && id.startsWith(SIM_RUN_PREFIX);
+export function refuseSimRunId(id) {
+  if (isSimRunId(id)) throw refuse(`refusing: run IDs beginning with ${SIM_RUN_PREFIX} are the simulator's`);
+}
+
 function readLines(path) {
   if (!existsSync(path)) return { text: '', entries: [] };
   const text = readFileSync(path, 'utf8');
@@ -112,7 +138,9 @@ export function appendEntry(network, type, fields, now = new Date()) {
 }
 
 // Checks the sequence and the chain of prev digests, and lists live-fire runs
-// whose wallet-level output was kept and has not been cleaned up since.
+// of either tool whose wallet-level output was kept and has not been cleaned
+// up since. A simulator entry whose run ID lacks SIM_RUN_PREFIX, or one of
+// this tool's live-fire entries whose run ID has it, is an error.
 export function verifyLog(network) {
   const path = checkLogPath(network);
   const { text, entries } = readLines(path);
@@ -129,8 +157,13 @@ export function verifyLog(network) {
   const starts = new Map();
   const failedDeletions = [];
   const bySeq = new Map(entries.map((e) => [e.seq, e]));
+  entries.forEach((e, i) => {
+    const sim = e.type === SIM_LIVE_FIRE_START || e.type === SIM_LIVE_FIRE;
+    if (sim && !isSimRunId(e.run_id)) errors.push(`line ${i + 1}: a ${e.type} entry whose run ID does not begin with ${SIM_RUN_PREFIX}`);
+    if (!sim && (LIVE_FIRE_STARTS.has(e.type) || LIVE_FIRE_ENDS.has(e.type)) && isSimRunId(e.run_id)) errors.push(`line ${i + 1}: a ${e.type} entry with a simulator run ID`);
+  });
   for (const e of entries) {
-    if (e.type === 'live-fire-start' || e.type === 'source-check-live-fire-start' || e.type === 'query-start') starts.set(e.seq, e);
+    if (LIVE_FIRE_STARTS.has(e.type) || e.type === 'query-start') starts.set(e.seq, e);
     if (e.start_seq !== undefined && e.start_seq !== null) starts.delete(e.start_seq);
     // A query of a run (a run's gate, a study run) that finishes cleanly
     // settles the same run's earlier starts of that query, left by a killed
@@ -142,14 +175,14 @@ export function verifyLog(network) {
     // A later end entry that deleted the run's output (a run resumed to a
     // clean finish) settles its earlier unclosed starts, its gates' included,
     // kept output and failed deletions.
-    if ((e.type === 'live-fire' || e.type === 'source-check-live-fire') && typeof e.wallet_level_output === 'string' && e.wallet_level_output.startsWith('deleted ')) {
+    if (LIVE_FIRE_ENDS.has(e.type) && typeof e.wallet_level_output === 'string' && e.wallet_level_output.startsWith('deleted ')) {
       for (const [seq, st] of starts) if (st.run_id === e.run_id) starts.delete(seq);
       open.delete(e.run_id);
       for (let i = failedDeletions.length - 1; i >= 0; i--) if (failedDeletions[i].run_id === e.run_id) failedDeletions.splice(i, 1);
     }
-    if ((e.type === 'live-fire' || e.type === 'source-check-live-fire') && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
+    if (LIVE_FIRE_ENDS.has(e.type) && e.wallet_level_output === 'kept for debugging') open.set(e.run_id, e.seq);
     if (e.type === 'live-fire' && e.sim_wallets === SIM_KEPT) open.set(e.run_id, e.seq);
-    if ((e.type === 'live-fire' || e.type === 'source-check-live-fire' || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
+    if ((LIVE_FIRE_ENDS.has(e.type) || e.type === 'cleanup') && typeof e.wallet_level_output === 'string' && !/^(deleted |kept for debugging$|none written$)/.test(e.wallet_level_output)) {
       failedDeletions.push({ run_id: e.run_id, seq: e.seq, wallet_level_output: e.wallet_level_output });
     }
     // A run's cleanup settles the run. A start-closed entry (cleanup
@@ -172,11 +205,12 @@ export function verifyLog(network) {
 // so it settles none of the run's other starts, kept output or failed
 // deletions, and it says nothing about what the command wrote. Only an
 // unclosed query-start is closed this way; a live-fire run is cleaned up by
-// its run id.
+// its run id, a simulator run by the simulator's own cleanup.
 export function closeStart(network, seq, command = null) {
   const v = verifyLog(network);
   const st = v.unclosed.find((x) => x.seq === Number(seq));
   if (!st) throw refuse(`refusing: entry ${seq} is not an unclosed start in the ${network} check log`);
+  if (st.type === SIM_LIVE_FIRE_START) throw refuse(`refusing: entry ${seq} is a ${st.type}; the simulator's cleanup closes its runs`);
   if (st.type !== 'query-start') throw refuse(`refusing: entry ${seq} is a ${st.type}; clean up a live-fire run with cleanup --run-id`);
   return appendEntry(network, 'start-closed', { start_seq: st.seq, run_id: st.run_id, command, closed: 'no end entry' });
 }
