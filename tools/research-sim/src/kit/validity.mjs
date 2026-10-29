@@ -14,6 +14,9 @@
 // can differ. Both are counted (cslOutputBytes, cslReencoded) and neither is
 // a failure.
 //
+// A transaction with no outputs has no fee or value control
+// (kit/controls.mjs); it is counted in notApplicable, not as a failure.
+//
 // An accumulator is made per wallet and arm (a replay) or per battery run,
 // checkAndApply feeds it, and `summarize` turns it into the record's
 // `validity` field. A failure names the transaction by position, never by
@@ -26,7 +29,7 @@ const MAX_DETAILS = 20;
 const CONTROLS = Object.freeze(['fee', 'size', 'value', 'witnesses']);
 
 export function newValidity(CSL) {
-  return { CSL, txs: 0, cslRead: 0, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 0, size: 0, value: 0, witnesses: 0 }, failed: 0, details: [], onFailure: null };
+  return { CSL, txs: 0, cslRead: 0, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 0, size: 0, value: 0, witnesses: 0 }, notApplicable: { fee: 0, value: 0 }, failed: 0, details: [], onFailure: null };
 }
 
 // An output by what it holds: address, coin, assets as a set, datum and
@@ -50,9 +53,15 @@ const fail = (v, at, index, what, detail) => {
 // from; ctx is the kit's: { resolve, implicit, scriptFee, extraWitnesses }.
 export function checkValidity(v, at, index, state, params, bytes, ctx) {
   v.txs++;
-  const c = negativeControls(state, params, bytes, ctx);
-  for (const k of ['base', ...CONTROLS]) {
-    if (c[k] !== EXPECTED[k]) fail(v, at, index, k === 'base' ? 'base' : `control ${k}`, `${k === 'base' ? 'the unmutated transaction' : `the ${k} control`} gave '${c[k]}', expected '${EXPECTED[k]}'`);
+  let c;
+  try {
+    c = negativeControls(state, params, bytes, ctx);
+  } catch (e) {
+    fail(v, at, index, 'controls', `a control could not be built: ${String(e && e.message || e)}`);
+  }
+  if (c) for (const k of ['base', ...CONTROLS]) {
+    if (c[k] === null) v.notApplicable[k]++;
+    else if (c[k] !== EXPECTED[k]) fail(v, at, index, k === 'base' ? 'base' : `control ${k}`, `${k === 'base' ? 'the unmutated transaction' : `the ${k} control`} gave '${c[k]}', expected '${EXPECTED[k]}'`);
     else if (k !== 'base') v.controls[k]++;
   }
   let again;
@@ -79,16 +88,17 @@ export function checkValidity(v, at, index, state, params, bytes, ctx) {
 
 // The record's validity field.
 export function summarize(v) {
-  return { txs: v.txs, cslRead: v.cslRead, cslOutputBytes: v.cslOutputBytes, cslReencoded: v.cslReencoded, controls: { ...v.controls }, failed: v.failed, ...(v.details.length ? { failures: v.details } : {}) };
+  return { txs: v.txs, cslRead: v.cslRead, cslOutputBytes: v.cslOutputBytes, cslReencoded: v.cslReencoded, controls: { ...v.controls }, notApplicable: { ...v.notApplicable }, failed: v.failed, ...(v.details.length ? { failures: v.details } : {}) };
 }
 
 // The sum of summaries.
 export function sumValidity(list) {
-  const t = { txs: 0, cslRead: 0, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 0, size: 0, value: 0, witnesses: 0 }, failed: 0 };
+  const t = { txs: 0, cslRead: 0, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 0, size: 0, value: 0, witnesses: 0 }, notApplicable: { fee: 0, value: 0 }, failed: 0 };
   for (const s of list) {
     if (!s) continue;
     for (const k of ['txs', 'cslRead', 'cslOutputBytes', 'cslReencoded', 'failed']) t[k] += s[k];
     for (const k of CONTROLS) t.controls[k] += s.controls[k];
+    for (const k of ['fee', 'value']) t.notApplicable[k] += s.notApplicable[k];
   }
   return t;
 }

@@ -6,7 +6,11 @@
 // difference moved into the last output, so the transaction stays balanced),
 // one byte over the size limit, a Value one byte over the value-size limit,
 // and one vkey witness short. Each must be caught by its own check alone.
-// `negativeControls` returns the checks each control failed. The mutations
+// `negativeControls` returns the checks each control failed. A transaction
+// with no outputs (a library burns a leftover below the change minimum into
+// the fee, and the intent requests nothing) has no output to take the fee
+// difference and none whose Value could be too large, so its fee and value
+// controls cannot be built and are null. The mutations
 // (`withFee`, `withoutOneWitness`) rewrite the transaction's CBOR keeping
 // every other part's bytes.
 
@@ -74,12 +78,12 @@ export function negativeControls(state, params, bytes, ctx = {}) {
   // The distinct checks that failed: several outputs may share the largest
   // Value, and each is caught by the same check.
   const reasons = (r) => [...new Set(r.failures.map((f) => f.check))].join(',');
-  const vb = Math.max(...t.outputs.map((o) => valueSize(o.coin, o.assets)));
+  const vb = t.outputs.length ? Math.max(...t.outputs.map((o) => valueSize(o.coin, o.assets))) : null;
   return {
     base: base.ok ? '' : reasons(base),
-    fee: reasons(checkTx(withFee(bytes, minFee(params, t.size, ctx.scriptFee || 0n) - 1n, t.outputs.length - 1), c)),
+    fee: t.outputs.length ? reasons(checkTx(withFee(bytes, minFee(params, t.size, ctx.scriptFee || 0n) - 1n, t.outputs.length - 1), c)) : null,
     size: reasons(checkTx(bytes, { ...c, params: { ...params, maxTxSize: t.size - 1 } })),
-    value: reasons(checkTx(bytes, { ...c, params: { ...params, maxValSize: vb - 1 } })),
+    value: vb === null ? null : reasons(checkTx(bytes, { ...c, params: { ...params, maxValSize: vb - 1 } })),
     witnesses: reasons(checkTx(withoutOneWitness(bytes), c))
   };
 }
