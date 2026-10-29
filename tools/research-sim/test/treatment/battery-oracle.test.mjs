@@ -33,7 +33,7 @@ test('battery --oracle: references for the study plan\'s change policies', { ski
   const prev = process.env.RESEARCH_SIM_HOME;
   process.env.RESEARCH_SIM_HOME = home;
   const pinsPath = process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS;
-  const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath, size: 1 });
+  const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath, size: 2 });
   const out = new RunOutput('synthetic', 'battery-oracle-test', { command: 'test' });
   const hook = await createBatteryOracle({ treatmentDir: TREATMENT_DIR, pinsText: readFileSync(pinsPath, 'utf8'), workers: 2 });
   try {

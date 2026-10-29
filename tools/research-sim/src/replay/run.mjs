@@ -139,7 +139,24 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
 // both are deterministic, so they are the worker's.
 export async function runBatteries(T, pool, { wallets, methods, out, answerLimitMs, pools, oracle = null, tidySettings = {} }) {
   const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0 };
-  for (const w of wallets) {
+  // One task per wallet: its battery job, then its oracle calls. Up to
+  // pool.size tasks are in flight, so a wallet's oracle calls overlap the
+  // other wallets' methods. A task buffers its records; they are written in
+  // wallet order, a wallet's only after every earlier wallet's, so a repeated
+  // run writes the same records in the same order whatever the pool size.
+  const buffers = wallets.map(() => null);
+  let flushed = 0;
+  const flush = () => {
+    while (flushed < wallets.length && buffers[flushed]) {
+      for (const rec of buffers[flushed]) out.write(rec);
+      buffers[flushed] = null;
+      flushed++;
+    }
+  };
+  const task = async (wi) => {
+    const w = wallets[wi];
+    const recs = [];
+    const emit = (rec) => recs.push(rec);
     const source = loadSource(T, w.spec);
     if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
     const keyOf = (res) => ({ wallet: source.wallet, window: 'snapshot', arm: res.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: res.method.name, change: res.opts.changePolicy, collateral: 'none-needed', repetition: res.repetition });
@@ -164,15 +181,15 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
       if (res.timeLimit) {
         totals.timeouts++;
         const key = { wallet: source.wallet, window: 'snapshot', arm: s.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: run.method, change: run.opts.changePolicy, collateral: 'none-needed', repetition: run.repetition };
-        out.write(record('battery', key, { spend: s.id, layout: s.layout, ok: false, class: 'time-limit', detail: `no answer within ${res.limitMs} ms`, absorb: run.opts.absorb ?? null }));
+        emit(record('battery', key, { spend: s.id, layout: s.layout, ok: false, class: 'time-limit', detail: `no answer within ${res.limitMs} ms`, absorb: run.opts.absorb ?? null }));
         continue;
       }
       const { incumbent, k: _k, id, method, opts, repetition: _r, spend: _n, ...rest } = res;
       const fields = { spend: id, absorb: opts.absorb ?? null, methodVersion: method.version, ...rest };
-      out.write(record('battery', keyOf(res), fields));
-      if (method.name === 'unfrackit-h12') out.write(record('h12', keyOf(res), { spend: id, absorb: opts.absorb, completed: res.ok, chain: res.ok ? res.answer === 'chain' : null, txs: res.txs ?? null, chainFee: res.fee ?? null, tidyFee: res.tidyFee ?? null, utxosAfter: res.utxosAfter ?? null, suffices: res.suffices }));
+      emit(record('battery', keyOf(res), fields));
+      if (method.name === 'unfrackit-h12') emit(record('h12', keyOf(res), { spend: id, absorb: opts.absorb, completed: res.ok, chain: res.ok ? res.answer === 'chain' : null, txs: res.txs ?? null, chainFee: res.fee ?? null, tidyFee: res.tidyFee ?? null, utxosAfter: res.utxosAfter ?? null, suffices: res.suffices }));
     }
-    for (const s of r.result.spends) if (s.unsettled) out.write(record('battery', { wallet: source.wallet, window: 'snapshot', arm: s.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: 'none', change: 'none', collateral: 'none-needed', repetition: 1 }, { spend: s.id, unsettled: s.unsettled }));
+    for (const s of r.result.spends) if (s.unsettled) emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: s.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: 'none', change: 'none', collateral: 'none-needed', repetition: 1 }, { spend: s.id, unsettled: s.unsettled }));
     if (oracle) {
       const built = batterySpends(T, source, source.params, { pools: job.pools || SHAPE_POOLS });
       const groups = new Map();
@@ -192,9 +209,27 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
       const refs = await Promise.all(list.map((g) => oracle.reference(built.observed, built.spends[g.spend].intent, source.params, g.policy, { incumbents: g.incumbents })));
       list.forEach((g, i) => {
         totals.oracle++;
-        out.write(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, oracle: refs[i] }));
+        emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, oracle: refs[i] }));
       });
     }
-  }
+    buffers[wi] = recs;
+    flush();
+  };
+  // A failure stops the run: no further wallet starts, the tasks in flight
+  // finish, and the first error is thrown.
+  let next = 0;
+  let failure = null;
+  const lane = async () => {
+    while (!failure && next < wallets.length) {
+      const wi = next++;
+      try {
+        await task(wi);
+      } catch (e) {
+        failure = failure || e;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(pool.size, wallets.length)) }, lane));
+  if (failure) throw failure;
   return totals;
 }
