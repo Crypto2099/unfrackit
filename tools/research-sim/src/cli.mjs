@@ -11,6 +11,7 @@ import { cmdCensus, cmdNearCap, cmdCollateral, cmdBatteryPools } from './history
 import { cmdReplay, cmdBattery } from './replay/commands.mjs';
 import { cmdFidelity } from './fidelity/fidelity.mjs';
 import { cmdStudy } from './study/study.mjs';
+import { cmdLiveFire } from './study/live-fire.mjs';
 
 const COMMANDS = {
   hash: async () => process.stdout.write(formatHashList()),
@@ -23,6 +24,7 @@ const COMMANDS = {
   battery: async (o) => report(await cmdBattery(o)),
   fidelity: async (o) => report(await cmdFidelity(o)),
   study: async (o) => report(await cmdStudy(o)),
+  'live-fire': async (o, argv) => report(await cmdLiveFire(o, { argv })),
   help: async () => process.stdout.write(HELP)
 };
 
@@ -38,6 +40,7 @@ const HELP = `research-sim <command> [options]
   battery          the standard and H-10 batteries at the snapshot over snapshot files or the shapes
   fidelity         observed spends that run no script rebuilt by the ledger kit, their minimum fees against the observed ones
   study            the study's run: a plan's stages in order under one run id, resumable
+  live-fire        before the final freeze, the simulator's steps on an extraction live-fire run's picked wallets, logged in the check log
 
 See the README for the options of each.
 `;
@@ -56,7 +59,7 @@ if (!fn) {
   process.exit(2);
 }
 try {
-  await fn(parseArgs(rest));
+  await fn(parseArgs(rest), rest);
 } catch (e) {
   process.stderr.write(`${e.message}\n`);
   process.exit(1);
