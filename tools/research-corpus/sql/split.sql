@@ -18,6 +18,7 @@
 -- inputs.
 
 -- @step split
+-- @outputs study.sample
 UPDATE study.sample x
    SET split = CASE WHEN r.rn <= r.n / {{split_den}} THEN 'exploration' ELSE 'confirmation' END
   FROM (SELECT u.sa_id,
