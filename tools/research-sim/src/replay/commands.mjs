@@ -35,7 +35,7 @@ import { oracleSettings } from '../oracle/settings.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 
-function historyFiles(paths) {
+export function historyFiles(paths) {
   const out = [];
   for (const p of paths) {
     const a = resolve(p);
