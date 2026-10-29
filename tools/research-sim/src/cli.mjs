@@ -39,6 +39,8 @@ See the README for the options of each.
 // What a command prints: its summary without wallet-level data.
 function report(summary) {
   if (summary && summary.print) process.stdout.write(JSON.stringify(summary.print, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2) + '\n');
+  // A command that finished with a failed check exits non-zero.
+  if (summary && summary.failed) process.exitCode = 1;
 }
 
 const [cmd, ...rest] = process.argv.slice(2);

@@ -27,6 +27,7 @@ import { expandJobs } from '../arms/plan.mjs';
 import { batteryRuns, batterySpends } from '../battery/runner-core.mjs';
 import { SHAPE_POOLS } from '../battery/battery.mjs';
 import { CONFIRMATORY_RULES } from './collateral.mjs';
+import { sumValidity } from '../kit/validity.mjs';
 
 const MONTH = 30 * 86400;
 // The thresholds whose triggers are tested against the never-propose arm.
@@ -58,8 +59,9 @@ const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent
 
 // wallets: [{ spec }]; plan: the window's entries; roles: role -> method name
 // (a test plan's entries name role 'test'); out: a RunOutput.
-export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, settleEvery = 25, methodOptions = {}, collateralRules }) {
+export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false }) {
   const totals = { wallets: 0, jobs: 0, timeouts: 0, refused: 0, triggers: 0 };
+  const validities = [];
   for (const w of wallets) {
     const source = loadSource(T, w.spec);
     if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
@@ -80,7 +82,8 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
         method: { name: j.method, options: methodOptions[j.method] || {} },
         opts: { seed: j.repetition, changePolicy: j.change, collateralRule: j.collateral === 'none-needed' ? 'ledger' : j.collateral },
         settleEvery,
-        policyLock: j.policyLock
+        policyLock: j.policyLock,
+        validity
       };
       const r = await pool.replay(job, { limitMs });
       totals.jobs++;
@@ -102,6 +105,10 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
         return;
       }
       results[i] = { key, x, j };
+      if (x.summary.validity) {
+        validities.push(x.summary.validity);
+        noteValidity(out, key, x.summary.validity);
+      }
       for (const p of x.plans) put(i, 'plan', key, p);
       for (const s of x.spends) put(i, 'spend', key, s);
       for (const b of x.bursts) put(i, 'burst', key, b);
@@ -122,7 +129,15 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
       totals.triggers += outcomes.length;
     }
   }
+  if (validity) totals.validity = sumValidity(validities);
   return totals;
+}
+
+// One log note per failure of a validity summary, naming the record's key and
+// the transaction's position.
+export function noteValidity(out, key, v) {
+  for (const f of v.failures || []) out.note({ event: 'validity failure', ...key, ...f });
+  if (v.failed > (v.failures || []).length) out.note({ event: 'validity failures not detailed', ...key, count: v.failed - (v.failures || []).length });
 }
 
 // The batteries over a set of wallets: every run's result as a 'battery'
@@ -137,8 +152,9 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
 //       incumbents are [{ name, walletInputs, bytes, fee }]
 // The wallet's state and battery intents are rebuilt in this thread for it;
 // both are deterministic, so they are the worker's.
-export async function runBatteries(T, pool, { wallets, methods, out, answerLimitMs, pools, oracle = null, tidySettings = {} }) {
+export async function runBatteries(T, pool, { wallets, methods, out, answerLimitMs, pools, oracle = null, tidySettings = {}, validity = false }) {
   const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0 };
+  const validities = [];
   // One task per wallet: its battery job, then its oracle calls. Up to
   // pool.size tasks are in flight, so a wallet's oracle calls overlap the
   // other wallets' methods. A task buffers its records; they are written in
@@ -161,7 +177,7 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
     if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
     const keyOf = (res) => ({ wallet: source.wallet, window: 'snapshot', arm: res.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: res.method.name, change: res.opts.changePolicy, collateral: 'none-needed', repetition: res.repetition });
     const byK = new Map();
-    const job = { source: w.spec, methods, pools, tidySettings };
+    const job = { source: w.spec, methods, pools, tidySettings, validity };
     const r = await pool.battery(job, {
       answerLimitMs,
       onSpend: (k, res) => {
@@ -185,6 +201,10 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
         continue;
       }
       const { incumbent, k: _k, id, method, opts, repetition: _r, spend: _n, ...rest } = res;
+      if (res.validity) {
+        validities.push(res.validity);
+        noteValidity(out, keyOf(res), res.validity);
+      }
       const fields = { spend: id, absorb: opts.absorb ?? null, methodVersion: method.version, ...rest };
       emit(record('battery', keyOf(res), fields));
       if (method.name === 'unfrackit-h12') emit(record('h12', keyOf(res), { spend: id, absorb: opts.absorb, completed: res.ok, chain: res.ok ? res.answer === 'chain' : null, txs: res.txs ?? null, chainFee: res.fee ?? null, tidyFee: res.tidyFee ?? null, utxosAfter: res.utxosAfter ?? null, suffices: res.suffices }));
@@ -231,5 +251,6 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(pool.size, wallets.length)) }, lane));
   if (failure) throw failure;
+  if (validity) totals.validity = sumValidity(validities);
   return totals;
 }

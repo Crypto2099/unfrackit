@@ -21,7 +21,9 @@
 // time (job.skip lists the numbers already done).
 //
 // job: { source, methods: [{ name, options, opts: [{ changePolicy, absorb,
-// seed }], repetitions }], pools, skip, tidySettings }.
+// seed }], repetitions }], pools, skip, tidySettings, validity }. With
+// validity, each run's result carries the validity summary of kit/validity.mjs
+// over its spend's transactions.
 
 import { makeState } from '../state/state.mjs';
 import { standardBattery, h10Battery, SHAPE_POOLS } from './battery.mjs';
@@ -31,6 +33,7 @@ import { planState } from '../treatment/run.mjs';
 import { makeMethod } from '../methods/registry.mjs';
 import { spendMeasures } from '../replay/measure.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
+import { newValidity, summarize } from '../kit/validity.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
@@ -83,7 +86,8 @@ export async function batteryWallet(T, source, job, hooks) {
         hooks.answered(r.k);
       }
     } };
-    const res = await runSpend(T, { state, params, intent: s.intent, method: timed, opts: r.opts, tidySettings: job.tidySettings || {} });
+    const validity = job.validity ? newValidity(T.CSL) : null;
+    const res = await runSpend(T, { state, params, intent: s.intent, method: timed, opts: r.opts, tidySettings: job.tidySettings || {}, validity });
     const out = {
       k: r.k,
       spend: s.n,
@@ -96,7 +100,8 @@ export async function batteryWallet(T, source, job, hooks) {
       suffices: suffices.get(s.n),
       meta: s.intent.meta,
       ok: res.ok,
-      ms: res.ms
+      ms: res.ms,
+      ...(validity ? { validity: summarize(validity) } : {})
     };
     if (!res.ok) Object.assign(out, { class: res.class, detail: res.detail });
     else {

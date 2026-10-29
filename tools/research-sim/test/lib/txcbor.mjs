@@ -7,10 +7,10 @@
 // mutations of built transactions for its negative controls. Synthetic keys
 // and hashes only.
 
-import { encUint, encBytes, encArray, encMap, TRUE, NULL, decode, raw } from '../../src/history/cbor.mjs';
-import { encodeOutput, withCoin } from '../../src/history/output.mjs';
+import { encUint, encBytes, encArray, encMap, TRUE, NULL } from '../../src/history/cbor.mjs';
+import { encodeOutput } from '../../src/history/output.mjs';
 import { blake2b224, blake2b256 } from '../../src/history/blake2b.mjs';
-import { decodeTx, assembleTx } from '../../src/history/tx.mjs';
+import { assembleTx } from '../../src/history/tx.mjs';
 
 export const vkeyOf = (i) => Buffer.alloc(32, 0x10 + i);
 export const keyHash = (i) => blake2b224(vkeyOf(i)).toString('hex');
@@ -45,50 +45,6 @@ export function tx({ inputs, outputs, fee, vkeys = 1, extra = {}, aux = null, wi
   return assembleTx({ body: b, wits: encMap(wpairs), aux, isValid: true, alonzo: true });
 }
 
-// Rebuilds a transaction's body with field `key` replaced by `newRaw` (or
-// removed when null); everything else keeps its bytes.
-export function withBodyField(bytes, key, newRaw) {
-  const t = decodeTx(Buffer.from(bytes, 'hex'));
-  const pairs = [];
-  for (const k of t.body.order) {
-    if (k === key) {
-      if (newRaw) pairs.push([encUint(k), newRaw]);
-    } else pairs.push([raw(t.buf, t.body.fields.get(k).keyNode), t.body.fields.get(k).raw]);
-  }
-  if (!t.body.fields.has(key) && newRaw) pairs.push([encUint(key), newRaw]);
-  const wits = t.wits.raw;
-  return assembleTx({ body: encMap(pairs), wits, aux: t.aux ? t.aux.raw : null, isValid: t.isValid, alonzo: t.alonzo }).toString('hex');
-}
-
-// The fee set to `fee` and the difference moved into output `index`'s coin,
-// so the transaction stays balanced.
-export function withFee(bytes, fee, index) {
-  const t = decodeTx(Buffer.from(bytes, 'hex'));
-  const oldFee = decode(t.body.fields.get(2).raw).value;
-  const outs = decode(t.body.fields.get(1).raw).items.map((o) => Buffer.from(raw(t.body.fields.get(1).raw, o)));
-  const cur = decode(outs[index]);
-  const coinNode = cur.mt === 4 ? cur.items[1] : cur.entries.find(([k]) => k.value === 1n)[1];
-  const coin = coinNode.mt === 0 ? coinNode.value : coinNode.items[0].value;
-  outs[index] = withCoin(outs[index], coin + (oldFee - BigInt(fee)));
-  const b1 = withBodyField(bytes, 1, encArray(outs));
-  return withBodyField(b1, 2, encUint(fee));
-}
-
-// One vkey witness removed (the witness set otherwise as it was).
-export function withoutOneWitness(bytes) {
-  const t = decodeTx(Buffer.from(bytes, 'hex'));
-  const pairs = [];
-  for (const k of t.wits.order) {
-    const f = t.wits.fields.get(k);
-    if (k === 0) {
-      let node = decode(f.raw);
-      const tagged = node.mt === 6;
-      if (tagged) node = node.item;
-      const items = node.items.slice(1).map((n) => raw(tagged ? f.raw : f.raw, n));
-      if (items.length) pairs.push([encUint(0), encArray(items)]);
-    } else pairs.push([raw(t.buf, f.keyNode), f.raw]);
-  }
-  return assembleTx({ body: t.body.raw, wits: encMap(pairs), aux: t.aux ? t.aux.raw : null, isValid: t.isValid, alonzo: t.alonzo }).toString('hex');
-}
+export { withBodyField, withFee, withoutOneWitness } from '../../src/kit/controls.mjs';
 
 export { NULL, TRUE, encUint, encBytes, encArray, encMap };

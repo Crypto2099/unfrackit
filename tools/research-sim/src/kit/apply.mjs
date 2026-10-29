@@ -16,6 +16,7 @@ import { checkTx } from './check.mjs';
 import { applyTx } from '../state/state.mjs';
 import { unspentOutputParts } from './inspect.mjs';
 import { parseAddress, addressBytes } from '../history/address.mjs';
+import { checkValidity } from './validity.mjs';
 
 const PARSED = new WeakMap();
 function view(u) {
@@ -38,7 +39,10 @@ export function fixedResolver(fixed) {
 
 // opts: { implicit, scriptFee, extraWitnesses, fixed, requested (Set of the
 // last transaction's requested output indexes), heldInputs (refs of held
-// UTxOs the intent spends), notWallet (state/state.mjs applyTx) }. The
+// UTxOs the intent spends), notWallet (state/state.mjs applyTx), validity
+// ({ acc, at }: kit/validity.mjs reads each transaction the kit passes with CSL
+// and runs the negative controls on it, adding to acc; it changes nothing the
+// call returns) }. The
 // intent's implicit values, script fee and fixed parts belong to its last
 // transaction (a chain's earlier transactions are the planner's, with none).
 export function checkAndApply(state, params, txs, opts = {}) {
@@ -64,6 +68,14 @@ export function checkAndApply(state, params, txs, opts = {}) {
     });
     checks.push(r);
     if (!r.ok) return { ok: false, failed: i, checks, state, failure: r.failures[0] };
+    if (opts.validity) {
+      checkValidity(opts.validity.acc, opts.validity.at, i, cur, params, txs[i].bytes, {
+        resolve,
+        implicit: last ? opts.implicit : undefined,
+        scriptFee: last ? opts.scriptFee : 0n,
+        extraWitnesses: last ? opts.extraWitnesses || 0 : 0
+      });
+    }
     s = applyTx(s, { bytes: txs[i].bytes, walletInputs: txs[i].walletInputs, heldInputs: last ? opts.heldInputs || [] : [], notWallet: opts.notWallet || null }).state;
     states.push(s);
   }

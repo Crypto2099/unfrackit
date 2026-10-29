@@ -7,11 +7,11 @@
 //           (--history <file or directory>... | --shapes <names|all>)
 //           --plan recent | peak | test [--reps-h1 <n>] [--reps-variants <n>]
 //           [--test-reps <n>] [--run-id <id>] [--workers <n>]
-//           [--limit-ms <ms>] [--analysis-freeze-tx <hash>]
+//           [--limit-ms <ms>] [--analysis-freeze-tx <hash>] [--validity]
 //   battery --treatment <dir> [--treatment-pins <file>]
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
-//           [--run-id <id>] [--workers <n>] [--answer-limit-ms <ms>]
+//           [--run-id <id>] [--workers <n>] [--answer-limit-ms <ms>] [--validity]
 //           [--oracle [--oracle-workers <n>] [--oracle-limit-ms <ms>]
 //           [--oracle-settings <name>=<value>,...]]
 //
@@ -104,9 +104,9 @@ export async function cmdReplay(opts) {
   const out = new RunOutput(first.network, runId, header('replay', opts, T, { plan, entries }));
   out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
   try {
-    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, limitMs: Number(opts.limitMs || REPLAY_LIMIT_MS) });
+    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, limitMs: Number(opts.limitMs || REPLAY_LIMIT_MS), validity: !!opts.validity });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats });
-    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats } };
+    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
     out.close();
     await pool.close();
@@ -132,9 +132,9 @@ export async function cmdBattery(opts) {
   let oracle = null;
   try {
     if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: Number(opts.oracleWorkers || 1), ...(opts.oracleLimitMs ? { limitMs: Number(opts.oracleLimitMs) } : {}), settings: oracleSettingsUsed });
-    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools: pools && { t1: pools.t1.map(BigInt), t5: pools.t5.map((x) => x.map(BigInt)) }, oracle });
+    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools: pools && { t1: pools.t1.map(BigInt), t5: pools.t5.map((x) => x.map(BigInt)) }, oracle, validity: !!opts.validity });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) });
-    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) } };
+    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
     if (oracle) await oracle.close();
     out.close();

@@ -94,6 +94,7 @@
 import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
+import { newValidity, summarize } from '../kit/validity.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
@@ -246,7 +247,9 @@ export function jobOptions(opts) {
 // changeAddressEnd, franken, start [UTxO], events (each with the
 // changeAddress in effect at it), arrival (Map), windowStart (block time) }.
 // job: { key, arm, variant, repetition, method, opts, settleEvery, policyLock };
-// opts.seed is the repetition.
+// opts.seed is the repetition; validity (true) adds the validity checks of
+// kit/validity.mjs on every transaction the kit passes, and the summary's
+// validity field.
 export async function replay(T, params, source, job) {
   const t0 = performance.now();
   const { arm, variant, repetition, method } = job;
@@ -288,13 +291,16 @@ export async function replay(T, params, source, job) {
     if (txId === null || txId === undefined) return;
     for (const a of assets) if (!arrivalTable.has(`${a.policy}.${a.name}`)) arrivalTable.set(`${a.policy}.${a.name}`, { txId, flagged: false });
   };
+  // The validity mode (job.validity): one accumulator for the replay.
+  const validity = job.validity ? newValidity(T.CSL) : null;
+  const vcheck = (at) => (validity ? { acc: validity, at } : null);
   const doPlan = async (at, time) => {
     if (state.changeAddress === null) {
       out.plans.push({ at, t: rel(time), txs: 0, fee: 0n, size: 0, utxosAfter: state.utxos.size, notes: [], control: null, trigger: false, noChangeAddress: true });
       return;
     }
     const arrival = needsArrival(variant) ? arrivalMap(state, arrivalTable) : null;
-    const p = planState(T, state, params, settings, { arrival });
+    const p = planState(T, state, params, settings, { arrival, validity: vcheck(`plan ${at}`) });
     let trigger = null;
     if (arm === 'maintained-tidy' && (settings.pureAdaOnly || 'rules') === 'rules' && p.plan.txs.length) {
       const never = planOnly(T, state, params, { ...settings, pureAdaOnly: 'never' }, { arrival });
@@ -386,7 +392,7 @@ export async function replay(T, params, source, job) {
 
     if (intent.burst && intent.burst.parallel && !passed.has(intent.burst.id)) {
       passed.add(intent.burst.id);
-      out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts)) });
+      out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts, validity ? { acc: validity, at: `burst ${intent.burst.id}` } : null)) });
     }
 
     if (intent.invalid) {
@@ -420,7 +426,7 @@ export async function replay(T, params, source, job) {
       continue;
     }
 
-    const r = await buildOne(T, params, state, intent, method, opts, aside);
+    const r = await buildOne(T, params, state, intent, method, opts, aside, vcheck(`spend ${n}`));
     if (!r.ok) {
       if (r.class === NOT_REPLAYABLE) counts.notReplayable++;
       else {
@@ -492,6 +498,7 @@ export async function replay(T, params, source, job) {
     trajectory,
     conformity,
     policies: lock ? lock.result() : null,
+    ...(validity ? { validity: summarize(validity) } : {}),
     ms: performance.now() - t0
   };
   return out;
@@ -510,7 +517,7 @@ const unpricedText = (r, dropped) => {
 // One intent by the method from the pool the set-aside leaves (setAside, or
 // the whole pool for a library that chooses its own collateral), checked by
 // the kit against the whole state and applied.
-async function buildOne(T, params, state, intent, method, opts, aside) {
+async function buildOne(T, params, state, intent, method, opts, aside, validity = null) {
   const t0 = performance.now();
   let r;
   try {
@@ -544,7 +551,8 @@ async function buildOne(T, params, state, intent, method, opts, aside) {
     fixed: intent.fixed,
     extraWitnesses: fixedExtraWitnesses(intent),
     requested,
-    heldInputs
+    heldInputs,
+    validity
   });
   if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}${unpricedText(r, dropped)}`, ms };
   if (dropped) return { ok: false, class: CLASSES.other, detail: `kit: redeemers: the transaction lacks ${dropped} of the intent's ${intent.fixed.redeemers.length} redeemers${unpricedText(r, dropped)}`, ms };
@@ -555,7 +563,7 @@ async function buildOne(T, params, state, intent, method, opts, aside) {
 // state at the burst's start, each later one without the outputs of the
 // earlier ones (their wallet inputs are gone, their outputs never arrive),
 // each at the change address the source names at it.
-async function burstPass(T, params, start, events, method, opts) {
+async function burstPass(T, params, start, events, method, opts, validity = null) {
   let s = start;
   let built = 0;
   for (const { intent, changeAddress } of events) {
@@ -570,7 +578,7 @@ async function burstPass(T, params, start, events, method, opts) {
     if (!replaySuffices(T, s, params, intent).suffices) break;
     const aside = collateralFor(T, params, s, intent, opts.collateralRule, method);
     if (!aside.ok) break;
-    const r = await buildOne(T, params, s, intent, method, opts, aside);
+    const r = await buildOne(T, params, s, intent, method, opts, aside, validity && { ...validity, at: `${validity.at} step ${built}` });
     if (!r.ok) break;
     const heldIns = fixedInputValues(intent).filter((x) => x.held && s.utxos.has(x.ref)).map((x) => x.ref);
     s = removeSpent(s, [...r.txs.flatMap((t) => t.walletInputs), ...heldIns]);

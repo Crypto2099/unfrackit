@@ -54,8 +54,8 @@ function free(built) {
 }
 
 // Kit checks over the treatment's transactions, applied in order from `state`.
-function kitAgree(state, params, txs, treatmentPass, what) {
-  const r = checkAndApply(state, params, txs);
+function kitAgree(state, params, txs, treatmentPass, what, validity = null) {
+  const r = checkAndApply(state, params, txs, { validity });
   if (!r.ok) {
     const f = r.failure;
     throw new StopPoint(`${what}: transaction ${r.failed} passes the treatment's checks and fails the kit's (${f.check}: ${f.detail})`, { failures: r.checks[r.failed].failures });
@@ -77,8 +77,8 @@ export function planOnly(T, state, params, settings = {}, { ladder, refs, arriva
 
 // The planner's plan for a state. options: { ladder } as planner2.mjs plan
 // takes it; refs: the order (state order by default); arrival: as
-// treatmentWallet takes it.
-export function planState(T, state, params, settings = {}, { ladder, refs, arrival } = {}) {
+// treatmentWallet takes it; validity: { acc, at } as kit/apply.mjs takes it.
+export function planState(T, state, params, settings = {}, { ladder, refs, arrival, validity = null } = {}) {
   const tp = treatmentParams(T, params);
   const { wallet, utxos } = treatmentWallet(T, state, { refs, arrival });
   const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
@@ -88,7 +88,7 @@ export function planState(T, state, params, settings = {}, { ladder, refs, arriv
   const treatmentChecks = built.map((b, i) => T.conform.checkBuiltTx(b, plan.txs[i], plan));
   const txs = built.map((b, i) => record(b, plan.txs[i], 'plan'));
   free(built);
-  const k = kitAgree(state, params, txs, treatmentChecks, 'plan');
+  const k = kitAgree(state, params, txs, treatmentChecks, 'plan', validity);
   return { plan, txs, after: k.state, treatmentChecks, kitChecks: k.checks };
 }
 

@@ -41,6 +41,20 @@ export function parseArgs(argv) {
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 
+// The refusals before any wallet is read: a wallet the extraction's
+// reconstruction check excluded, and a confirmation-split wallet without the
+// analysis-freeze transaction. `samples` is the study tables' map (wallet to
+// { split, excluded }) or null when they are not readable; a wallet outside
+// it is not refused.
+export function refuseWallets(wallets, samples, analysisFreezeTx) {
+  for (const sa of wallets) {
+    const s = samples && samples.get(sa);
+    if (!s) continue;
+    if (s.excluded) throw new Error(`wallet ${sa}: the extraction's reconstruction check excluded it`);
+    if (s.split === 'confirmation' && !analysisFreezeTx) throw new Error(`wallet ${sa} is in the confirmation split; it is read only for a run given --analysis-freeze-tx`);
+  }
+}
+
 export async function makeContext(opts) {
   const blocks = loadAll();
   const client = await connect({ expectNetwork: opts.expectNetwork });
@@ -142,10 +156,7 @@ export async function cmdHistory(opts) {
       wallets = await resolveWallets(ctx, opts);
     }
     const splitOf = (sa) => (samples && samples.has(sa) ? samples.get(sa).split : null);
-    for (const sa of wallets) {
-      if (samples && samples.has(sa) && samples.get(sa).excluded) throw new Error(`wallet ${sa}: the extraction's reconstruction check excluded it`);
-      if (splitOf(sa) === 'confirmation' && !opts.analysisFreezeTx) throw new Error(`wallet ${sa} is in the confirmation split; it is read only for a run given --analysis-freeze-tx`);
-    }
+    refuseWallets(wallets, samples, opts.analysisFreezeTx);
     const frames = list(opts.window).length ? list(opts.window) : ['recent'];
     const dir = historyDir(ctx.network, opts.runId);
     const summary = {

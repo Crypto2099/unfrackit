@@ -22,8 +22,9 @@ const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
 // opts: the method options; tidySettings: the planner settings of the plan
 // after the spend (the defaults in the study); notWallet: as
-// state/state.mjs applyTx takes it.
-export async function runSpend(T, { state, params, intent, method, opts, tidySettings = {}, notWallet = null }) {
+// state/state.mjs applyTx takes it; validity: an accumulator of
+// kit/validity.mjs, fed with the spend's transactions.
+export async function runSpend(T, { state, params, intent, method, opts, tidySettings = {}, notWallet = null, validity = null }) {
   checkOptions(opts);
   await settle();
   const t0 = performance.now();
@@ -36,7 +37,7 @@ export async function runSpend(T, { state, params, intent, method, opts, tidySet
   }
   const ms = performance.now() - t0;
   if (!r.ok) return { ok: false, class: r.class, detail: r.detail, ms, answer: r };
-  const applied = checkAndApply(state, params, r.txs, { implicit: intent.implicit, notWallet });
+  const applied = checkAndApply(state, params, r.txs, { implicit: intent.implicit, notWallet, validity: validity && { acc: validity, at: 'spend' } });
   if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}`, ms, answer: r, kit: applied.checks };
   const tidy = planState(T, applied.state, params, tidySettings);
   const last = r.txs[r.txs.length - 1];
