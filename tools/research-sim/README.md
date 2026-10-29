@@ -28,7 +28,22 @@ The study's hypotheses are numbered H-1 to H-12. This README refers to ten of th
 ## Where it may run
 
 - **Preprod**: anything, at any time, through a read-only role. All development and every test of the reader runs there.
-- **Mainnet**: refused. Every command that connects reads db-sync's `meta` table first and stops on a mainnet database. The mainnet code paths, such as the ImmutableDB byte source, are implemented and tested against preprod's own node; no command in this release runs them on mainnet. `EXPLAIN ANALYZE` executes its query, so the code refuses it on mainnet as well; plain `EXPLAIN` is allowed everywhere.
+- **Mainnet, before the final freeze**: refused.
+- **Mainnet, after the final freeze**: only the study's own run, and only once the extraction tool's study run for the final freeze has finished. Every command that connects reads db-sync's `meta` table first, and on mainnet it passes the gate below before it reads any wallet. The run the gate reads fixes the snapshot and the windows. The mainnet code paths, such as the ImmutableDB byte source, are tested against preprod's own node.
+
+`EXPLAIN ANALYZE` executes its query, so the code refuses it on mainnet in every case; plain `EXPLAIN` is allowed everywhere.
+
+### The mainnet gate
+
+The gate is one check in the connection (`src/history/db.mjs`, queries in `sql/gate.sql`), made after the network is read and before the connection reaches any command. The extraction tool's driver checks the final freeze record, the code manifest and the check log before its study run reads a wallet, and records that run in its `study` schema. The gate reads that record and does not verify the freeze again. It passes when:
+
+- the role can read `study.run` and `study.param`;
+- exactly one run's `freeze` row has the role `final-freeze`, and that run is recorded for mainnet;
+- that run's `mode` row is `study`, and it has a `finished` row, which the driver deletes whenever the run starts or resumes and writes as its last step;
+- its `snapshot` row is a block fixed by rule, with its id, hash and last transaction id, and its `windows` row gives both windows' blocks and transaction-id bounds;
+- each `study` table this code reads (`frame`, `sample`, `franken`, `txo`, `txo_asset` and `asset`) carries that run's mark, the comment `research-corpus run <id>` that the extraction's runner writes on every table a step builds, so the samples and flags read are that run's.
+
+Every command on the connection then uses that run's snapshot block and windows, as `--extraction-run` would give them, and checks them against the database. A `--snapshot` naming any other block is refused, and so is an `--extraction-run` naming another run. Any other mainnet connection is refused, with the reason. The code that opens a connection sets the gate's path; no command-line option can, and the final freeze is the only path.
 
 ## Install
 
@@ -48,7 +63,7 @@ cardano-serialization-lib (CSL) comes only through the treatment's `cslkit.mjs`,
 
 ## The database
 
-cardano-db-sync 13.7 with the core `tx_out` layout, `tx_out` values enabled, and multi-asset, metadata, Plutus and ledger data inserted; never `prune`, `bootstrap` or `only_utxo`. The queries read schema `public`, and the extraction's `study` tables when the role can read them (its samples with their split and reconstruction-check exclusion, its franken flags, and its life table). Each filters on an indexed column, except the chain-wide collateral measurement and the epoch boundaries of the near-cap command, which read their tables in one pass each. Reads by transaction, reference or wallet go in batches (200 transactions, 1,000 or 2,000 output references, or 500 wallets per statement), so that no single statement runs long. Nothing is created anywhere.
+cardano-db-sync 13.7 with the core `tx_out` layout, `tx_out` values enabled, and multi-asset, metadata, Plutus and ledger data inserted; never `prune`, `bootstrap` or `only_utxo`. The queries read schema `public`, and the extraction's `study` tables when the role can read them (its samples with their split and reconstruction-check exclusion, its franken flags and its life table, plus, on mainnet, the run records the gate reads). Each filters on an indexed column, except the chain-wide collateral measurement and the epoch boundaries of the near-cap command, which read their tables in one pass each. Reads by transaction, reference or wallet go in batches (200 transactions, 1,000 or 2,000 output references, or 500 wallets per statement), so that no single statement runs long. Nothing is created anywhere.
 
 Connection: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`. The password comes from the file `PGPASSFILE` names (libpq's format, mode 0600). It is read when the connection opens and never printed or logged. Every session is read only.
 
@@ -71,13 +86,14 @@ Every transaction read from either source must hash to db-sync's transaction has
 | `census --run-id <id> --treatment <dir> --treatment-pins <file> (--wallets <file> \| --from-study \| --all-wallets)` | Per wallet at the snapshot: UTxO count, the largest UTxO's value bytes, near-cap status, locked ADA and excess ADA. |
 | `near-cap --run-id <id> (--wallets <file> \| --from-study \| --all-wallets)` | Per epoch boundary from the Mary hard fork to the snapshot: how many wallets have a largest UTxO above 50, 80 and 90 percent of the value-size limit in force. |
 | `collateral --run-id <id>` | Over the recent window's script-executing transactions whose collateral inputs all sit at key addresses: the share under 20 ADA of collateral, the distribution of collateral coin, the share with a collateral return, the share of collateral inputs carrying tokens. On a test network, `--days <n>` measures the last n days instead of the recent window. |
-| `battery-pools --run-id <id> --network <n>` | From a run's recent-window history files, the amounts of the pure-ADA payments (spend type T1) and the shares of a fungible's holding sent in fungible-token spends (T5). |
+| `battery-pools --run-id <id> --network <n> [--history-run <id>]` | From a run's recent-window history files, the amounts of the pure-ADA payments (spend type T1) and the shares of a fungible's holding sent in fungible-token spends (T5). `--history-run` names the run whose history files are read, when it is not the run `--run-id` writes. |
 | `replay --treatment <dir> [--treatment-pins <file>] (--history <file or dir>... \| --shapes <names\|all>) --plan recent\|peak\|test` | A run plan's arms replayed over history files, or over the shapes' synthetic streams. `--workers <n>` (default 1), `--limit-ms` (default 300,000 per replay), `--reps-h1`, `--reps-variants`, `--test-reps`, `--run-id`, `--analysis-freeze-tx`, `--validity` (the validity checks, below). |
-| `battery --treatment <dir> [--treatment-pins <file>] (--history <snapshot file or dir>... --pools <file> \| --shapes <names\|all>)` | The standard battery and H-10's at the snapshot, under the battery's selectors (`--methods study`, the default: `csl-lf`, `csl-ri`, `cjs-rrri`, `evo-lf`, `csl-lf-pure`, `csl-ri-pure` and the H-12 rule with absorption on and off) or the test methods (`--methods test`). `--reps <n>` (default 30, for the random selectors), `--answer-limit-ms` (default 60,000 per method answer), `--workers` (default 1; that many wallets run at once, each wallet's oracle calls starting when its methods finish, and `records.jsonl` is written in wallet order whatever the count), `--run-id`. A wallet's draws come from the frozen pools `--pools` names; the shapes use fixed test values. `--oracle` adds the oracle's reference to each observed-layout spend and oracle change policy (off by default, since each reference takes up to a minute; the study methods reach all five policies, `csl`, `csl-ppc`, `cjs`, `evo` and `layout`); `--oracle-workers` (default 1; its threads are separate from `--workers`, so up to the two counts added together can be busy at once), `--oracle-limit-ms` (default 60,000) and `--oracle-settings <name>=<value>,...` set its worker count, time limit and settings. `--validity` adds the validity checks (below). |
+| `battery --treatment <dir> [--treatment-pins <file>] (--history <snapshot file or dir>... --pools <file> \| --shapes <names\|all>)` | The standard battery and H-10's at the snapshot, under the battery's selectors (`--methods study`, the default: `csl-lf`, `csl-ri`, `cjs-rrri`, `evo-lf`, `csl-lf-pure`, `csl-ri-pure` and the H-12 rule with absorption on and off) or the test methods (`--methods test`). `--reps <n>` (default 30, for the random selectors), `--answer-limit-ms` (default 60,000 per method answer), `--workers` (default 1; that many wallets run at once, each wallet's oracle calls starting when its methods finish, and `records.jsonl` is written in wallet order whatever the count), `--run-id`. A wallet's draws come from the frozen pools `--pools` names: the `battery-pools.json` that `battery-pools` writes, or a file giving `t1` (lovelace) and `t5` (`[units sent, units held]` pairs); the shapes use fixed test values. `--oracle` adds the oracle's reference to each observed-layout spend and oracle change policy (off by default, since each reference takes up to a minute; the study methods reach all five policies, `csl`, `csl-ppc`, `cjs`, `evo` and `layout`); `--oracle-workers` (default 1; its threads are separate from `--workers`, so up to the two counts added together can be busy at once), `--oracle-limit-ms` (default 60,000) and `--oracle-settings <name>=<value>,...` set its worker count, time limit and settings. `--validity` adds the validity checks (below). |
 | `fidelity --treatment <dir> [--treatment-pins <file>] --history <file or dir>...` | Every observed spend that runs no script, rebuilt by the ledger kit, its minimum fee compared with the one its observed size implies: per window, the share within 2% and whether it reaches 99% ("The fidelity check" below). `--run-id`, `--analysis-freeze-tx`. Reads no database. |
+| `study --plan synthetic\|preprod\|corpus --run-id <id> --treatment <dir> [--treatment-pins <file>]` | The study's run: a plan's stages in order under one run ID, resumed at the first unfinished stage when run again ("The study run" below). |
 | `hash` | SHA-256 of every hashed file, the pinned dependencies and the Node version. Also `npm run hash`. |
 
-Common options: `--expect-network <name>` refuses any other database; `--snapshot tip|<block hash>|<block id>` (default `tip`); `--extraction-run <params.json>` takes the snapshot and the windows from an extraction run of `tools/research-corpus` and checks them against the database; `--bytes`, `--immutable-dir`, `--immutable-host`; `--treatment`, `--treatment-pins`; `--set <name>=<value>` changes one setting; `--explain` keeps the plain `EXPLAIN` plan of the census and collateral queries; `--analysis-freeze-tx <hash>`, the mainnet transaction whose signed record freezes the analysis scripts; without it a confirmation-split wallet is refused, and with it the run records the hash.
+Common options: `--expect-network <name>` refuses any other database; `--snapshot tip|<block hash>|<block id>` (default `tip`); `--extraction-run <params.json>` takes the snapshot and the windows from an extraction run of `tools/research-corpus` and checks them against the database (on mainnet both come from the gate: `--snapshot` may name only the gate's block, and `--extraction-run` only the gate's run); `--bytes`, `--immutable-dir`, `--immutable-host`; `--treatment`, `--treatment-pins`; `--set <name>=<value>` changes one setting; `--explain` keeps the plain `EXPLAIN` plan of the census and collateral queries; `--analysis-freeze-tx <hash>`, the mainnet transaction whose signed record freezes the analysis scripts; without it a confirmation-split wallet is refused, and with it the run records the hash.
 
 `--from-study` reads the wallets from the extraction's `study` tables, when the role can read them: for `history`, its random sample (`--from-study random`) or every sampled wallet (`--from-study all`); for `census`, its eligible recent-frame wallets; for `near-cap`, the union of both random samples. A wallet the extraction's reconstruction check excluded is refused. `--all-wallets` takes every key stake credential with an output, for a test network.
 
@@ -117,6 +133,17 @@ Every record names its wallet (the stake-credential id, or a shape's name), wind
 
 The `fidelity` command writes `run.json` and `fidelity.json`, its counts and distributions per window, under the private root.
 
+The `study` command writes under `<network>/<run-id>/`, where the network is `--expect-network`, or `synthetic`:
+
+```
+study.json   the plan, its stages, the options with paths made absolute, the SHA-256 of the treatment pins,
+             wallets and extraction-run files, the code manifest (as hash prints it) and its SHA-256, the Node version
+log.jsonl    appended: each invocation's start or resume, each stage's start, then its end with the stage's
+             printed totals, or its error; the stages skipped; the end
+lock         the process ID of the invocation running it
+<stage>/     each stage's own run directory, written by its command under the run ID <run-id>/<stage>
+```
+
 #### Validity checks
 
 `--validity` reads every transaction a method or plan returns and the kit passes with cardano-serialization-lib, and runs the four negative controls on it. CSL's re-serialization must have the transaction's inputs, fee and witness count and its outputs by decoded content. CSL writes a policy's asset names shortest first and re-encodes some fixed parts (certificates, witness lists) as tagged sets, so an output's bytes or the transaction's hash can differ. Both are counted (`cslOutputBytes`, `cslReencoded`) and neither is a failure. The controls (`src/kit/controls.mjs`, which the tests import through `test/lib/controls.mjs`) are the fee one lovelace under the ledger minimum with the difference moved into the last output, the size one byte over the limit, a Value one byte over the value-size limit, and one vkey witness short; each must be caught by its own check alone. A transaction can have no outputs: a library burns a leftover below the change minimum into the fee, and the intent requests nothing. It has no output to take the fee difference and none whose Value could be too large, so it has no fee or value control and is counted in `notApplicable`.
@@ -151,6 +178,41 @@ An intent is `{ id, source, type, time, requested, implicit, fixed, collateral, 
 - `observed`: `{ tx, size, fee, epoch, protocolMajor, minFeeA, minFeeB, walletInputs, walletOutputs, walletWitnesses }`.
 - `classes`: each asset of the transaction's wallet inputs, outputs and requested outputs, `FT` or `NFT`.
 - `derived`: null, or the pool deposits taken from db-sync's net deposit.
+
+## The study run
+
+`study` runs the commands above as one chain under one run ID, each stage in its own run directory, so that a run of many hours can stop and resume. Three plans:
+
+| Plan | Stages, in order | Wallets, snapshot and windows |
+|---|---|---|
+| `synthetic` | `replay-recent`, `replay-peak`, `battery` | The shapes `--shapes` names, with their synthetic streams and fixed battery values. No database. |
+| `preprod` | `history-recent`, `history-peak`, `history-snapshot`, `census`, `near-cap`, `collateral`, `fidelity`, `battery-pools`, `replay-recent`, `replay-peak`, `battery` | A test network (`--expect-network`, never mainnet). The wallets from `--wallets`, `--wallet` or `--from-study random\|all`. The snapshot from `--snapshot <block id or hash>` or `--extraction-run`, never the tip, so that every stage reads one block. The windows from `--extraction-run`, or computed from the snapshot. `--days` for the collateral measurement. |
+| `corpus` | as `preprod` | Every sampled wallet (`--from-study all`), with `--analysis-freeze-tx` required, since the confirmation split is read. The snapshot and windows are the extraction run's: on mainnet the gate's, on a test network `--extraction-run`'s. |
+
+Each stage runs one command:
+
+- `history-recent`, `history-peak` and `history-snapshot`: `history` for that window;
+- `census` and `near-cap` over the wallets given, or with `--from-study` for the corpus (the census over the recent frame's eligible wallets, near-cap over both random samples); `collateral`;
+- `fidelity`: over the recent and peak history files of the exploration split, and those that carry no split, as on a test network;
+- `battery-pools`: over `history-recent`'s files;
+- `replay-recent` and `replay-peak`: `replay --plan recent` and `--plan peak` over that window's history files, or over the shapes' streams;
+- `battery`: over `history-snapshot`'s files with the pools `battery-pools` wrote, or over the shapes.
+
+The database stages come first, so a run needs the database only at its start. `--reps-h1`, `--reps-variants` and `--limit-ms` pass to the replays; `--reps`, `--answer-limit-ms`, `--oracle`, `--oracle-workers`, `--oracle-limit-ms` and `--oracle-settings` to the battery; `--workers` and `--validity` to both; `--analysis-freeze-tx` to `history`, the replays and the battery; `--treatment` and `--treatment-pins` (default `data/treatment-pins.txt`) to every stage that loads the treatment; the connection's options (`--expect-network`, `--snapshot`, `--extraction-run`, `--bytes`, `--immutable-dir`, `--immutable-host`, `--set`) to every database stage. An option the plan does not use is refused.
+
+Running the same plan and run ID again resumes the run. Its options (paths made absolute), the SHA-256 of its input files and the code manifest must equal those of its first start, or it is refused, naming what differs; that includes `--workers`. A stage whose end entry is in the log is skipped. Every other stage reruns from its start, its directory removed first, so its files are written as by an uninterrupted run, and a stage stopped halfway loses its partial work. The records then equal an uninterrupted run's, except where a stage's records vary between any two runs: the unseeded selectors (`csl-ri`, `csl-ri-pure`), the oracle references stopped at their limit, and the answers at the answer limit. A second invocation on a run ID that is running is refused; the lock of a process that has gone is taken over. A stage that throws stops the run, with its error in the log. A stage that finishes with a failed validity check is logged as failed, the run goes on, and the command exits with status 1 at the end.
+
+The study's mainnet run, after the final freeze:
+
+```
+node src/cli.mjs study --plan corpus --run-id <id> --expect-network mainnet \
+  --treatment <dir> --treatment-pins data/treatment-pins.txt \
+  --analysis-freeze-tx <hash> \
+  --immutable-dir <the node's ImmutableDB directory> --immutable-host <host> \
+  --oracle --workers 8 --oracle-workers 4
+```
+
+It runs at the study's repetitions and limits, the commands' defaults, with at most 12 busy threads: 8 replay or battery workers and 4 oracle workers. Its connection (`PGHOST` and the rest) is mainnet's db-sync, through a role that can read the `study` schema.
 
 ## The rules this code implements
 
@@ -543,6 +605,8 @@ The oracle's readings (`src/oracle/settings.mjs`) are recorded in every oracle r
 `test/unit/core/replay-helpers.test.mjs` checks the replay helpers the adapters share (`src/kit/replay.mjs`): an intent part's list items in both forms, its required signers, the wallet keys a replayed transaction is witnessed for (the inputs' credentials, the held fixed inputs' wallet keys, the collateral's credential and the required signers among the wallet's credentials, each once), the scripts an intent holds by hash, and a redeemer's target as a key. The Evolution SDK's redeemer lookup finds each target's redeemer through that key, a withdrawal's by the reward account the library reads from the body, and a voter's by its key hash.
 
 Some unit tests build transactions with CSL and need the treatment, so they are skipped without it. Those in `test/unit/core/csl.test.mjs` and `test/unit/core/replay.test.mjs` are skipped when `RESEARCH_SIM_TREATMENT_DIR` is unset (`RESEARCH_SIM_TREATMENT_PINS` only selects a digest list other than `data/treatment-pins.txt`); those in `test/unit/history/intent.test.mjs` are skipped unless both variables are set. They cover the treatment's pin check and parameter handling, the 17 shapes byte for byte against the treatment harness's generators and the rules of CL1, CL3, E1 and E2, sizes, Values and minimums against CSL on every UTxO of the 21 shapes, transaction sizes against CSL, witness counting over several payment keys, the four negative controls on every transaction form, the change policies, the battery intents, the H-12 method's refusals, the history reader's intents (a purchase-like spend, a self-reorganization, a withdrawal, a phase-2-invalid spend, the minimum on the bytes as written), and the replay assembler against CSL's assembly. The other unit tests run without the treatment: the kit's checks and their classes, the reference-script fee term, wallet states and the change-address rule, the history file reader, output records and their guard, run plans and arm settings, collateral eligibility and H-6's rescue join.
+
+`test/unit/study/study.test.mjs` runs the `study` command over stand-in commands, which write records made from their options, without a database or the treatment. It checks each plan's stages in order with the options each is given, the fidelity stage being given only the exploration split's recent and peak files and those without a split. A run killed in its `replay-peak` stage, in a process of its own, resumes: the finished stages are skipped, that stage reruns from an empty directory, and every stage's records equal those of an uninterrupted run. A stage that throws stops the run and reruns on resume. A resume is refused when an option, an input file or the code manifest changed, and each plan's refusals are checked. A confirmation-split wallet without `--analysis-freeze-tx` stops the run at the first history stage through the history command's own check, and the corpus plan is refused without that option. The test also checks the lock, the nested run IDs, and the battery reading `battery-pools.json`. `test/unit/history/gate.test.mjs` checks the mainnet gate with the query layer stubbed. A test network is read without the gate. Mainnet is refused when the run records cannot be read, when no run of the final freeze is recorded, when two are, when it is not a finished study run, when its snapshot is not fixed by rule or its windows are missing, and when a study table carries another run's mark, each after no query but the gate's own. A finished run's snapshot and windows are the grant, any other path is refused, `--snapshot` and `--extraction-run` may name only the gate's run, and `EXPLAIN ANALYZE` stays refused.
 
 `test/unit/core/controls.test.mjs` checks the four controls on a constructed transaction, each caught by its own check, and that a transaction with no outputs has no fee or value control. `test/unit/history/refusals.test.mjs` checks the history command's refusals before any wallet is read (`refuseWallets`): an excluded wallet is refused, a confirmation-split wallet is refused without `--analysis-freeze-tx` and accepted with it, and a wallet outside the study samples is accepted.
 
