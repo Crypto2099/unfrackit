@@ -82,9 +82,7 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     scam_screen: (({ policies_with_unlisted_assets, ...rest }) => rest)(report.scam_screen || { applied: false }),
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
-    // The case-wallet counts stay in report.json: case wallets can be drawn,
-    // so with the number named they would say how many were.
-    reconstruction_check: (({ n_case_wallets, n_case_disagree, ...rest }) => rest)(report.reconstruction_check || {}),
+    reconstruction_check: report.reconstruction_check || {},
     code_version: report.code_version,
     samples: list
   };

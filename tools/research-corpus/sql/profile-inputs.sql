@@ -203,6 +203,6 @@ SELECT p.frame, p.profile, count(*) AS n,
        count(*) FILTER (WHERE p.nft_heavy) AS nft_heavy,
        count(*) FILTER (WHERE p.ft_heavy) AS ft_heavy,
        count(*) FILTER (WHERE p.dex_active) AS dex_active
-  FROM study.profile p JOIN study.sample_frame f ON f.frame = p.frame AND f.sa_id = p.sa_id AND f.in_sample
+  FROM study.profile p JOIN study.sample_frame f ON f.frame = p.frame AND f.sa_id = p.sa_id
  WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = p.sa_id AND NOT k.agree)
  GROUP BY p.frame, p.profile ORDER BY p.frame DESC, p.profile;

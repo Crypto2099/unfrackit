@@ -135,8 +135,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
     [{ ...live(), explain: true, capture: true }, /no plan capture/],
     [{ ...live(), snapshot: 'ab'.repeat(32) }, /--snapshot must be tip for a live-fire run/],
     [{ ...live() }, /needs --hypotheses-tx/],
-    [{ ...live(), hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, /pinned freeze identity/],
-    [{ ...live(), caseWallets: ['stake1notanaddress'] }, /--case and --cases/]
+    [{ ...live(), hypothesesTx: 'bb'.repeat(32), studyKey: 'cc'.repeat(32) }, /pinned freeze identity/]
   ];
   for (const [opts, want] of cases) await assert.rejects(run(opts), want, JSON.stringify(opts));
   // A refused live-fire run under the study run's own id drops nothing.
@@ -151,7 +150,7 @@ test('mainnet refusals through runPipeline; a refused live-fire run leaves the s
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(entries.filter((e) => e.type === 'live-fire-start' || e.type === 'live-fire').length, 0);
   const gates = entries.filter((e) => e.type === 'query' && e.name === 'live-fire gate');
-  assert.equal(gates.length, 10);
+  assert.equal(gates.length, 9);
   for (const e of gates) {
     assert.equal(e.outcome, 'failed');
     assert.equal(entries.find((x) => x.seq === e.start_seq).type, 'query-start');
@@ -234,6 +233,12 @@ test('run passes runPipeline its options one by one, so --study-key-pin never re
   assert.equal(Object.hasOwn(o, 'studyKeyPin'), false);
   assert.ok(!JSON.stringify(o).includes(pin));
   assert.deepEqual([o.runId, o.studyKey, o.freezeTx], ['r1', 'dd'.repeat(32), 'aa'.repeat(32)]);
+});
+
+test('--case and --cases are refused like options the tool never had', () => {
+  assert.throws(() => parseArgs(['--run-id', 'r1', '--case', 'stake_test1uqabc']), /--case is not an option/);
+  assert.throws(() => parseArgs(['--cases', '/path/cases.txt']), /--cases is not an option/);
+  assert.equal(parseArgs(['--run-id', 'r1']).runId, 'r1');
 });
 
 test('a test network takes run-time options the mainnet refuses', () => {

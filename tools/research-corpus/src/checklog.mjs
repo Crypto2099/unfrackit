@@ -77,7 +77,7 @@ export function sanitize(message, { refusal = false } = {}) {
 
 // The command line as logged: the values of options that name wallets are
 // replaced, so the log never carries an address.
-const WALLET_OPTIONS = new Set(['--stake', '--node-stake', '--case']);
+const WALLET_OPTIONS = new Set(['--stake', '--node-stake']);
 export function redactCommand(argv) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {

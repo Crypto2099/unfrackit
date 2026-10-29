@@ -56,8 +56,6 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
       --scam-clone <dir>          a git clone of the scam list's repository, holding the record's commit;
                                   required on mainnet, and on a test network the screen applies only with it
       --scam-list <file>          the scam-list record (default data/scam-list.json; mainnet: that file only)
-      --case <stake address>      a case wallet: the per-wallet steps also run for it
-      --cases <file>              case wallets, one stake address per line
       --hmac-key <file>           test networks only: an HMAC key other than secret/hmac.key
       --set name=value            override a setting (refused on mainnet unless equal to the default)
       --redo <step>|all           recompute a step and everything after it
@@ -115,10 +113,14 @@ const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync 
 Connection: --host --port --database --user, or PGHOST PGPORT PGDATABASE PGUSER; the password comes
 from the file PGPASSFILE names. Outputs: \${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/.`;
 
+// Options an earlier version took. parseArgs would otherwise read them as any
+// other --name value and drop them without a word, and a run would go on
+// without the wallets the person named.
+const REMOVED = new Set(['case', 'cases']);
 const FLAGS = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain', 'sim-wallets']);
 
 export function parseArgs(argv) {
-  const out = { _: [], set: [], redo: [], stake: [], nodeStake: [], case: [] };
+  const out = { _: [], set: [], redo: [], stake: [], nodeStake: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith('--')) {
@@ -126,6 +128,7 @@ export function parseArgs(argv) {
       continue;
     }
     const k = a.slice(2);
+    if (REMOVED.has(k)) throw new Error(`${a} is not an option: the per-wallet steps run for the drawn wallets only`);
     const camel = k.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
     if (FLAGS.has(k)) {
       out[camel] = true;
@@ -137,7 +140,6 @@ export function parseArgs(argv) {
     else if (k === 'redo') out.redo.push(v);
     else if (k === 'stake') out.stake.push(v);
     else if (k === 'node-stake') out.nodeStake.push(v);
-    else if (k === 'case') out.case.push(v);
     else out[camel] = v;
   }
   return out;
@@ -341,8 +343,6 @@ export function runOptions(a, command) {
     scamList: a.scamList,
     scamClone: a.scamClone,
     hmacKey: a.hmacKey,
-    caseWallets: a.case,
-    casesFile: a.cases,
     set: a.set,
     redo: a.redo,
     capture: !!a.capture,

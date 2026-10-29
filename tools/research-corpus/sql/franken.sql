@@ -43,8 +43,7 @@ SELECT c.sa_id, c.payment_cred, nc.n_creds, (a.sa_id IS NOT NULL) AS any_cospend
   LEFT JOIN co ON co.sa_id = c.sa_id AND co.payment_cred = c.payment_cred;
 CREATE INDEX franken_sa ON study.franken (sa_id);
 
--- Over the sampled wallets only (case wallets are reported per wallet), less
--- those the reconstruction check excluded. n_multi_cred_no_cospend counts the
+-- Over the sampled wallets, less those the reconstruction check excluded. n_multi_cred_no_cospend counts the
 -- wallets the rule cannot flag because no pair of their key credentials ever
 -- co-spends: one real credential beside a third party's output at a mangled
 -- address (CIP-19, "Delegation part") is such a case.
@@ -54,5 +53,5 @@ SELECT count(DISTINCT f.sa_id) AS n_wallets,
        count(DISTINCT f.sa_id) FILTER (WHERE f.flagged) AS n_wallets_flagged,
        count(*) FILTER (WHERE f.flagged) AS n_creds_flagged,
        count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2 AND NOT f.any_cospend) AS n_multi_cred_no_cospend
-  FROM study.franken f JOIN study.sample_wallet w ON w.sa_id = f.sa_id AND w.in_sample
+  FROM study.franken f JOIN study.sample_wallet w ON w.sa_id = f.sa_id
  WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree);

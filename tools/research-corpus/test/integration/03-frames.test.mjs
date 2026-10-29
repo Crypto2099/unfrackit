@@ -6,9 +6,9 @@
 // draw key's epoch rule names for the block of S1's seeding transaction, read
 // from the database and from Koios; guard 1,000 so the guard path runs; the
 // real targets (2,400, 1,000, 600 and 1,200), which preprod does not meet. The
-// flow table adds up stage by stage; the funder and S1 are case wallets, stay
-// in the frames like any wallet, and own-drawn counts them in the drawn
-// samples without writing anything; S1 is never token-holding;
+// flow table adds up stage by stage; the funder and S1 stay in the
+// frames like any wallet, and own-drawn counts them in the drawn samples
+// without writing anything; S1 is never token-holding;
 // S3 and M2 are token-holding, M2 with at least 100 assets, and both are in
 // the sample (the strata of their policies); S3 has one spend event (the
 // sweep), M2 and S1 none; no franken flags on the shapes; the profile
@@ -81,8 +81,8 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     const tip0 = (await q(c, blocks, 'tip_block'))[0];
     const views = Object.fromEntries(SHAPES.map((s) => [s, stakeOf(seederAddress(s)[0])]));
     views.funder = stakeOf(FUNDER);
-    // The case wallets: the funder's key (active in both windows) and S1's key
-    // (active in the recent window only). own-drawn is given them and a random
+    // The funder's key (active in both windows) and S1's key (active in the
+    // recent window only). own-drawn is given them and a random
     // key hash, checked to be absent from the database. (The CIP-19 test
     // vector's stake key is not a safe choice: it is in use on preprod.)
     const absent = encode('stake_test', Buffer.concat([Buffer.from([0xe0]), createHash('sha256').update(`absent ${TAG}`).digest().subarray(0, 28)]));
@@ -98,7 +98,6 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       strataList: STRATA,
       hmacKey: process.env.RESEARCH_CORPUS_TEST_HMAC_KEY,
       set: ['guard=1000'],
-      caseWallets: [views.funder, views.S1],
       scamList: scamRecord,
       scamClone: scamRepo.dir,
       log: (s) => process.stderr.write(`  ${s}\n`)
@@ -143,12 +142,11 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       assert.equal(f[6].n_out, elig);
     }
 
-    // The case wallets are matched and named in no published file.
-    assert.deepEqual(b.report.case_wallets, { listed: 2, matched: 2 });
+    // The funder and S1 are named in no published file.
     for (const f of ['params.json', 'report.json', 'manifest.json', 'timings.json']) {
       for (const dir of [a.dir, b.dir]) {
         const text = readFileSync(join(dir, f), 'utf8');
-        assert.ok(!text.includes(views.funder) && !text.includes(views.S1), `${f} names no case wallet`);
+        assert.ok(!text.includes(views.funder) && !text.includes(views.S1), `${f} names no listed wallet`);
       }
     }
     // own-drawn: the listed wallets' places in the drawn samples, counted
@@ -209,7 +207,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.ok(s1, 'S1 is in the recent frame');
     assert.equal(s1.tok, false, 'S1 is never token-holding');
     assert.equal(Number(s1.n_spends_any), 0);
-    assert.equal(s1.eligible, true, 'S1, a case wallet, is eligible like any wallet');
+    assert.equal(s1.eligible, true, 'S1 is eligible like any wallet');
     const s1Samples = (await c.query('SELECT frame, kind FROM study.sample WHERE sa_id = $1', [sa.S1])).rows;
     const s1Rank = (await c.query(`SELECT k, n_ada FROM study.draw_order WHERE frame = 'recent' AND sa_id = $1`, [sa.S1])).rows[0];
     assert.ok(s1Rank, 'S1 is in the draw order');
@@ -239,11 +237,9 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(franken.length, 3);
     for (const f of franken) assert.equal(f.f, false, `no franken flag on ${f.sa_id}`);
 
-    // The reconstruction check ran with the direct read, for the sample and the
-    // case wallets.
+    // The reconstruction check ran with the direct read, for the sample.
     assert.equal(b.report.reconstruction_check.direct_valid, true);
     assert.equal(b.report.reconstruction_check.n_excluded, 0);
-    assert.equal(b.report.reconstruction_check.n_case_disagree, 0);
 
     // The profile features: f1 agrees with the frame's spend count, f5 is a
     // subset of the window's receipts, and f8 is the frame's UTxO count at

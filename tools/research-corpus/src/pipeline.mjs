@@ -30,7 +30,7 @@ import { codeVersion, hashList, TOOL_DIR } from './hash.mjs';
 import { buildManifest } from './manifest.mjs';
 import { reconstructionCheck } from './reconstruction-check.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
-import { mainnetOptionErrors, codeManifestErrors, readStakeList, checkStakeAddresses, studyKeyFor } from './guards.mjs';
+import { mainnetOptionErrors, codeManifestErrors, studyKeyFor } from './guards.mjs';
 import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog, SIM_KEPT, isSimRunId, refuseSimRunId } from './checklog.mjs';
 import { Koios } from './koios.mjs';
 import { loadScamList, descendsFrom, fingerprintMismatches } from './scam-list.mjs';
@@ -216,7 +216,6 @@ export async function runPipeline(opts) {
     // (src/cli.mjs) names each option it passes.
     const studyKey = studyKeyFor(network, opts.studyKey, opts.studyKeyPin);
     if (finalRun && opts.snapshot && opts.snapshot !== 'rule') throw refuse('refusing: the snapshot of a run on the final freeze is fixed by rule (the last block of epoch N - 1 before its randomness stabilization cutoff); give no --snapshot');
-    const caseViews = checkStakeAddresses([...new Set([...(opts.caseWallets || []), ...(opts.casesFile ? readStakeList(opts.casesFile, 'the cases file') : [])])], '--case and --cases');
     if (live) {
       if (!HEX32.test(live.testH || '')) throw refuse('refusing: a live-fire run needs --test-h <64 lowercase hex>');
       if (!live.purpose || !live.purpose.trim()) throw refuse('refusing: a live-fire run needs --purpose');
@@ -493,9 +492,8 @@ export async function runPipeline(opts) {
     // Descriptive only: excluded policies that also hold unlisted assets.
     report.scam_screen.policies_with_unlisted_assets = (await q(client, blocks, 'scam_policy_report', runner.params)).map((r) => numRow(r, ['policy']));
     report.strata = (await q(client, blocks, 'strata_report')).map((r) => ({ ...r, ord: num(r.ord), nft_top_holders: num(r.nft_top_holders), n_recent: num(r.n_recent), n_peak: num(r.n_peak) }));
-    await runner.run('split', {}, (c) => qBound(c, blocks, 'case_wallet_load', [caseViews]));
+    await runner.run('split');
     await runner.run('sample_wallets');
-    report.case_wallets = { listed: caseViews.length, matched: num((await client.query('SELECT count(*) AS n FROM study.case_wallet')).rows[0].n) };
 
     // The reconstruction check, before anything that counts the sample.
     await runner.run('reconstruction_check_table', {}, async (c) => {
@@ -543,7 +541,7 @@ export async function runPipeline(opts) {
     await storeParam(client, runId, 'code_version', report.code_version);
     report.steps = runner.timings.map((t) => ({ name: t.name, file: t.file, ms: Math.round(t.ms), rows: t.rows }));
     const manifest = await buildManifest({ client, run, report, hmacKeyPath: opts.hmacKey, dir });
-    writeJson(join(dir, 'params.json'), { run_id: runId, network, mode, snapshot, freeze, h, windows: run.windows, settings, session, case_wallets: report.case_wallets, code_version: report.code_version, db: (await loadParams(client, runId)).db });
+    writeJson(join(dir, 'params.json'), { run_id: runId, network, mode, snapshot, freeze, h, windows: run.windows, settings, session, code_version: report.code_version, db: (await loadParams(client, runId)).db });
     writeJson(join(dir, 'report.json'), report);
     writeJson(join(dir, 'timings.json'), runner.timings);
     writeJson(join(dir, 'manifest.json'), manifest);

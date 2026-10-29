@@ -35,7 +35,7 @@ test('f5 counts receipts that consume none of the wallet\'s outputs, f8 the UTxO
     CREATE TABLE study.script_tx (tx_id bigint PRIMARY KEY);
     CREATE TABLE public.tx (id bigint PRIMARY KEY, valid_contract boolean);
     CREATE TABLE public.tx_out (id bigint PRIMARY KEY, tx_id bigint, address_has_script boolean);
-    CREATE TABLE study.sample_frame (frame text, sa_id bigint, in_sample boolean, lo bigint, hi bigint, t_start bigint, t_end bigint);
+    CREATE TABLE study.sample_frame (frame text, sa_id bigint, lo bigint, hi bigint, t_start bigint, t_end bigint);
     CREATE TABLE study.frame (frame text, sa_id bigint, n_spends bigint, n_utxo bigint);
   `);
   // Wallet 1's outputs: (id, created, consumed, script payment credential, datum).
@@ -65,12 +65,12 @@ test('f5 counts receipts that consume none of the wallet\'s outputs, f8 the UTxO
   assert.deepEqual(act, { recent: [6, 3, 2], peak: [2, 2, 0] });
 
   await db.exec(`
-    INSERT INTO study.sample_frame VALUES ('recent', 1, true, 10, 100, 9, 100), ('peak', 1, true, 1, 22, 0, 22), ('recent', 2, false, 10, 100, 9, 100);
+    INSERT INTO study.sample_frame VALUES ('recent', 1, 10, 100, 9, 100), ('peak', 1, 1, 22, 0, 22), ('recent', 2, 10, 100, 9, 100);
     INSERT INTO study.frame VALUES ('recent', 1, 2, 5), ('peak', 1, 0, 2);
   `);
   await runBlock('profile', params());
   const prof = Object.fromEntries((await rows(`SELECT frame, sa_id, n_spends, n_receipts_no_input, n_utxo_end FROM study.profile ORDER BY frame, sa_id`)).map((r) => [`${r.frame} ${r.sa_id}`, [Number(r.n_spends), Number(r.n_receipts_no_input), Number(r.n_utxo_end)]]));
-  // Wallet 2, a case wallet with no outputs, has every feature at zero.
+  // Wallet 2, a sampled wallet with no outputs, has every feature at zero.
   assert.deepEqual(prof, { 'peak 1': [0, 2, 2], 'recent 1': [2, 3, 5], 'recent 2': [0, 0, 0] });
   const check = await profileCheck();
   assert.deepEqual([check.spend_count_mismatch, check.receipt_count_mismatch, check.utxo_count_mismatch].map(Number), [0, 0, 0]);

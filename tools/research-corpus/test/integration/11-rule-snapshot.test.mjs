@@ -8,9 +8,8 @@
 // block: the recent window ends there, the reconstruction check runs the
 // reference query and the life table and skips the direct read (defined at the
 // tip only), the shapes seeded before the snapshot land where T10 puts them,
-// and the published reconstruction check counts name no case wallet. own-drawn
-// reads the finished run. This replaces the study tables T10 left; T14 runs
-// after it.
+// and the reconstruction check counts are right. own-drawn reads the finished
+// run. This replaces the study tables T10 left; T14 runs after it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,7 +34,6 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
       strataList: STRATA,
       hmacKey: process.env.RESEARCH_CORPUS_TEST_HMAC_KEY,
       set: ['guard=1000'],
-      caseWallets: [views.funder, views.S1],
       log: (s) => process.stderr.write(`  ${s}\n`)
     });
     const n = r.report.freeze.draw.n;
@@ -49,11 +47,10 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
     const t = (await q(c, blocks, 't_of_block', { block_id: { type: 'int', value: Number(want.id) } }))[0].t;
     assert.equal(Number(r.report.windows.recent.hi), Number(t));
     // The reconstruction check: two implementations, every sampled wallet
-    // agreeing; the published counts carry no case-wallet figure.
+    // agreeing.
     assert.equal(r.report.reconstruction_check.direct_valid, false);
     assert.equal(r.report.reconstruction_check.n_excluded, 0);
-    assert.ok('n_case_wallets' in r.report.reconstruction_check);
-    assert.ok(!('n_case_wallets' in r.manifest.reconstruction_check) && !('n_case_disagree' in r.manifest.reconstruction_check));
+    assert.ok(!('n_case_wallets' in r.report.reconstruction_check) && !('n_case_disagree' in r.report.reconstruction_check));
     // The shapes seeded before the snapshot.
     const row = async (id) => (await c.query(`SELECT tok, ge100 FROM study.frame WHERE frame = 'recent' AND sa_id = $1`, [id])).rows[0];
     const s3 = await row(await saIdOf(c, views.S3));

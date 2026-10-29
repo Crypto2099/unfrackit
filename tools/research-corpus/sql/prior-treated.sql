@@ -121,5 +121,5 @@ SELECT f.frame,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM study.prior_evolution p WHERE p.sa_id = f.sa_id
                                        AND p.tx BETWEEN f.lo AND f.hi)) AS evolution_in_window
   FROM study.sample_frame f
- WHERE f.in_sample AND NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree)
+ WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree)
  GROUP BY f.frame ORDER BY f.frame DESC;

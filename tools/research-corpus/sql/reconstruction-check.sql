@@ -47,20 +47,18 @@ UPDATE study.sample s SET reconstruction_excluded = NOT k.agree FROM study.recon
 -- @query pointer_wallets
 SELECT count(DISTINCT t.sa_id) AS n_wallets_with_pointer_outputs
   FROM study.txo t
-  JOIN study.sample_wallet w ON w.sa_id = t.sa_id AND w.in_sample
+  JOIN study.sample_wallet w ON w.sa_id = t.sa_id
   JOIN public.tx_out o ON o.id = t.tx_out_id
  WHERE o.address ~ '^addr(_test)?1[g2]';
 
 -- @query reconstruction_check_counts
-SELECT count(*) FILTER (WHERE w.in_sample) AS n_wallets,
-       count(*) FILTER (WHERE w.in_sample AND k.agree) AS n_agree,
-       count(*) FILTER (WHERE w.in_sample AND NOT k.agree) AS n_excluded,
-       count(*) FILTER (WHERE w.in_sample AND k.d_ref <> k.d_life) AS n_ref_life_differ,
-       count(*) FILTER (WHERE w.in_sample AND k.direct_valid AND k.d_life <> k.d_direct) AS n_life_direct_differ,
+SELECT count(*) AS n_wallets,
+       count(*) FILTER (WHERE k.agree) AS n_agree,
+       count(*) FILTER (WHERE NOT k.agree) AS n_excluded,
+       count(*) FILTER (WHERE k.d_ref <> k.d_life) AS n_ref_life_differ,
+       count(*) FILTER (WHERE k.direct_valid AND k.d_life <> k.d_direct) AS n_life_direct_differ,
        bool_and(k.direct_valid) AS direct_valid,
-       sum(k.n_life) FILTER (WHERE w.in_sample) AS n_utxo_total,
-       count(*) FILTER (WHERE NOT w.in_sample) AS n_case_wallets,
-       count(*) FILTER (WHERE NOT w.in_sample AND NOT k.agree) AS n_case_disagree
+       sum(k.n_life) AS n_utxo_total
   FROM study.reconstruction_check k JOIN study.sample_wallet w ON w.sa_id = k.sa_id;
 
 -- @query sample_wallet_ids

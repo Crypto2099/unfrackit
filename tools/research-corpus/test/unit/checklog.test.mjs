@@ -91,7 +91,6 @@ test("sanitize's list of the code's names is the code's", () => {
 
 test('the logged command names no wallet', () => {
   assert.equal(redactCommand(['source-check', '--live-fire', '--stake', 'stake1abc', '--node-stake', 'stake1def', '--purpose', 'p']), 'source-check --live-fire --stake <address> --node-stake <address> --purpose p');
-  assert.equal(redactCommand(['run', '--case', 'stake1abc', '--cases', '/path/cases.txt']), 'run --case <address> --cases /path/cases.txt');
 });
 
 test('a run resumed to a clean finish settles its earlier starts, kept output and failed deletions', () => {
