@@ -23,7 +23,8 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { q, explain } from './db.mjs';
-import { makeContext, resolveWallets } from './commands.mjs';
+import { makeContext, resolveWallets, allowedWallets, refuseOutside } from './commands.mjs';
+import { Refusal } from './db.mjs';
 import { lifeRow, loadExtras, reencode, loadLife } from './wallet.mjs';
 import { valueSize, assetMap, mergeAssets } from './value.mjs';
 import { minAdaForOutput } from './csl.mjs';
@@ -41,14 +42,25 @@ async function studyReadable(ctx) {
 
 // The wallet set: --wallets/--wallet, or the extraction's set when its study
 // tables are readable (--from-study), or every key stake credential with an
-// output (--all-wallets, for a test network).
-async function walletSet(ctx, opts, studyQuery) {
+// output (--all-wallets, for a test network). Under a scope (commands.mjs
+// allowedWallets): --all-wallets is refused; wallets named must be ones the
+// scope allows; a live-fire run takes no --from-study; and on mainnet after
+// the final freeze the --from-study set is the gate's run's own (its tables
+// carry the run's mark): for near-cap the union of its random samples, which
+// lies in study.sample, and for the census its eligible recent-frame wallets,
+// the census population H-8 names, which this restriction leaves as it is.
+export async function walletSet(ctx, opts, studyQuery) {
+  const scope = ctx.scope || null;
+  if (scope && opts.allWallets) throw new Refusal(scope.path === 'live-fire' ? 'refusing: a live-fire run reads only the wallets its extraction run picked; it takes no --all-wallets' : 'refusing: after the final freeze a command reads on mainnet only wallets of the study sample; --all-wallets is for a test network');
+  if (scope && scope.path === 'live-fire' && opts.fromStudy) throw new Refusal('refusing: a live-fire run reads the wallets its extraction run picked; it takes no --from-study');
   if (opts.fromStudy) {
     if (!(await studyReadable(ctx))) throw new Error('--from-study: the study tables are not readable by this role');
-    return { ids: (await q(ctx.client, ctx.blocks, studyQuery)).map((r) => Number(r.id)), source: 'study' };
+    const ids = (await q(ctx.client, ctx.blocks, studyQuery)).map((r) => Number(r.id));
+    if (scope && studyQuery !== 'study_recent_eligible') refuseOutside(await allowedWallets(ctx), ids, scope);
+    return { ids, source: 'study' };
   }
   if (opts.allWallets) return { ids: (await q(ctx.client, ctx.blocks, 'key_wallets_with_outputs', { t: { type: 'int', value: ctx.snapshot.tx } })).map((r) => Number(r.id)), source: 'all' };
-  return { ids: await resolveWallets(ctx, opts), source: 'given' };
+  return { ids: await resolveWallets(ctx, opts, await allowedWallets(ctx)), source: 'given' };
 }
 
 async function assetsOf(ctx, ids) {

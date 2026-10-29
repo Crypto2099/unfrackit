@@ -18,7 +18,8 @@
 // everywhere.
 //
 // The gate. A mainnet connection names its path, and the calling code chooses
-// it, never a command-line option. One path exists, `final-freeze`: the
+// it, never a command-line option. Two paths exist. `live-fire`, before the
+// final freeze, is described below. `final-freeze`: the
 // extraction tool's study run for the final freeze has finished. The gate
 // reads the record that tool's driver writes once it has verified the final
 // freeze record, the code and the check log (tools/research-corpus,
@@ -35,13 +36,29 @@
 // The grant is that run's snapshot and windows, in the form an extraction
 // run's params.json gives them (windows.mjs fromExtractionRun); every command
 // on the connection uses them (commands.mjs makeContext), and a --snapshot or
-// --extraction-run naming anything else is refused. Every other mainnet
-// connection is refused.
+// --extraction-run naming anything else is refused. Every wallet a command on
+// the connection reads must be in that run's sample, study.sample
+// (commands.mjs allowedWallets), except the census's population, the run's
+// eligible recent-frame wallets (reports.mjs walletSet).
+//
+// `live-fire`: the simulator's live-fire run (study/live-fire.mjs), before the
+// final freeze, on the wallets an extraction live-fire run picked. The gate
+// reads that run's pick again (study/checklog.mjs readPick): its live-fire
+// start entry in the mainnet check log (the extraction writes one only after
+// its gate has found the hypotheses record on chain), its end entry that kept
+// the pick, no cleanup since, and sim/wallets.json; the pick must be the one
+// the run read. Then no study run of the final freeze may be recorded
+// (study.run, study.param): after the final freeze, mainnet wallets are read
+// only through that run. The grant is the pick: its snapshot block, and its
+// wallets as the only wallets a command may read.
+//
+// Every other mainnet connection is refused.
 
 import pg from 'pg';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { fill, loadAll } from './sqlfile.mjs';
+import { readPick } from '../study/checklog.mjs';
 
 export class Refusal extends Error {}
 
@@ -75,8 +92,9 @@ function assertPrivate(path) {
 }
 
 // opts: host, port, database, user, expectNetwork, blocks (the loaded SQL).
-// gate: the mainnet path the calling code runs under (see above).
-export async function connect(opts = {}, { gate = 'final-freeze' } = {}) {
+// gate: the mainnet path the calling code runs under (see above); liveFire:
+// on the live-fire path, the pick the run read.
+export async function connect(opts = {}, { gate = 'final-freeze', liveFire = null } = {}) {
   const cfg = {
     host: opts.host || process.env.PGHOST || '127.0.0.1',
     port: Number(opts.port || process.env.PGPORT || 5432),
@@ -98,7 +116,7 @@ export async function connect(opts = {}, { gate = 'final-freeze' } = {}) {
   });
   await client.connect();
   try {
-    await checkConnection(client, opts.blocks || loadAll(), { expectNetwork: opts.expectNetwork, gate });
+    await checkConnection(client, opts.blocks || loadAll(), { expectNetwork: opts.expectNetwork, gate, liveFire });
   } catch (e) {
     await client.end().catch(() => {});
     throw e;
@@ -110,7 +128,7 @@ export async function connect(opts = {}, { gate = 'final-freeze' } = {}) {
 // client.network, client.dbsyncVersion and, on mainnet, client.gate (the
 // grant). Exported for the tests, which give it a client whose query layer is
 // stubbed.
-export async function checkConnection(client, blocks, { expectNetwork = null, gate = 'final-freeze' } = {}) {
+export async function checkConnection(client, blocks, { expectNetwork = null, gate = 'final-freeze', liveFire = null } = {}) {
   await client.query('SET search_path = public, pg_catalog');
   await client.query('SET default_transaction_read_only = on');
   const meta = (await client.query('SELECT network_name, version::text AS version FROM public.meta LIMIT 1')).rows[0];
@@ -121,17 +139,31 @@ export async function checkConnection(client, blocks, { expectNetwork = null, ga
   if (expectNetwork && meta.network_name !== expectNetwork) {
     throw new Refusal(`refusing: the database is ${meta.network_name}, not ${expectNetwork}`);
   }
-  if (meta.network_name === 'mainnet') client.gate = await mainnetGate((name, params) => q(client, blocks, name, params), gate);
+  if (meta.network_name === 'mainnet') client.gate = await mainnetGate((name, params) => q(client, blocks, name, params), gate, { liveFire });
   return client;
 }
 
-export const MAINNET_PATHS = Object.freeze(['final-freeze']);
+export const MAINNET_PATHS = Object.freeze(['final-freeze', 'live-fire']);
 
 // The gate: the grant for a mainnet connection on `path`, or a Refusal.
 // read(name, params) runs a named query of sql/gate.sql.
-export async function mainnetGate(read, path = 'final-freeze') {
+export async function mainnetGate(read, path = 'final-freeze', { liveFire = null } = {}) {
   if (path === 'final-freeze') return finalFreezeGrant(read);
-  throw new Refusal(`refusing: mainnet is read only after the final freeze; there is no mainnet path ${path}`);
+  if (path === 'live-fire') return liveFireGrant(read, liveFire);
+  throw new Refusal(`refusing: mainnet is read only after the final freeze, or before it by a live-fire run; there is no mainnet path ${path}`);
+}
+
+// The pre-freeze path: the pick, read again, and no final freeze recorded.
+export async function liveFireGrant(read, liveFire) {
+  const no = (why) => new Refusal(`refusing: before the final freeze mainnet is read only by a live-fire run on the wallets an extraction live-fire run picked; ${why}`);
+  if (!liveFire || typeof liveFire.runId !== 'string') throw no('no extraction run\'s pick was given');
+  const pick = readPick('mainnet', liveFire.runId);
+  if (pick.sha256 !== liveFire.sha256) throw no('the pick differs from the one the run read');
+  const readable = (await read('gate_runs_readable'))[0];
+  if (!readable || !readable.readable) throw no('this role cannot read the extraction\'s run records (study.run, study.param), so whether the final freeze is recorded is unknown');
+  const runs = await read('gate_final_freeze_runs');
+  if (runs.length) throw no(`the study run ${runs[0].run_id} of the final freeze is recorded; after the final freeze mainnet wallets are read only through that run`);
+  return { path: 'live-fire', pick };
 }
 
 const STUDY_TABLES = Object.freeze(['frame', 'sample', 'franken', 'txo', 'txo_asset', 'asset']);

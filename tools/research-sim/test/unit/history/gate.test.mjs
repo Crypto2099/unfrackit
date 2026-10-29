@@ -4,9 +4,11 @@
 // The mainnet gate (src/history/db.mjs), with the query layer stubbed: a
 // client whose query() answers db-sync's meta and the gate's three reads
 // (sql/gate.sql) from a constructed run record, and refuses any other
-// statement, so a test fails if the gate reads anything else. Then the run a
-// grant fixes and the options that would name another
-// (src/history/commands.mjs runOf), and EXPLAIN ANALYZE on mainnet.
+// statement, so a test fails if the gate reads anything else; the live-fire
+// path with an extraction run's pick written to a temporary
+// RESEARCH_CORPUS_HOME. Then the run a grant fixes and the options that would
+// name another (src/history/commands.mjs runOf), and EXPLAIN ANALYZE on
+// mainnet.
 // Synthetic run ids and block values only.
 
 import { test } from 'node:test';
@@ -17,6 +19,8 @@ import { tmpdir } from 'node:os';
 import { checkConnection, mainnetGate, Refusal, runMark, explainAnalyze } from '../../../src/history/db.mjs';
 import { loadAll } from '../../../src/history/sqlfile.mjs';
 import { runOf } from '../../../src/history/commands.mjs';
+import { readPick } from '../../../src/study/checklog.mjs';
+import { seedPick } from '../../lib/live-fire.mjs';
 
 const blocks = loadAll();
 const HASH = 'ab'.repeat(32);
@@ -119,8 +123,57 @@ test('mainnet after the study run of the final freeze has finished: the grant is
 });
 
 test('mainnet on any other path is refused', async () => {
-  await assert.rejects(checkConnection(fakeClient(), blocks, { gate: 'live-fire' }), (e) => e instanceof Refusal && /there is no mainnet path live-fire/.test(e.message));
+  await assert.rejects(checkConnection(fakeClient(), blocks, { gate: 'debug' }), (e) => e instanceof Refusal && /there is no mainnet path debug/.test(e.message));
   await assert.rejects(mainnetGate(async () => [], 'pre-freeze'), /no mainnet path pre-freeze/);
+});
+
+test('the live-fire path: the pick read again, and no study run of the final freeze recorded', async () => {
+  const saved = process.env.RESEARCH_CORPUS_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'research-sim-gate-lf-'));
+  process.env.RESEARCH_CORPUS_HOME = dir;
+  try {
+    seedPick('mainnet', 'live-1');
+    const pick = readPick('mainnet', 'live-1');
+    // Passes with no final-freeze run recorded; the grant is the pick.
+    const c = fakeClient({ runs: [] });
+    await checkConnection(c, blocks, { expectNetwork: 'mainnet', gate: 'live-fire', liveFire: pick });
+    assert.deepEqual(c.seen, ['readable', 'runs']);
+    assert.deepEqual(c.gate, { path: 'live-fire', pick });
+    // Refused once the final freeze's study run is recorded, finished or not,
+    // and when the run records cannot be read.
+    for (const runs of [[record()], [record({ finished: null })]]) {
+      await assert.rejects(checkConnection(fakeClient({ runs }), blocks, { gate: 'live-fire', liveFire: pick }), (e) => e instanceof Refusal && /the study run study-1 of the final freeze is recorded/.test(e.message));
+    }
+    await refusedOn(fakeClient({ readable: false, runs: [] }), pick, /cannot read the extraction's run records/);
+    // Without a pick, or with another than the one on disk, before any query.
+    for (const [lf, re] of [[null, /no extraction run's pick was given/], [{ ...pick, sha256: '00'.repeat(32) }, /differs from the one the run read/], [{ ...pick, runId: 'live-2' }, /extraction run live-2 holds no kept pick/]]) {
+      const c2 = fakeClient({ runs: [] });
+      await refusedOn(c2, lf, re);
+      assert.deepEqual(c2.seen, []);
+    }
+    // A pick whose files are gone is refused before any query.
+    rmSync(join(dir, 'runs'), { recursive: true });
+    const c3 = fakeClient({ runs: [] });
+    await refusedOn(c3, pick, /has no sim\/wallets.json/);
+    assert.deepEqual(c3.seen, []);
+  } finally {
+    if (saved === undefined) delete process.env.RESEARCH_CORPUS_HOME;
+    else process.env.RESEARCH_CORPUS_HOME = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+async function refusedOn(c, liveFire, re) {
+  await assert.rejects(checkConnection(c, blocks, { gate: 'live-fire', liveFire }), (e) => e instanceof Refusal && re.test(e.message));
+  assert.equal(c.others.length, 0);
+}
+
+test('a live-fire scope fixes the block: --snapshot only the pick\'s hash, no --extraction-run', () => {
+  const scope = { path: 'live-fire', pick: { snapshot: { block_no: 4000, hash: HASH } } };
+  assert.equal(runOf(scope, { snapshot: HASH }), null);
+  assert.equal(runOf(scope, { snapshot: HASH.toUpperCase() }), null);
+  for (const o of [{}, { snapshot: 'tip' }, { snapshot: '4000' }, { snapshot: 'ef'.repeat(32) }]) assert.throws(() => runOf(scope, o), (e) => e instanceof Refusal && /no other/.test(e.message));
+  assert.throws(() => runOf(scope, { snapshot: HASH, extractionRun: '/x/params.json' }), /takes no --extraction-run/);
 });
 
 test('a grant fixes the run: --snapshot and --extraction-run may only name it', () => {

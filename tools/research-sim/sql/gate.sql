@@ -5,8 +5,9 @@
 -- of its study run on the final freeze, as its driver writes it
 -- (tools/research-corpus, sql/00-study-schema.sql: study.run, and
 -- study.param's rows `mode`, `freeze`, `snapshot`, `windows` and `finished`),
--- and the run mark on each study table this code reads. Nothing here reads a
--- wallet, and none of it creates anything.
+-- and the run mark on each study table this code reads. The live-fire path
+-- reads the first two only, to refuse once a run of the final freeze is
+-- recorded. Nothing here reads a wallet, and none of it creates anything.
 
 -- Whether this role can read the extraction's run records. to_regclass itself
 -- needs USAGE on the schema, so it runs only when the role has it.

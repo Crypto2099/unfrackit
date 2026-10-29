@@ -6,6 +6,8 @@
 //
 // Every command connects read only, reads mainnet only through the gate
 // (db.mjs), and writes only under the private run directory (paths.mjs).
+// Under a grant of the gate, and in a live-fire run on any network, a command
+// reads only the wallets the grant allows (allowedWallets).
 
 import { readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,8 +60,15 @@ export function refuseWallets(wallets, samples, analysisFreezeTx) {
 // The run a mainnet grant fixes, with the options that would name another
 // refused: a --snapshot other than the grant's block (by id or hash), and an
 // --extraction-run other than the grant's run or snapshot. Without a grant
-// (a test network), the --extraction-run file's run, or null.
+// (a test network), the --extraction-run file's run, or null. A live-fire
+// run's scope (its grant on mainnet) fixes no run: the snapshot must be the
+// pick's block, given by hash, and no --extraction-run is taken; null.
 export function runOf(grant, opts) {
+  if (grant && grant.path === 'live-fire') {
+    if (opts.extractionRun) throw new Refusal('refusing: a live-fire run reads the block its extraction run picked at; it takes no --extraction-run file');
+    if (String(opts.snapshot).toLowerCase() !== grant.pick.snapshot.hash) throw new Refusal('refusing: a live-fire run reads the block its extraction run picked at, and no other');
+    return null;
+  }
   const given = opts.extractionRun ? fromExtractionRun(opts.extractionRun) : null;
   if (!grant) return given;
   const g = grant.run;
@@ -73,18 +82,22 @@ export function runOf(grant, opts) {
 }
 
 // gate: the mainnet path the calling code runs under (db.mjs connect).
-export async function makeContext(opts, { gate } = {}) {
+// liveFire: the pick of a live-fire run (study/checklog.mjs readPick), set
+// only by the live-fire command's code: the connection takes the gate's
+// live-fire path on mainnet, and on any network the command reads only the
+// pick's wallets at the pick's block and no study table.
+export async function makeContext(opts, { gate, liveFire = null } = {}) {
   const blocks = loadAll();
-  const client = await connect({ expectNetwork: opts.expectNetwork, blocks }, gate ? { gate } : {});
+  const client = await connect({ expectNetwork: opts.expectNetwork, blocks }, liveFire ? { gate: 'live-fire', liveFire } : gate ? { gate } : {});
   try {
-    return await contextOn(client, blocks, opts);
+    return await contextOn(client, blocks, opts, liveFire);
   } catch (e) {
     await client.end().catch(() => {});
     throw e;
   }
 }
 
-async function contextOn(client, blocks, opts) {
+async function contextOn(client, blocks, opts, liveFire = null) {
   const settings = settingsWith(parseSets(list(opts.set)));
   const ctx = { client, blocks, settings, network: client.network, datums: new Map(), scripts: new Map(), nativeRefs: new Map(), resolved: new Map(), epochParams: new Map() };
   if (opts.treatment) {
@@ -100,16 +113,62 @@ async function contextOn(client, blocks, opts) {
   }
   ctx.bytes = new TxBytes({ client, blocks, mode, immutable });
   ctx.gate = client.gate;
-  ctx.run = runOf(client.gate, opts);
+  ctx.scope = scopeOf(client, liveFire);
+  ctx.run = runOf(ctx.scope, opts);
   if (ctx.run && ctx.run.network !== client.network) throw new Error(`the extraction run is ${ctx.run.network}, the database ${client.network}`);
   ctx.snapshot = ctx.run ? await snapshotBlock(ctx, String(ctx.run.snapshot.id)) : await snapshotBlock(ctx, opts.snapshot);
   if (ctx.run && (ctx.snapshot.hash !== ctx.run.snapshot.hash || ctx.snapshot.tx !== ctx.run.snapshot.tx)) throw new Error('the extraction run\'s snapshot differs from the database\'s');
+  if (ctx.scope && ctx.scope.path === 'live-fire' && (ctx.snapshot.hash !== ctx.scope.pick.snapshot.hash || ctx.snapshot.no !== ctx.scope.pick.snapshot.block_no)) throw new Error('the pick\'s snapshot block differs from the database\'s');
   await epochParams(ctx, [ctx.snapshot.epoch]);
   ctx.params = paramsFromRow(client.network, ctx.epochParams.get(ctx.snapshot.epoch));
   return ctx;
 }
 
-export async function resolveWallets(ctx, opts) {
+// What restricts the wallets a connection's commands read: the gate's grant
+// on mainnet; a live-fire run's pick on a test network; or nothing (null).
+export function scopeOf(client, liveFire) {
+  if (client.gate) return client.gate;
+  if (!liveFire) return null;
+  if (liveFire.network !== client.network) throw new Refusal(`refusing: the live-fire pick is for ${liveFire.network}, the database ${client.network}`);
+  return { path: 'live-fire', pick: liveFire };
+}
+
+// The wallets a scope allows, by stake-credential id, or null when nothing
+// restricts them. Final freeze: the sampled wallets of the gate's run
+// (study.sample, whose mark the gate checked), from `samples` when the caller
+// has read them. Live-fire: the pick's wallets, each looked up by its stake
+// address.
+export async function allowedWallets(ctx, samples = undefined) {
+  const s = ctx.scope;
+  if (!s) return null;
+  if (s.path === 'live-fire') {
+    const ids = new Set();
+    for (const w of s.pick.wallets) {
+      const r = (await q(ctx.client, ctx.blocks, 'wallet_by_view', { view: { type: 'text', value: w.stake_address } }))[0];
+      if (!r) throw new Error('a wallet of the live-fire pick is not in the database');
+      ids.add(Number(r.id));
+    }
+    return ids;
+  }
+  const m = samples !== undefined ? samples : await studySamples(ctx);
+  if (!m) throw new Refusal('refusing: after the final freeze every wallet read on mainnet must be in the study sample, and this role cannot read study.sample');
+  return new Set(m.keys());
+}
+
+// Refuses wallets outside what a scope allows, before anything of them is
+// read. The message names no wallet.
+export function refuseOutside(allowed, wallets, scope) {
+  if (!allowed) return;
+  if (wallets.every((sa) => allowed.has(sa))) return;
+  throw new Refusal(scope && scope.path === 'live-fire'
+    ? 'refusing: a live-fire run reads only the wallets its extraction run picked, and a wallet named is not one of them'
+    : 'refusing: after the final freeze a command reads on mainnet only wallets of the study sample (study.sample), and a wallet named is not in it');
+}
+
+// The wallets named by --wallet and --wallets, as stake-credential ids. A
+// stake address is looked up to learn its id; with `allowed`, every id must
+// be in it before any other row of a wallet is read.
+export async function resolveWallets(ctx, opts, allowed = null) {
   const given = [...list(opts.wallet)];
   if (opts.wallets) {
     for (const l of readFileSync(opts.wallets, 'utf8').split('\n')) {
@@ -128,6 +187,7 @@ export async function resolveWallets(ctx, opts) {
   }
   const uniq = [...new Set(ids)];
   if (!uniq.length) return [];
+  refuseOutside(allowed, uniq, ctx.scope);
   const rows = await q(ctx.client, ctx.blocks, 'wallets_by_id', { ids: { type: 'intarr', value: uniq } });
   for (const r of rows) if (r.is_script) throw new Error(`stake credential ${r.id} is a script credential; wallets are key credentials`);
   if (rows.length !== uniq.length) throw new Error('a wallet id given is not in the database');
@@ -158,7 +218,7 @@ async function studyReadable(ctx) {
 // The extraction's sample rows by wallet, when its study tables are
 // readable: { split, excluded, random, randomRecent, randomPeak }. `random` is
 // the random sample of either frame; the two frames' memberships are beside it.
-async function studySamples(ctx) {
+export async function studySamples(ctx) {
   if (!(await studyReadable(ctx))) return null;
   return samplesFromRows(await q(ctx.client, ctx.blocks, 'study_samples'));
 }
@@ -178,27 +238,43 @@ export function sampleMembership(samples, sa) {
   return { recentRandom: !!s.randomRecent, peakRandom: !!s.randomPeak };
 }
 
+// The wallets a history run reads, with the study tables' sample rows (null
+// when they are not read), after every refusal and before any wallet's
+// outputs are read. A live-fire run reads no study table and takes no
+// --from-study. Under a scope, every wallet must be one it allows; then the
+// extraction's own refusals (refuseWallets).
+export async function historyWallets(ctx, opts) {
+  const live = !!ctx.scope && ctx.scope.path === 'live-fire';
+  if (live && opts.fromStudy) throw new Refusal('refusing: a live-fire run reads the wallets its extraction run picked; it takes no --from-study');
+  const samples = live ? null : await studySamples(ctx);
+  const allowed = await allowedWallets(ctx, samples);
+  let wallets;
+  if (opts.fromStudy) {
+    if (!samples) throw new Error('--from-study: the study tables are not readable by this role');
+    wallets = [...samples].filter(([, s]) => opts.fromStudy === 'all' || s.random).map(([id]) => id);
+    refuseOutside(allowed, wallets, ctx.scope);
+  } else {
+    wallets = await resolveWallets(ctx, opts, allowed);
+  }
+  refuseWallets(wallets, samples, opts.analysisFreezeTx);
+  return { wallets, samples };
+}
+
 // History files for each wallet and window. A wallet the extraction's
 // reconstruction check excluded is refused; a confirmation-split wallet is
 // read only for a run given the transaction of the record that freezes the
 // analysis scripts (--analysis-freeze-tx), and the run records it. With
 // --from-study the wallets are the extraction's random sample (`random`) or
 // every sampled wallet (`all`).
-export async function cmdHistory(opts) {
+// scope.liveFire: the pick of a live-fire run, set by the live-fire command's
+// code (makeContext).
+export async function cmdHistory(opts, scope = {}) {
   if (!opts.runId) throw new Error('--run-id is required');
-  const ctx = await makeContext(opts);
+  const ctx = await makeContext(opts, scope);
   if (!ctx.CSL) throw new Error('history needs --treatment and --treatment-pins (cardano-serialization-lib comes only through the treatment)');
   try {
-    const samples = await studySamples(ctx);
-    let wallets;
-    if (opts.fromStudy) {
-      if (!samples) throw new Error('--from-study: the study tables are not readable by this role');
-      wallets = [...samples].filter(([, s]) => opts.fromStudy === 'all' || s.random).map(([id]) => id);
-    } else {
-      wallets = await resolveWallets(ctx, opts);
-    }
+    const { wallets, samples } = await historyWallets(ctx, opts);
     const splitOf = (sa) => (samples && samples.has(sa) ? samples.get(sa).split : null);
-    refuseWallets(wallets, samples, opts.analysisFreezeTx);
     const frames = list(opts.window).length ? list(opts.window) : ['recent'];
     const dir = historyDir(ctx.network, opts.runId);
     const summary = {
