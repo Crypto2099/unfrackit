@@ -10,6 +10,7 @@ import { parseArgs, cmdHistory } from './history/commands.mjs';
 import { cmdCensus, cmdNearCap, cmdCollateral, cmdBatteryPools } from './history/reports.mjs';
 import { cmdReplay, cmdBattery } from './replay/commands.mjs';
 import { cmdFidelity } from './fidelity/fidelity.mjs';
+import { cmdStudy } from './study/study.mjs';
 
 const COMMANDS = {
   hash: async () => process.stdout.write(formatHashList()),
@@ -21,6 +22,7 @@ const COMMANDS = {
   replay: async (o) => report(await cmdReplay(o)),
   battery: async (o) => report(await cmdBattery(o)),
   fidelity: async (o) => report(await cmdFidelity(o)),
+  study: async (o) => report(await cmdStudy(o)),
   help: async () => process.stdout.write(HELP)
 };
 
@@ -35,6 +37,7 @@ const HELP = `research-sim <command> [options]
   replay           a run plan's arms replayed over history files or the shapes' synthetic streams
   battery          the standard and H-10 batteries at the snapshot over snapshot files or the shapes
   fidelity         observed spends that run no script rebuilt by the ledger kit, their minimum fees against the observed ones
+  study            the study's run: a plan's stages in order under one run id, resumable
 
 See the README for the options of each.
 `;

@@ -298,9 +298,11 @@ function observedStates(lines, onIntent) {
 // fungible asset sent, the units sent over the wallet's holding just before
 // the spend. Only exploration-split wallets' recent-window files are read,
 // unless the files carry no split (a test network), which the output says.
+// --history-run names the run whose history files are read, when it is not
+// the run written to (a study run's stages, study/study.mjs).
 export async function cmdBatteryPools(opts) {
   if (!opts.runId || !opts.network) throw new Error('--run-id and --network are required');
-  const dir = historyDir(opts.network, opts.runId);
+  const dir = historyDir(opts.network, opts.historyRun || opts.runId);
   if (!existsSync(dir)) throw new Error('the run has no history directory');
   const files = readdirSync(dir).filter((f) => f.endsWith('.recent.jsonl')).sort();
   const t1 = [];
@@ -333,7 +335,7 @@ export async function cmdBatteryPools(opts) {
     });
   }
   t1.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const pools = { network: opts.network, runId: opts.runId, files: files.length, used, withoutSplit: noSplit, skippedConfirmation: skipped, t1Amounts: t1.map(String), t5Shares: t5.map(([u, b]) => [u, b]) };
+  const pools = { network: opts.network, runId: opts.runId, historyRun: opts.historyRun || opts.runId, files: files.length, used, withoutSplit: noSplit, skippedConfirmation: skipped, t1Amounts: t1.map(String), t5Shares: t5.map(([u, b]) => [u, b]) };
   writeJson(join(runDir(opts.network, opts.runId), 'battery-pools.json'), pools);
   return { print: { command: 'battery-pools', files: files.length, used, withoutSplit: noSplit, t1: t1.length, t5: t5.length } };
 }

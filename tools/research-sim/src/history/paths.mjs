@@ -24,10 +24,14 @@ export function ensureDir(dir) {
   return dir;
 }
 
+// A run id names one directory, or a stage of a study run as
+// <study run id>/<stage> (study/study.mjs), a directory inside the study
+// run's.
 export function runDir(network, runId) {
   if (!/^[a-z]+$/.test(network)) throw new Error(`bad network name ${network}`);
-  if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`bad run id ${runId}`);
-  return join(homeDir(), network, runId);
+  const parts = String(runId).split('/');
+  if (parts.length > 2 || parts.some((p) => !/^[A-Za-z0-9._-]+$/.test(p) || p === '.' || p === '..')) throw new Error(`bad run id ${runId}`);
+  return join(homeDir(), network, ...parts);
 }
 
 export const historyDir = (network, runId) => join(runDir(network, runId), 'history');

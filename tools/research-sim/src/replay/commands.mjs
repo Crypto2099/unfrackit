@@ -72,6 +72,20 @@ function parseOracleSettings(v) {
   }));
 }
 
+// The frozen pools of a --pools file: battery-pools.json as the battery-pools
+// command writes it (t1Amounts, t5Shares), or a file giving t1 and t5. A file
+// with neither form, or with both, is refused.
+export function poolsOf(p) {
+  const written = 't1Amounts' in p || 't5Shares' in p;
+  const given = 't1' in p || 't5' in p;
+  if (written === given) throw new Error('--pools: the file must give either t1Amounts and t5Shares (battery-pools.json) or t1 and t5');
+  const t1 = written ? p.t1Amounts : p.t1;
+  const t5 = written ? p.t5Shares : p.t5;
+  if (!Array.isArray(t1) || !Array.isArray(t5)) throw new Error('--pools: the T1 amounts and T5 shares must be arrays');
+  if (!t5.every((x) => Array.isArray(x) && x.length === 2)) throw new Error('--pools: each T5 share is [units sent, units held]');
+  return { t1: t1.map(BigInt), t5: t5.map((x) => x.map(BigInt)) };
+}
+
 async function setup(opts, command) {
   if (!opts.treatment) throw new Error('--treatment <dir> names the treatment directory');
   const pinsPath = pinsPathOf(opts);
@@ -123,7 +137,7 @@ export async function cmdBattery(opts) {
   // The shapes use the fixed test values of battery/battery.mjs; a wallet's
   // battery draws from the frozen pools, which must be given.
   if (!opts.shapes && !opts.pools) throw new Error('--pools <file> names the frozen T1 amounts and T5 shares the battery draws from');
-  const pools = opts.pools ? JSON.parse(readFileSync(opts.pools, 'utf8')) : undefined;
+  const pools = opts.pools ? poolsOf(JSON.parse(readFileSync(opts.pools, 'utf8'))) : undefined;
   // The oracle is off unless asked for: it takes up to a minute per spend
   // and change policy.
   const oracleSettingsUsed = opts.oracle ? oracleSettings(parseOracleSettings(opts.oracleSettings)) : null;
@@ -132,7 +146,7 @@ export async function cmdBattery(opts) {
   let oracle = null;
   try {
     if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: Number(opts.oracleWorkers || 1), ...(opts.oracleLimitMs ? { limitMs: Number(opts.oracleLimitMs) } : {}), settings: oracleSettingsUsed });
-    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools: pools && { t1: pools.t1.map(BigInt), t5: pools.t5.map((x) => x.map(BigInt)) }, oracle, validity: !!opts.validity });
+    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools, oracle, validity: !!opts.validity });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) });
     return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
