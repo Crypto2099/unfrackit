@@ -296,8 +296,11 @@ function observedStates(lines, onIntent) {
 // T1 amounts: per T1 intent, the coin of its requested outputs to other stake
 // credentials, as observed (before any raise). T5 shares: per T5 intent and
 // fungible asset sent, the units sent over the wallet's holding just before
-// the spend. Only exploration-split wallets' recent-window files are read,
-// unless the files carry no split (a test network), which the output says.
+// the spend. Only the recent-window files of exploration-split wallets in the
+// recent frame's random sample are read (the extraction draws that sample from
+// token-holding wallets only). A file with no split (a wallet outside the
+// extraction's samples, or a run whose study tables were not read) is read
+// and counted apart; a file with a split but no sample field is refused.
 // --history-run names the run whose history files are read, when it is not
 // the run written to (a study run's stages, study/study.mjs).
 export async function cmdBatteryPools(opts) {
@@ -310,13 +313,21 @@ export async function cmdBatteryPools(opts) {
   let used = 0;
   let noSplit = 0;
   let skipped = 0;
+  let outside = 0;
   for (const f of files) {
     const lines = readFileSync(join(dir, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const h = lines[0];
-    if (h.split === null) noSplit++;
-    else if (h.split !== 'exploration') {
-      skipped++;
-      continue;
+    if (h.split === null || h.split === undefined) noSplit++;
+    else {
+      if (!h.sample || typeof h.sample.recentRandom !== 'boolean') throw new Error(`${f}: the header names a split but not the wallet's sample membership; rerun history for this run`);
+      if (h.split !== 'exploration') {
+        skipped++;
+        continue;
+      }
+      if (!h.sample.recentRandom) {
+        outside++;
+        continue;
+      }
     }
     used++;
     observedStates(lines, (it, holding) => {
@@ -335,7 +346,7 @@ export async function cmdBatteryPools(opts) {
     });
   }
   t1.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const pools = { network: opts.network, runId: opts.runId, historyRun: opts.historyRun || opts.runId, files: files.length, used, withoutSplit: noSplit, skippedConfirmation: skipped, t1Amounts: t1.map(String), t5Shares: t5.map(([u, b]) => [u, b]) };
+  const pools = { network: opts.network, runId: opts.runId, historyRun: opts.historyRun || opts.runId, files: files.length, used, skippedConfirmation: skipped, outsideRecentRandom: outside, withoutSplit: noSplit, t1Amounts: t1.map(String), t5Shares: t5.map(([u, b]) => [u, b]) };
   writeJson(join(runDir(opts.network, opts.runId), 'battery-pools.json'), pools);
-  return { print: { command: 'battery-pools', files: files.length, used, withoutSplit: noSplit, t1: t1.length, t5: t5.length } };
+  return { print: { command: 'battery-pools', files: files.length, used, confirmation: skipped, outsideRecentRandom: outside, withoutSplit: noSplit, t1: t1.length, t5: t5.length } };
 }

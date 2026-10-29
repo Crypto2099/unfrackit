@@ -152,7 +152,7 @@ export async function reconstructionCheck(ctx, saIds, block, tOfBlock, lifeOf, {
   return out;
 }
 
-// w: { saId, frame, window: { first, last, lo, hi }, snapshot: { block, tx }, split, franken (Set) or null }
+// w: { saId, frame, window: { first, last, lo, hi }, snapshot: { block, tx }, split, sample, franken (Set) or null }
 export async function walletHistory(ctx, w, out) {
   const { saId } = w;
   ctx.resolved = new Map();
@@ -257,6 +257,7 @@ export async function walletHistory(ctx, w, out) {
     wallet: saId,
     frame: w.frame,
     split: w.split || null,
+    sample: w.sample || null,
     window: isSnapshot ? null : { first: w.window.first, last: w.window.last, lo, hi, tStart },
     snapshot: w.snapshot,
     params: ctx.params,

@@ -156,12 +156,26 @@ async function studyReadable(ctx) {
 }
 
 // The extraction's sample rows by wallet, when its study tables are
-// readable: { split, excluded, random }.
+// readable: { split, excluded, random, randomRecent, randomPeak }. `random` is
+// the random sample of either frame; the two frames' memberships are beside it.
 async function studySamples(ctx) {
   if (!(await studyReadable(ctx))) return null;
+  return samplesFromRows(await q(ctx.client, ctx.blocks, 'study_samples'));
+}
+
+// The `study_samples` rows as a map by wallet.
+export function samplesFromRows(rows) {
   const m = new Map();
-  for (const r of await q(ctx.client, ctx.blocks, 'study_samples')) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random });
+  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak });
   return m;
+}
+
+// What a history header records of a wallet's sample membership: null when
+// the study tables were not read or the wallet is in none of the samples.
+export function sampleMembership(samples, sa) {
+  if (!samples || !samples.has(sa)) return null;
+  const s = samples.get(sa);
+  return { recentRandom: !!s.randomRecent, peakRandom: !!s.randomPeak };
 }
 
 // History files for each wallet and window. A wallet the extraction's
@@ -211,7 +225,7 @@ export async function cmdHistory(opts) {
         const out = new JsonLines(tmp);
         const t0 = performance.now();
         try {
-          const r = await walletHistory(ctx, { saId: sa, frame: f, window: windows.get(f), snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx, hash: ctx.snapshot.hash, slot: ctx.snapshot.slot, time: ctx.snapshot.time, epoch: ctx.snapshot.epoch }, split: splitOf(sa), franken }, out);
+          const r = await walletHistory(ctx, { saId: sa, frame: f, window: windows.get(f), snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx, hash: ctx.snapshot.hash, slot: ctx.snapshot.slot, time: ctx.snapshot.time, epoch: ctx.snapshot.epoch }, split: splitOf(sa), sample: sampleMembership(samples, sa), franken }, out);
           out.close();
           renameSync(tmp, path);
           summary.runs.push({ wallet: sa, window: f, file: name, seconds: (performance.now() - t0) / 1000, ...r });

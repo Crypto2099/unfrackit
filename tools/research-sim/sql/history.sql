@@ -276,7 +276,10 @@ SELECT u.usage,
 -- sampled wallets with their split and the reconstruction check's exclusion,
 -- the franken flags, and the life table's UTxO set at T.
 -- @query study_samples
-SELECT s.sa_id, bool_or(s.kind = 'random') AS random, max(s.split) AS split, bool_or(coalesce(s.reconstruction_excluded, false)) AS excluded
+SELECT s.sa_id, bool_or(s.kind = 'random') AS random,
+       bool_or(s.kind = 'random' AND s.frame = 'recent') AS random_recent,
+       bool_or(s.kind = 'random' AND s.frame = 'peak') AS random_peak,
+       max(s.split) AS split, bool_or(coalesce(s.reconstruction_excluded, false)) AS excluded
   FROM study.sample s
  GROUP BY s.sa_id
  ORDER BY s.sa_id;
