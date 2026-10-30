@@ -234,6 +234,78 @@ node src/cli.mjs study --plan corpus --run-id <id> --expect-network mainnet \
 
 It runs at the study's repetitions and limits, the commands' defaults, with at most 12 busy threads: 8 replay or battery workers and 4 oracle workers. Its connection (`PGHOST` and the rest) is mainnet's db-sync, through a role that can read the `study` schema.
 
+## Running jobs unattended
+
+`scripts/run-queue.mjs` runs a list of commands one after another without anyone watching, and records what happened so that a stopped list resumes where it left off. It runs commands and nothing else: the simulator's own commands enforce their thread caps and limits, and the runner adds none of its own beyond a wall-clock limit per job. It uses only Node's built-ins.
+
+The method answer limit and the replay limit are wall-clock limits, so a long run's outcomes depend on what else the machine is doing. Keep a long run the only load on the machine. A job's `idle` setting makes the runner wait until the one-minute load average has stayed low before it starts the job, and fail the job if that does not happen in time.
+
+A queue is a JSON file. This one runs a replay and then a battery on the synthetic shapes, with the output location in an env file:
+
+```
+{
+  "name": "synthetic-check",
+  "out": "queue-out",
+  "envFile": "run.env",
+  "jobs": [
+    {
+      "id": "replay",
+      "cwd": "/path/to/research-sim",
+      "argv": ["node", "src/cli.mjs", "replay", "--treatment", "/path/to/treatment", "--shapes", "all", "--plan", "test", "--run-id", "synthetic-replay", "--workers", "2"],
+      "timeoutMinutes": 120,
+      "idle": { "maxLoad1": 1.0, "forMinutes": 5, "maxWaitMinutes": 60 },
+      "pauseAfter": true
+    },
+    {
+      "id": "battery",
+      "cwd": "/path/to/research-sim",
+      "argv": ["node", "src/cli.mjs", "battery", "--treatment", "/path/to/treatment", "--shapes", "all", "--run-id", "synthetic-battery", "--workers", "2"],
+      "timeoutMinutes": 120
+    }
+  ]
+}
+```
+
+`run.env` holds lines such as `export RESEARCH_SIM_HOME=/path/to/output`. A relative `out`, `cwd` or `envFile` is resolved against the queue file's directory.
+
+The queue file is checked whole before anything runs. An unknown key, a missing or mistyped field, a duplicate id, a `cwd` that does not exist and a timeout that is not positive are refused with the path of the field, and nothing runs. The top level has `name`, `out` (the directory for the state file and logs), `jobs` and optionally `env` and `envFile`, which apply to every job. A job has:
+
+| Field | Meaning |
+|---|---|
+| `id` | A safe file name, unique in the queue. The job's logs go under `out/<id>/`. |
+| `cwd` | The directory the job runs in. |
+| `argv` | The command and its arguments, as an array. No shell is involved. |
+| `timeoutMinutes` | Required. The job's wall-clock limit. |
+| `env`, `envFile` | Environment for this job. |
+| `idle` | `maxLoad1`, `forMinutes` and `maxWaitMinutes`, all required: wait until the one-minute load average has stayed at or under `maxLoad1` for `forMinutes`, and fail the job if that has not happened within `maxWaitMinutes`. |
+| `before`, `after` | Commands (argv arrays) run in the job's directory and environment, each under the job's limit. `before` must exit 0, or the job fails without running. `after` runs once the job has started or failed, whatever the outcome, and its exit status is recorded without changing the job's status. A runner stopped by a signal does not run it. |
+| `pauseAfter` | Stop the queue once this job is done. |
+
+An env file holds lines `KEY=VALUE` or `export KEY=VALUE`, comments starting with `#`, and blank lines. A value is everything after the first `=`, taken literally: no quotes are interpreted and nothing is expanded. Any other line is refused. A job's variables override the queue's, and both override the environment the runner inherited; within one level, `env` overrides `envFile`.
+
+```
+node scripts/run-queue.mjs run <queue.json> [--continue-on-failure] [--rerun-interrupted] [--detach]
+node scripts/run-queue.mjs status <queue.json>
+```
+
+`run` takes a lock file in `out`, holding the runner's process ID, so that one runner serves a queue: it is refused while that process lives and taken over, with a message, when the process is gone. Jobs run in order, one at a time, each in its own process group with standard output and standard error in `out/<id>/attempt-<n>/stdout.log` and `stderr.log` (`before.log` and `after.log` beside them). When a job passes its limit, the whole group receives SIGTERM and, if anything is left 30 seconds later, SIGKILL, and the job is `timeout`. A non-zero exit or a signal makes it `failed`. The queue stops at the first job that is not done, unless `--continue-on-failure` is given.
+
+To resume, run the same command again. A job recorded `done` is skipped; a `failed` or `timeout` job runs again as a new attempt. `--detach` starts the runner in a new session with its output in `out/runner.log`, prints its process ID and returns. `status` prints one line per job (id, status, attempts, last duration and exit) and whether a runner holds the lock.
+
+SIGINT or SIGTERM to the runner is passed to the running job's group, the job is recorded `interrupted` and the lock is released. A job recorded as running whose process is gone (the runner was killed, or the machine restarted) is marked `interrupted` the next time the runner starts, and the runner refuses to go on until it is started with `--rerun-interrupted`, which runs the job again as a new attempt. The choice is left to the operator because a rerun can meet a half-written run directory; look at it first. If an interrupted job's process is still alive, the runner refuses to start.
+
+Exit codes of `run`:
+
+| Code | Meaning |
+|---|---|
+| 0 | Every job is done. |
+| 1 | A job failed or timed out. |
+| 2 | The queue is invalid, or another runner holds the lock. |
+| 3 | The queue paused after a `pauseAfter` job, with jobs left. |
+| 4 | An interrupted job awaits `--rerun-interrupted`, or a signal interrupted a job. |
+
+`out/state.json` is rewritten atomically (a temporary file renamed over it) at every transition, so it can be read while the queue runs. For each job it holds the status (`pending`, `waiting-idle`, `running`, `done`, `failed`, `timeout` or `interrupted`) and, for each attempt, the start and end times, the duration, the exit code or signal, the process ID, the load average at the start, the exit status of `before` and `after`, the command and the names (never the values) of the variables set from the queue. For each runner start it records the CPU model, logical core count, total memory, operating system and Node version, and, for each job directory inside a git work tree, the commit and whether tracked files had uncommitted changes or untracked files were present, so that a reader comparing timings knows what produced them.
+
 ## Live-fire checks
 
 Before the final freeze, the study's code may run on mainnet wallets to confirm that it works, under a commitment that nothing such a run shows changes the pre-registration. The extraction tool's live-fire run with `--sim-wallets` picks the wallets from its draw order under a stated test value of h, at most ten, and keeps the pick in `sim/wallets.json` in its run directory until its own `cleanup`. On mainnet it picks once. The simulator's live-fire runs use that pick:
@@ -678,6 +750,8 @@ Some unit tests build transactions with CSL and need the treatment, so they are 
 `test/unit/study/study.test.mjs` runs the `study` command over stand-in commands, which write records made from their options, without a database or the treatment. It checks each plan's stages in order with the options each is given, the fidelity stage being given only the exploration split's recent and peak files and those without a split. A run killed in its `replay-peak` stage, in a process of its own, resumes: the finished stages are skipped, that stage reruns from an empty directory, and every stage's records equal those of an uninterrupted run. A stage that throws stops the run and reruns on resume. A resume is refused when an option, an input file or the code manifest changed, and each plan's refusals are checked. A confirmation-split wallet without `--analysis-freeze-tx` stops the run at the first history stage through the history command's own check, and the corpus plan is refused without that option. The test also checks the lock, the nested run IDs, and the battery reading `battery-pools.json`. `test/unit/history/gate.test.mjs` checks the mainnet gate with the query layer stubbed. A test network is read without the gate. Mainnet is refused when the run records cannot be read, when no run of the final freeze is recorded, when two are, when it is not a finished study run, when its snapshot is not fixed by rule or its windows are missing, and when a study table carries another run's mark, each after no query but the gate's own. A finished run's snapshot and windows are the grant, any other path is refused, `--snapshot` and `--extraction-run` may name only the gate's run, and `EXPLAIN ANALYZE` stays refused. On the live-fire path, with an extraction run's pick written to a temporary `RESEARCH_CORPUS_HOME`, the grant is the pick when no run of the final freeze is recorded. The path is refused, after no query but the gate's own, once such a run is recorded (finished or not) or the run records cannot be read. It is refused before any query without a pick, with a pick other than the one on disk, or when the pick's files are gone. A live-fire scope takes only the pick's block, by hash, and no `--extraction-run`.
 
 `test/unit/history/scope.test.mjs` checks which wallets a command reads, with the query layer stubbed so that each query is seen. After the final freeze, `history` refuses a wallet outside `study.sample`, given by id or by stake address, before any of its rows is read, and reads a wallet of the sample; a confirmation-split wallet still needs `--analysis-freeze-tx`; `--from-study all` reads the sample; and a role that cannot read `study.sample` reads nothing. `census` and `near-cap` refuse `--all-wallets` and a wallet outside the sample, near-cap's `--from-study` reads the random samples and the census's reads the recent frame. In a live-fire run, `history` reads the pick's wallets and no study table, refuses any other wallet, `--from-study` and `--all-wallets`, and a pick for another network is refused. On a test network outside a live-fire run nothing is restricted.
+
+`test/unit/queue/run-queue.test.mjs` runs the job queue over small Node scripts, without the treatment or a database. It checks job order, resuming past done jobs, stopping at a failure and `--continue-on-failure`, a timeout that ends the job and a grandchild it started (and SIGKILL for a group that ignores SIGTERM), `before` and `after`, `pauseAfter`, the lock held and stale, refusal of invalid queues before anything runs, env files and their precedence, an interrupted job and `--rerun-interrupted`, SIGTERM to the runner, a state file that is never half-written, `status`, `idle` and `--detach`.
 
 `test/unit/study/live-fire.test.mjs` runs the `live-fire` command over stand-in commands and a stand-in gate, without a database, with the extraction run's entries and pick written to a temporary `RESEARCH_CORPUS_HOME`. It checks the refusals before anything is logged or queried: no pick, a pick on another network, no live-fire start entry, an end entry that kept no pick, a pick a cleanup deleted, no `sim/wallets.json`, one for another network, and one with no snapshot. A refused database gate leaves a failed query and no `sim-live-fire-start` entry, and the options are refused before the pick is read. A clean run runs its stages in order with the pick's wallets and block, one repetition, the study's limits, validity checks and the oracle. Its start and end entries carry their fields in order, its chain holds, its directory is deleted, and no stake address or count reaches the log or the print. The three checks follow a validity failure, a replay at its limit, a history check failing and a database error. Error text carrying an address, a hash, a wallet id and counts reaches the log redacted, and the redaction keeps no name of this code whole: the code has no name with a part that begins with a digit, and `CODE_NAMES` is empty. The output is deleted on success and on failure. `--keep-for-debug` keeps a failed run until `--cleanup`, which is refused for an unknown run and for one with nothing to settle; a failed deletion is logged. A run killed in a stage, in a process of its own, leaves its start unclosed until `--cleanup` closes it.
 
