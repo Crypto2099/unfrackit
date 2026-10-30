@@ -77,6 +77,7 @@ export function windowPlan(window, { reps = {} } = {}) {
     for (const v of H6) for (const role of ['rrri', 'lf']) add('H-6', 'maintained-tidy', v, role, 'default', RV);
     h5();
     for (const change of ['default', 'layout']) add('H-9', 'tidy-once', 'default', 'rrri', change, R1);
+    add('H-9', 'maintained-tidy', 'default', 'rrri', 'default', R1);
   } else if (window === 'peak') {
     h1();
     h5();

@@ -106,6 +106,7 @@ import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms
 import { replaySuffices } from './feasible.mjs';
 import { eligibleCollateral, collateralAvailability, checkRule, totalCollateralFor, COLLATERAL_RULES } from './collateral.mjs';
 import { spendMeasures, stateMeasures, requestedIndexes, PolicyLock } from './measure.mjs';
+import { conformingShare } from './conform.mjs';
 import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
 import { settle } from '../kit/heap.mjs';
@@ -472,18 +473,23 @@ export async function replay(T, params, source, job) {
   follow(source.changeAddressEnd);
 
   const end = stateMeasures(state, params);
-  // Conformity of the end state to the arm's layout: whether the planner, at
-  // the arm's settings, would propose a plan for it.
+  // Conformity of the end state to the arm's layout, before any restoring
+  // plan. The share (replay/conform.mjs) is the token UTxOs that break none of
+  // the treatment's output rules at the arm's planner settings (the defaults
+  // for the arms that run at them), with and without the coin rule; it does
+  // not depend on the planner accepting the state. Beside it, whether the
+  // planner, at the arm's settings, would propose a plan for the state.
+  const own = !(arm === 'naive-tidy' || arm === 'random-tidy' || arm === 'observed');
+  const share = conformingShare(T, state, params, own ? settings : {});
   // A state with no change address yet holds no spendable UTxO: no plan.
   let conformity;
-  if (state.changeAddress === null) conformity = { proposes: false, txs: 0, fee: 0n, noChangeAddress: true };
+  if (state.changeAddress === null) conformity = { proposes: false, txs: 0, fee: 0n, noChangeAddress: true, ...share };
   else {
     try {
-      const own = !(arm === 'naive-tidy' || arm === 'random-tidy' || arm === 'observed');
       const p = planOnly(T, state, params, own ? settings : {}, { arrival: own && needsArrival(variant) ? arrivalMap(state, arrivalTable) : null });
-      conformity = { proposes: p.txs.length > 0, txs: p.txs.length, fee: sum(p.txs.map((t) => BigInt(t.fee))) };
+      conformity = { proposes: p.txs.length > 0, txs: p.txs.length, fee: sum(p.txs.map((t) => BigInt(t.fee))), ...share };
     } catch (e) {
-      conformity = { refused: e.message };
+      conformity = { refused: e.message, ...share };
     }
   }
   const attempted = counts.built + counts.failed;
