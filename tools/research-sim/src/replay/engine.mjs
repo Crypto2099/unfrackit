@@ -326,7 +326,11 @@ export async function replay(T, params, source, job) {
     out.refused = `the planner refuses the start plan: ${e.message}`;
     return out;
   }
-  trajectory.push(stateMeasures(state, params).largestValueBytes);
+  const start = stateMeasures(state, params);
+  trajectory.push(start.largestValueBytes);
+  // The five state measures a record carries after it, under the same names
+  // for a forfeit and a built spend.
+  const after = (st) => ({ utxosAfter: st.utxos, largestValueBytesAfter: st.largestValueBytes, lockedAdaAfter: st.lockedAda, lockedAdaPerTokenAfter: st.lockedAdaPerToken, tokensAfter: st.tokens });
 
   // The events with every intent's builder leftovers left out.
   const events = source.events.map(replayedEvent);
@@ -406,7 +410,10 @@ export async function replay(T, params, source, job) {
         state = f.state;
         counts.forfeits++;
         fees.forfeits += f.forfeit;
-        out.spends.push({ ...rec, outcome: 'forfeit', forfeit: f.forfeit, collateralUsed: { coin: f.coin, returned: f.returned } });
+        const st = stateMeasures(state, params);
+        trajectory.push(st.largestValueBytes);
+        out.spends.push({ ...rec, outcome: 'forfeit', forfeit: f.forfeit, collateralUsed: { coin: f.coin, returned: f.returned }, ...after(st) });
+        continue;
       }
       trajectory.push(stateMeasures(state, params).largestValueBytes);
       continue;
@@ -458,8 +465,7 @@ export async function replay(T, params, source, job) {
         ...m,
         collateralUsed: r.inspected.collateralInputs.length ? { inputs: r.inspected.collateralInputs.length, total: r.inspected.totalCollateral, returned: !!r.inspected.collateralReturn, chosen: aside.library ? 'library' : 'set-aside' } : null,
         ms: r.ms,
-        utxosAfter: st.utxos,
-        largestValueBytesAfter: st.largestValueBytes,
+        ...after(st),
         // Tests only: the transactions and the state they were built from.
         ...(job.keepTx ? { built: { txs: r.txs, before } } : {})
       });
@@ -500,6 +506,7 @@ export async function replay(T, params, source, job) {
     failuresPer100: attempted ? (100 * counts.failed) / attempted : null,
     bursts: { parallel: out.bursts.length, feasible: out.bursts.filter((b) => b.feasible).length },
     triggers: out.triggers.length,
+    start: { t: 0, ...start },
     end,
     trajectory,
     conformity,
