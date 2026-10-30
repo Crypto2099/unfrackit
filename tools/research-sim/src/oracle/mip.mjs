@@ -64,6 +64,16 @@
 // each solve capped at iterationMs. Either way the solves, their nodes and
 // their simplex iterations are counted.
 //
+// Size-weighted work, counted and not budgeted: each solve is charged the
+// nonzero count of the constraint matrix it solved, the program as built
+// plus every cut added before it (a cut holds one entry per pool UTxO), all
+// read from the model this loop builds and so the same on any machine.
+// nnzSolves sums that count over the solves; nnzNodes sums it times the
+// solve's nodes (at least 1); nnzIterations sums it times the solve's
+// simplex iterations; nnzSolvesPlusIterations is nnzSolves plus
+// ITERATION_WEIGHT per simplex iteration, a solve's setup growing with the
+// matrix and its simplex work with the iterations.
+//
 // The program's bound: the highest dual bound any solve reported, in
 // lovelace rounded down. Cuts and a lower cutoff only shrink the program, so
 // a bound reported by any solve holds for every set still admitted, and
@@ -84,6 +94,8 @@ import { inputBytes, indexOfRef, VKEY_WITNESS_BYTES, boundOf } from './bound.mjs
 
 export const SOLVER_PACKAGE = 'highs';
 export const SOLVER_VERSION = '1.15.4';
+// The nonzeros one simplex iteration counts as in nnzSolvesPlusIterations.
+export const ITERATION_WEIGHT = 3;
 
 const key = (a) => `${a.policy}.${a.name}`;
 const ADA = 1e6;
@@ -125,8 +137,8 @@ function mergeEntries(entries) {
 }
 
 // The program for a pool of UTxO records: { data (highs ModelData), x (the
-// selection columns), F, cutoffRow }, or null when the pool lacks a requested
-// asset.
+// selection columns), F, cutoffRow, cols, rows, nnz (the matrix's entries,
+// none of them zero) }, or null when the pool lacks a requested asset.
 export const STRICT_POOL = 40;
 
 export function buildProgram(highs, M, pool) {
@@ -283,7 +295,8 @@ export function buildProgram(highs, M, pool) {
     cutoffRow,
     strict,
     cols: numCols,
-    rows: rows.length
+    rows: rows.length,
+    nnz: indices.length
   };
 }
 
@@ -314,9 +327,12 @@ function infoNumber(model, name) {
 // maxSolves, maxNodes, maxSolveNodes } under limit 'budget', or null under
 // 'wall-clock', which takes deadline and iterationMs; seed: HiGHS's
 // random_seed. Resolves to { proven, stop, bound, best, iterations, sets,
-// nodes, mostSolveNodes, lpIterations, refuted, rejections, solverErrors,
-// cols, rows, solverMs }: iterations counts the solves, sets the sets
-// rebuilt, refuted the chosen sets the bound refuted without a rebuild.
+// nodes, mostSolveNodes, lpIterations, nnzSolves, nnzNodes, nnzIterations,
+// nnzSolvesPlusIterations, refuted, rejections, solverErrors, cols, rows,
+// nnz, rowsLast, nnzLast, solverMs }: iterations counts the solves, sets the
+// sets rebuilt, refuted the chosen sets the bound refuted without a rebuild;
+// cols, rows and nnz are the program's as built, rowsLast and nnzLast the
+// program's at its last solve, cuts included.
 //
 // HiGHS 1.15.4's presolve aborts on some of these programs once enough cuts
 // have been added (a RuntimeError from the WebAssembly runtime, which leaves
@@ -333,7 +349,7 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
   const prog = buildProgram(H, M, pool);
   // feeBelow counts exact fees under the program's value, which would mean
   // the relaxation is not a lower bound; the checks require it to stay 0.
-  const out = { proven: false, stop: null, bound: null, best, iterations: 0, sets: 0, nodes: 0, mostSolveNodes: 0, lpIterations: 0, refuted: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
+  const out = { proven: false, stop: null, bound: null, best, iterations: 0, sets: 0, nodes: 0, mostSolveNodes: 0, lpIterations: 0, nnzSolves: 0, nnzNodes: 0, nnzIterations: 0, nnzSolvesPlusIterations: 0, refuted: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, nnz: 0, rowsLast: 0, nnzLast: 0, solverMs: 0, statuses: {} };
   const failures = () => out.solverErrors.filter((e) => !e.inherited).length;
   if (!prog) {
     out.proven = true;
@@ -342,8 +358,13 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
   }
   out.cols = prog.cols;
   out.rows = prog.rows;
+  out.nnz = prog.nnz;
   out.strict = prog.strict;
   const cuts = [];
+  // The program as the next solve sees it: its rows and nonzeros with every
+  // cut so far (a model reopened after a solver failure holds the same).
+  let rowsNow = prog.rows;
+  let nnzNow = prog.nnz;
   let presolve = 'on';
   let model = null;
   const open = () => {
@@ -423,7 +444,14 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       const nodes = infoNumber(model, 'mip_node_count') ?? 0;
       out.nodes += nodes;
       if (nodes > out.mostSolveNodes) out.mostSolveNodes = nodes;
-      out.lpIterations += infoNumber(model, 'simplex_iteration_count') ?? 0;
+      const lpIterations = infoNumber(model, 'simplex_iteration_count') ?? 0;
+      out.lpIterations += lpIterations;
+      out.nnzSolves += nnzNow;
+      out.nnzNodes += nnzNow * Math.max(1, nodes);
+      out.nnzIterations += nnzNow * lpIterations;
+      out.nnzSolvesPlusIterations += nnzNow + ITERATION_WEIGHT * lpIterations;
+      out.rowsLast = rowsNow;
+      out.nnzLast = nnzNow;
       const ms = H.constants.modelStatus;
       out.statuses[st] = (out.statuses[st] || 0) + 1;
       if (st === ms.infeasible) {
@@ -504,6 +532,8 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       const cut = { upper: idx.length - 1, entries: { indices: prog.x, values: prog.x.map((_, i) => (inSet.has(i) ? 1 : -1)) } };
       cuts.push(cut);
       model.addRow(-H.infinity, cut.upper, cut.entries);
+      rowsNow++;
+      nnzNow += prog.x.length;
     }
   } finally {
     close();

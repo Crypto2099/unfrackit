@@ -25,7 +25,9 @@
 // incumbents are evaluated apart, uncounted, so a reference's search does
 // not grow with the number of runs that seed it. Under limit 'wall-clock'
 // the run stops at timeLimitMs instead. Either way `work` reports what the
-// run used and `stop` which limit ended it (exhaustive.mjs, mip.mjs).
+// run used and `stop` which limit ended it (exhaustive.mjs, mip.mjs); its
+// size-weighted counts (nnzSolves, nnzNodes, nnzIterations,
+// nnzSolvesPlusIterations, mip.mjs) are recorded and limit nothing.
 // Statuses, from the last search that ran:
 //
 //   optimal        the search completed: the exhaustive path's queue ran out
@@ -137,13 +139,17 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
     let candidates;
     let exhaustive = null;
     let stop;
-    const work = { candidateSets: 0, solves: 0, nodes: 0, mostSolveNodes: 0, lpIterations: 0, incumbentSets, queuePops: 0 };
+    const work = { candidateSets: 0, solves: 0, nodes: 0, mostSolveNodes: 0, lpIterations: 0, incumbentSets, queuePops: 0, nnzSolves: 0, nnzNodes: 0, nnzIterations: 0, nnzSolvesPlusIterations: 0 };
     const addProgram = (m) => {
       work.candidateSets += m.sets;
       work.solves += m.iterations;
       work.nodes += m.nodes;
       if (m.mostSolveNodes > work.mostSolveNodes) work.mostSolveNodes = m.mostSolveNodes;
       work.lpIterations += m.lpIterations;
+      work.nnzSolves += m.nnzSolves;
+      work.nnzNodes += m.nnzNodes;
+      work.nnzIterations += m.nnzIterations;
+      work.nnzSolvesPlusIterations += m.nnzSolvesPlusIterations;
     };
     if (chosen === 'exhaustive') {
       phase = 'exhaustive';
@@ -247,7 +253,7 @@ export function statusOf({ proven, best, programBound = null }) {
 }
 
 function mipDetail(m) {
-  return { stop: m.stop, bound: m.bound, iterations: m.iterations, sets: m.sets, refuted: m.refuted, nodes: m.nodes, mostSolveNodes: m.mostSolveNodes, lpIterations: m.lpIterations, strict: m.strict, rejections: m.rejections, solverErrors: m.solverErrors, feeDiffers: m.feeDiffers, maxFeeAbove: m.maxFeeAbove, feeBelow: m.feeBelow, cols: m.cols, rows: m.rows, solverMs: Math.round(m.solverMs), statuses: m.statuses };
+  return { stop: m.stop, bound: m.bound, iterations: m.iterations, sets: m.sets, refuted: m.refuted, nodes: m.nodes, mostSolveNodes: m.mostSolveNodes, lpIterations: m.lpIterations, strict: m.strict, rejections: m.rejections, solverErrors: m.solverErrors, feeDiffers: m.feeDiffers, maxFeeAbove: m.maxFeeAbove, feeBelow: m.feeBelow, cols: m.cols, rows: m.rows, solverMs: Math.round(m.solverMs), statuses: m.statuses, nnz: m.nnz, rowsLast: m.rowsLast, nnzLast: m.nnzLast };
 }
 
 // Whether a method's transaction carries the same change outputs, byte for
