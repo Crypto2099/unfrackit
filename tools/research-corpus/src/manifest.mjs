@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Adam K. Dean
+
+// The corpus manifest: the snapshot block (height, hash, time), the published
+// identifiers per frame and sample with their split, the flow tables and the
+// code version. It names no stake address, address or
+// policy of a wallet's holdings; the only transaction hashes it names are the
+// freeze records' carriers: the final freeze, the hypotheses record's first
+// carrier and the carrier the final document cites, usually the same
+// transaction as the first. The raw lists, which name stake addresses, stay
+// in the run directory under raw/ (mode 0600) and are never deposited; they
+// carry no published identifier, so once the HMAC key is destroyed nothing
+// links an identifier back to an address.
+// Within each sample the identifiers are sorted, so the manifest does not carry
+// the draw order (which anyone can recompute from the public rule).
+
+import { join } from 'node:path';
+import { loadKey, identifier } from './hmac.mjs';
+import { writePrivate } from './paths.mjs';
+
+export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
+  const key = loadKey(hmacKeyPath || undefined);
+  const rows = (
+    await client.query(`
+      SELECT s.frame, s.kind, s.stratum, s.sa_id, s.draw_rank, s.prevalence_member, s.split, coalesce(s.fragmented, false) AS fragmented,
+             c.hash_raw, c.view, coalesce(k.agree, false) AS reconstruction_agree,
+             coalesce(fr.any_flag, false) AS franken_any
+        FROM study.sample s
+        JOIN study.cred c ON c.sa_id = s.sa_id
+        LEFT JOIN study.reconstruction_check k ON k.sa_id = s.sa_id
+        LEFT JOIN (SELECT sa_id, bool_or(flagged) AS any_flag FROM study.franken GROUP BY sa_id) fr ON fr.sa_id = s.sa_id
+       ORDER BY s.frame DESC, s.kind, s.stratum, s.draw_rank`)
+  ).rows;
+  const byInput = (r) => (run.settings.x15_bech32 ? r.view : r.hash_raw);
+  const samples = new Map();
+  const raw = ['frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,reconstruction_agree,franken_any,fragmented'];
+  for (const r of rows) {
+    const id = identifier(key, byInput(r));
+    const k = `${r.frame}|${r.kind}|${r.stratum}`;
+    if (!samples.has(k)) samples.set(k, { frame: r.frame, kind: r.kind, stratum: r.stratum, ids: [] });
+    samples.get(k).ids.push({ id, split: r.split, reconstruction_excluded: !r.reconstruction_agree, prevalence_member: r.prevalence_member });
+    raw.push([r.frame, r.kind, JSON.stringify(r.stratum), r.sa_id, r.view, r.draw_rank, r.prevalence_member, r.split, r.reconstruction_agree, r.franken_any, r.fragmented].join(','));
+  }
+  writePrivate(join(dir, 'raw', 'sample.csv'), raw.join('\n') + '\n');
+  const list = [...samples.values()].map((s) => {
+    s.ids.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return {
+      frame: s.frame,
+      kind: s.kind,
+      stratum: s.stratum,
+      n: s.ids.length,
+      n_exploration: s.ids.filter((x) => x.split === 'exploration').length,
+      n_confirmation: s.ids.filter((x) => x.split === 'confirmation').length,
+      n_reconstruction_excluded: s.ids.filter((x) => x.reconstruction_excluded).length,
+      ids: s.ids
+    };
+  });
+  return {
+    tool: 'research-corpus',
+    network: run.network,
+    run_id: run.runId,
+    snapshot: { block_no: run.snapshot.block_no, hash: run.snapshot.hash, time: run.snapshot.time, slot_no: run.snapshot.slot_no, epoch_no: run.snapshot.epoch_no, chosen: run.snapshot.chosen, rule: run.snapshot.rule || null },
+    freeze: freezeOf(report.freeze),
+    windows: {
+      recent: pickWindow(run.windows.recent),
+      peak: { ...pickWindow(run.windows.peak), n_tx_rule: run.windows.peak.n_tx_rule, n_tx_valid: run.windows.peak.n_tx_valid, n_tx_view: run.windows.peak.n_tx_view }
+    },
+    settings: run.settings,
+    flow: report.flow,
+    frame_report: report.frame_report,
+    draw: report.draw,
+    strata: report.strata.map((s) => ({ ord: s.ord, stratum: s.stratum, part: s.part, class: s.class, policy: s.policy, asset_name: s.asset_name, n_recent: s.n_recent, n_peak: s.n_peak })),
+    // Holder counts are published for candidates at or above the floor only;
+    // the rule needs no more, and a thin candidate's count can be a handful.
+    strata_fungible_floor: report.ft_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.ft_floor ? r.n_holders : null, below_floor: !r.named && r.n_holders < run.settings.ft_floor })),
+    // Part 4 the same way: holder counts at or above its floor only.
+    strata_stable_commodity_floor: report.sc_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.sc_floor ? r.n_holders : null, below_floor: r.n_holders < run.settings.sc_floor })),
+    // The scam screen as applied: the list's commit and extract digest, the
+    // counts and the strata rows it kept out. The excluded policies that also
+    // hold unlisted assets, a descriptive check of the list, stay in
+    // report.json.
+    scam_screen: (({ policies_with_unlisted_assets, ...rest }) => rest)(report.scam_screen || { applied: false }),
+    sample_bounds: report.sample_bounds,
+    split: report.split_overall,
+    reconstruction_check: report.reconstruction_check || {},
+    code_version: report.code_version,
+    samples: list
+  };
+}
+
+// The freeze as published. The hypotheses record is the run's report of it
+// (src/freeze.mjs): its items from the signed content and the document digest
+// named by the carrier the final document cites, never a first carrier's 674
+// line on its own.
+export function freezeOf(f) {
+  if (!f) return null;
+  const draw = f.draw ? { e: f.draw.e, slot_no: f.draw.slot_no, first_slot: f.draw.first_slot, epoch_length: f.draw.epoch_length, k: f.draw.k, f: f.draw.f, window: f.draw.window, cutoff: f.draw.cutoff, n: f.draw.n, nonce: f.draw.nonce, readings: f.draw.readings } : null;
+  return { role: f.role, tx: f.tx || null, block_no: f.block_no ?? null, block_hash: f.block_hash || null, time: f.time || null, document_sha256: f.document_sha256 || null, study_key: f.study_key || null, hypotheses: f.hypotheses || null, code_manifest_sha256: f.code_manifest_sha256 || null, draw, h: f.h };
+}
+
+function pickWindow(w) {
+  return { first_block_no: w.first_block_no, last_block_no: w.last_block_no, first_time: w.first_time, last_time: w.last_time, first_epoch: w.first_epoch, last_epoch: w.last_epoch };
+}
