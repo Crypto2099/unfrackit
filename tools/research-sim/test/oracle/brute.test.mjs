@@ -9,7 +9,12 @@
 //
 //   - the oracle's fee equals the least exact fee over the search space its
 //     setting afterExhaustive gives, its status is proven, and it reports
-//     infeasible exactly when no subset of that space is feasible: every
+//     infeasible exactly when no subset of that space is feasible, unless a
+//     limit of its work budget stopped it (stop candidate-sets, solves or
+//     nodes), when its fee is that least fee (none where no subset builds),
+//     a higher one, or none; such runs are counted and listed (atBudget),
+//     since a budget sized on the heaviest shapes can stop a small program
+//     whose proof takes many cheap solves. The space is: every
 //     subset under 'mip-always' (the default), where the program over every
 //     spendable UTxO follows the exhaustive search; the candidate set under
 //     'report'; under 'mip', the candidate set when one of its subsets
@@ -45,6 +50,20 @@ const SMALL = ['S1', 'S2b', 'S8', 'M1', 'M7'];
 const LARGE = ['S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S9', 'M2', 'M3', 'M4', 'M5', 'M8', 'CL1', 'CL3', 'E1', 'E2'];
 export const SUB_SEEDS = (i) => [4001 + 2 * i, 4002 + 2 * i];
 
+// The stops that name a limit of the work budget, and how a run stopped at
+// one compares with the least exact fee over its space: the same fee (none
+// where no subset builds), a higher one, or none where one exists; null for
+// anything else (a fee below it, or a fee where no subset builds), which
+// fails the check.
+const BUDGET_STOPS = new Set(['candidate-sets', 'solves', 'nodes']);
+export function budgetVerdict(a, min) {
+  if (a.status !== 'best-at-limit' && a.status !== 'undecided') return null;
+  if (a.fee === min) return 'equal';
+  if (a.fee === null) return 'undecided';
+  if (min !== null && BigInt(a.fee) > BigInt(min)) return 'higher';
+  return null;
+}
+
 // The search space the oracle's own run speaks for under afterExhaustive,
 // and the least exact fee over it: r is a record of brute-worker.mjs.
 export function expected(afterExhaustive, r) {
@@ -73,7 +92,7 @@ test('the oracle equals brute force on small wallets, and its bound is sound', {
     onRecord: (r) => appendFileSync(out, JSON.stringify(r) + '\n', { mode: 0o600 })
   });
   assert.deepEqual(errors, []);
-  const c = { afterExhaustive: settings.afterExhaustive, wallets: jobs.length, runs: records.length, subsets: 0, feasibleSets: 0, boundAbove: 0, boundInfeasibleButBuilt: 0, oracleEquals: { candidates: 0, spendable: 0 }, oracleDiffers: [], infeasibleAgree: { candidates: 0, spendable: 0 }, candidateAboveGlobal: 0, candidateInfeasibleGlobalFeasible: 0, oracleAboveGlobal: 0, oracleNoneGlobalFeasible: 0, programLowered: 0, programFound: 0, statusScope: {}, bestFrom: {}, stops: {}, autoMs: [], mipCandidates: { equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: 0 }, mipCandidatesBad: [], mipSpendable: { equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: 0 }, mipSpendableBad: [], statuses: {}, minBoundGap: null, maxBoundGap: null };
+  const c = { afterExhaustive: settings.afterExhaustive, wallets: jobs.length, runs: records.length, subsets: 0, feasibleSets: 0, boundAbove: 0, boundInfeasibleButBuilt: 0, oracleEquals: { candidates: 0, spendable: 0 }, oracleDiffers: [], atBudget: { equal: 0, higher: 0, undecided: 0, runs: [] }, infeasibleAgree: { candidates: 0, spendable: 0 }, candidateAboveGlobal: 0, candidateInfeasibleGlobalFeasible: 0, oracleAboveGlobal: 0, oracleNoneGlobalFeasible: 0, programLowered: 0, programFound: 0, statusScope: {}, bestFrom: {}, stops: {}, autoMs: [], mipCandidates: { equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: 0 }, mipCandidatesBad: [], mipSpendable: { equalProven: 0, equalAtLimit: 0, higherAtLimit: 0, undecidedAtLimit: 0, bad: 0 }, mipSpendableBad: [], statuses: {}, minBoundGap: null, maxBoundGap: null };
   for (const r of records) {
     c.subsets += r.subsets;
     c.feasibleSets += r.feasible;
@@ -89,9 +108,13 @@ test('the oracle equals brute force on small wallets, and its bound is sound', {
     c.autoMs.push(a.ms);
     const tag = `${r.shape}${r.seed === null ? '' : '/' + r.seed} ${r.spend} ${r.policy}`;
     const want = expected(settings.afterExhaustive, r);
+    const atBudget = BUDGET_STOPS.has(a.stop) && a.scope === want.scope ? budgetVerdict(a, want.min) : null;
     if (a.scope === want.scope && a.fee === want.min && (a.status === 'optimal' || a.status === 'infeasible')) {
       if (want.min === null) c.infeasibleAgree[want.scope]++;
       else c.oracleEquals[want.scope]++;
+    } else if (atBudget) {
+      c.atBudget[atBudget]++;
+      c.atBudget.runs.push(`${tag}: ${a.status} ${a.fee} at ${a.stop}, brute force ${want.min}`);
     } else c.oracleDiffers.push(`${tag}: oracle ${a.status} ${a.fee} over ${a.scope}, brute force ${want.min} over ${want.scope}`);
     if (r.candidateMin !== null && r.globalMin !== null && BigInt(r.candidateMin) > BigInt(r.globalMin)) c.candidateAboveGlobal++;
     if (r.candidateMin === null && r.globalMin !== null) c.candidateInfeasibleGlobalFeasible++;
