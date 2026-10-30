@@ -313,6 +313,8 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
     name,
     version: `@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`,
     deterministic: false,
+    // Its draws come from opts.random or a generator seeded with opts.seed.
+    seeded: true,
     async build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.cjs, intent);
       const replay = intent.source === 'replay';

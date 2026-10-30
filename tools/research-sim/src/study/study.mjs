@@ -29,10 +29,12 @@
 // battery-pools reads history-recent's files; the replays read their window's
 // files; the battery reads history-snapshot's files and battery-pools' pools.
 // Repetitions (--reps-h1, --reps-variants, --reps), workers (--workers,
-// --oracle-workers), limits (--limit-ms, --answer-limit-ms, --oracle-limit-ms),
-// the oracle (--oracle, --oracle-settings) and --validity pass through to the
-// replay and battery stages; --analysis-freeze-tx to history, replay and
-// battery. An option the plan does not use is refused.
+// --oracle-workers), limits (--limit-ms, --answer-limit-ms), the oracle
+// (--oracle, --oracle-settings) and --validity pass through to the replay and
+// battery stages; --analysis-freeze-tx to history, replay and battery. An
+// option the plan does not use is refused, and so are worker counts that
+// would keep more than 12 threads busy (replay/pool.mjs MAX_BUSY_THREADS),
+// before any stage starts.
 //
 // Layout, under the private root (history/paths.mjs):
 //   <network>/<id>/study.json   the header: plan, network, stages, options,
@@ -70,6 +72,7 @@ import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
+import { workerCount, checkBusyThreads } from '../replay/pool.mjs';
 
 const DB_STAGES = Object.freeze(['history-recent', 'history-peak', 'history-snapshot', 'census', 'near-cap', 'collateral']);
 const OFFLINE_STAGES = Object.freeze(['fidelity', 'battery-pools', 'replay-recent', 'replay-peak', 'battery']);
@@ -95,7 +98,7 @@ export const STAGE_COMMAND = Object.freeze({
 });
 
 // Options by use. Paths are made absolute before they are recorded.
-const COMMON = ['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'repsH1', 'repsVariants', 'limitMs', 'answerLimitMs', 'oracle', 'oracleWorkers', 'oracleLimitMs', 'oracleSettings', 'validity'];
+const COMMON = ['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'repsH1', 'repsVariants', 'limitMs', 'answerLimitMs', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity'];
 const DATABASE = ['expectNetwork', 'snapshot', 'extractionRun', 'wallets', 'wallet', 'fromStudy', 'analysisFreezeTx', 'bytes', 'immutableDir', 'immutableHost', 'set'];
 const ALLOWED = Object.freeze({
   synthetic: new Set([...COMMON, 'shapes']),
@@ -120,6 +123,13 @@ export function studyOptions(opts) {
   const unused = Object.keys(o).filter((k) => !ALLOWED[plan].has(k));
   if (unused.length) throw new Refusal(`refusing: the ${plan} plan does not use ${unused.map(flag).join(', ')}`);
   if (!o.treatment || o.treatment === true) throw new Refusal('refusing: --treatment <dir> names the treatment directory');
+  // The battery stage keeps the most threads busy: its workers and, with the
+  // oracle, the oracle's.
+  try {
+    checkBusyThreads(workerCount(o.workers, '--workers'), o.oracle ? workerCount(o.oracleWorkers, '--oracle-workers') : 0);
+  } catch (e) {
+    throw new Refusal(e.message.startsWith('refusing: ') ? e.message : `refusing: ${e.message}`);
+  }
   for (const k of PATHS) {
     if (o[k] === undefined) continue;
     if (typeof o[k] !== 'string') throw new Refusal(`refusing: ${flag(k)} takes one path`);
@@ -298,7 +308,7 @@ export function stageOptions(stage, o, network) {
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
   const replayOpts = pick(o, ['repsH1', 'repsVariants', 'workers', 'limitMs', 'validity']);
-  const batteryOpts = pick(o, ['reps', 'workers', 'answerLimitMs', 'oracle', 'oracleWorkers', 'oracleLimitMs', 'oracleSettings', 'validity']);
+  const batteryOpts = pick(o, ['reps', 'workers', 'answerLimitMs', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity']);
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':

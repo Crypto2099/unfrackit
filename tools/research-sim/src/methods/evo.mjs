@@ -710,6 +710,7 @@ export function evoMethod({ unfrack = null } = {}) {
     name,
     version: `@evolution-sdk/evolution ${EVO_VERSION} largest-first${unfrack ? ', unfrack' : ''}`,
     deterministic: true,
+    seeded: true,
     ownCollateral: true,
     async build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.evo, intent);

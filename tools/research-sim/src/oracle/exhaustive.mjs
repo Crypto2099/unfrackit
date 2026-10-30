@@ -19,8 +19,11 @@
 // or above the best fee found: every set not yet evaluated lies under a node
 // still queued, so the best is the optimum over the candidate set.
 //
-// The search checks its deadline between evaluations; at the deadline it
-// returns its best so far, not proven.
+// The search stops on its budget of candidate sets (maxSets): a node that
+// would be evaluated once the budget is spent ends the search with its best
+// so far, not proven, so a search that completes within the budget is never
+// cut short. Under the wall-clock limit it checks its deadline between nodes
+// instead, and at the deadline returns its best so far, not proven.
 
 import { boundOf, inputBytes, indexOfRef } from './bound.mjs';
 
@@ -85,9 +88,11 @@ function leastCount(values, need) {
 
 // model: bound.mjs makeBoundModel; candidates: UTxO records; evaluate(S):
 // policies.mjs, resolving to an evaluation; best: the incumbent evaluation or
-// null; deadline: a performance.now() time. Resolves to { complete, best,
-// nodes, popped, evaluated, pruned }.
-export async function exhaustiveSearch({ model: M, candidates, evaluate, best = null, deadline = Infinity, onImprove = () => {} }) {
+// null; maxSets: the candidate sets it may evaluate; deadline: a
+// performance.now() time. Resolves to { complete, stop, best, nodes, popped,
+// evaluated, pruned }, stop 'proven' (the search completed),
+// 'candidate-sets' (the budget) or 'wall-clock' (the deadline).
+export async function exhaustiveSearch({ model: M, candidates, evaluate, best = null, maxSets = Infinity, deadline = Infinity, onImprove = () => {} }) {
   const C = candidates;
   const n = C.length;
   if (n > 30) throw new Error(`the exhaustive path takes at most 30 candidates, not ${n}`);
@@ -137,15 +142,22 @@ export async function exhaustiveSearch({ model: M, candidates, evaluate, best = 
   const root = node([]);
   if (root) heap.push(root);
   let complete = true;
+  let stop = 'proven';
   while (heap.size) {
-    if (performance.now() >= deadline) {
+    if (deadline !== Infinity && performance.now() >= deadline) {
       complete = false;
+      stop = 'wall-clock';
       break;
     }
     const nd = heap.pop();
     stats.popped++;
     if (best && nd.bound >= best.fee) break;
     if (nd.evaluable) {
+      if (stats.evaluated >= maxSets) {
+        complete = false;
+        stop = 'candidate-sets';
+        break;
+      }
       const ev = await evaluate(nd.idx.map((i) => C[i]));
       stats.evaluated++;
       if (ev.ok && (!best || ev.fee < best.fee)) {
@@ -167,5 +179,5 @@ export async function exhaustiveSearch({ model: M, candidates, evaluate, best = 
       stats.nodes++;
     }
   }
-  return { complete, best, ...stats };
+  return { complete, stop, best, ...stats };
 }

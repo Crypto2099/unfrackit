@@ -43,6 +43,7 @@ function stallMethod({ stallMs = 3600 * 1000, only = null } = {}) {
     name: 'test-stall',
     version: '1',
     deterministic: true,
+    seeded: true,
     build(_state, intent) {
       if (only && !only.includes(intent.id)) return { ok: false, class: CLASSES.other, detail: 'not stalled' };
       const end = Date.now() + stallMs;

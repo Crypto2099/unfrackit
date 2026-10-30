@@ -28,6 +28,7 @@ import { batteryRuns, batterySpends } from '../battery/runner-core.mjs';
 import { SHAPE_POOLS } from '../battery/battery.mjs';
 import { CONFIRMATORY_RULES } from './collateral.mjs';
 import { sumValidity } from '../kit/validity.mjs';
+import { ORACLE_SETTINGS, admitsIncumbent } from '../oracle/settings.mjs';
 
 const MONTH = 30 * 86400;
 // The thresholds whose triggers are tested against the never-propose arm.
@@ -133,6 +134,22 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
   return totals;
 }
 
+// The unseeded runs kept beside a reference: per method, in the order the
+// runs came, { name, runs, below, least }, below counting the runs whose fee
+// is under the reference's fee, or every run when the reference has none.
+export function unseededBeside(runs, refFee) {
+  const by = new Map();
+  for (const r of runs) {
+    const fee = BigInt(r.fee);
+    if (!by.has(r.name)) by.set(r.name, { name: r.name, runs: 0, below: 0, least: fee });
+    const m = by.get(r.name);
+    m.runs++;
+    if (refFee === null || refFee === undefined || fee < BigInt(refFee)) m.below++;
+    if (fee < m.least) m.least = fee;
+  }
+  return [...by.values()];
+}
+
 // One log note per failure of a validity summary, naming the record's key and
 // the transaction's position.
 export function noteValidity(out, key, v) {
@@ -143,18 +160,26 @@ export function noteValidity(out, key, v) {
 // The batteries over a set of wallets: every run's result as a 'battery'
 // record (an H-12 run also as 'h12'), a time-out as a 'battery' record with
 // class time-limit, and, when an oracle is given, its reference per wallet,
-// observed-layout spend and distinct oracle change policy, with every
-// method's single transaction under that policy as an incumbent. The hook:
+// observed-layout spend and distinct oracle change policy, with the single
+// transaction of every run under that policy by a method the oracle's
+// incumbents rule admits as an incumbent (under the default,
+// 'seeded-methods', the seeded methods'). The passing runs of the other
+// methods are kept beside the reference (`unseeded`: per method, the runs,
+// how many have a fee below the reference's, every one of them when the
+// reference has no fee, and the least fee) and never seed it. The hook:
 //   oracle.policyOf(methodName, changePolicy)  the oracle's change policy of
 //       a method's change, or null when the oracle has none for it
 //   oracle.reference(state, intent, params, policy, { incumbents })
 //       the reference for one spend, run however the oracle runs it;
-//       incumbents are [{ name, walletInputs, bytes, fee }]
+//       incumbents are [{ name, seeded, walletInputs, bytes, fee }]
+//   oracle.settings  the oracle's settings (the defaults when absent)
 // The wallet's state and battery intents are rebuilt in this thread for it;
-// both are deterministic, so they are the worker's.
+// both are deterministic, so they are the worker's. The totals count the
+// references the oracle's guard stopped (`oracleGuard`).
 export async function runBatteries(T, pool, { wallets, methods, out, answerLimitMs, pools, oracle = null, tidySettings = {}, validity = false }) {
-  const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0 };
+  const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0, ...(oracle ? { oracleGuard: 0 } : {}) };
   const validities = [];
+  const oracleRules = oracle ? oracle.settings || ORACLE_SETTINGS : null;
   // One task per wallet: its battery job, then its oracle calls. Up to
   // pool.size tasks are in flight, so a wallet's oracle calls overlap the
   // other wallets' methods. A task buffers its records; they are written in
@@ -220,8 +245,10 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
         const policy = oracle.policyOf(run.method, run.opts.changePolicy);
         if (!policy) continue;
         const g = `${run.spend}|${policy}`;
-        if (!groups.has(g)) groups.set(g, { spend: run.spend, policy, incumbents: [] });
-        if (res && !res.timeLimit && res.ok && res.incumbent) groups.get(g).incumbents.push({ name: res.method.name, ...res.incumbent });
+        if (!groups.has(g)) groups.set(g, { spend: run.spend, policy, incumbents: [], unseeded: [] });
+        if (!res || res.timeLimit || !res.ok || !res.incumbent) continue;
+        if (admitsIncumbent(oracleRules, res.method)) groups.get(g).incumbents.push({ name: res.method.name, seeded: res.method.seeded === true, ...res.incumbent });
+        else groups.get(g).unseeded.push({ name: res.method.name, fee: res.incumbent.fee });
       }
       // The calls run together, so that an oracle with several workers uses
       // them; the records are written in group order.
@@ -229,7 +256,8 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
       const refs = await Promise.all(list.map((g) => oracle.reference(built.observed, built.spends[g.spend].intent, source.params, g.policy, { incumbents: g.incumbents })));
       list.forEach((g, i) => {
         totals.oracle++;
-        emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, oracle: refs[i] }));
+        if (refs[i] && refs[i].terminated === true) totals.oracleGuard++;
+        emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, unseeded: unseededBeside(g.unseeded, refs[i] ? refs[i].fee : null), oracle: refs[i] }));
       });
     }
     buffers[wi] = recs;

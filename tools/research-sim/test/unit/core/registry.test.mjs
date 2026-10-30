@@ -2,7 +2,8 @@
 // Copyright 2026 Adam K. Dean
 
 // The method registry: every study baseline is made by name, with its
-// library's version and its deterministic flag; the builder survey's other
+// library's version and its deterministic and seeded flags, and the oracle
+// takes incumbents only from the seeded ones; the builder survey's other
 // subjects are refused; every name a run plan uses resolves; and the test
 // plans still name only the test methods. Needs RESEARCH_SIM_TREATMENT_DIR for
 // the baselines (CSL comes through the treatment).
@@ -14,28 +15,36 @@ import { choosesOwnCollateral } from '../../../src/methods/contract.mjs';
 import { CJS_VERSION } from '../../../src/methods/cjs.mjs';
 import { EVO_VERSION } from '../../../src/methods/evo.mjs';
 import { windowPlan, testPlan, expandJobs, batteryPlan, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
+import { ORACLE_SETTINGS, admitsIncumbent } from '../../../src/oracle/settings.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
 const T = await treatment();
 
-test('every study baseline is made by name, with its library version and determinism', { skip }, () => {
+test('every study baseline is made by name, with its library version, determinism and seeding', { skip }, () => {
+  // [version, deterministic, seeded]: csl-ri and csl-ri-pure draw from a
+  // generator no caller can seed; cjs-rrri is random and seeded by its run.
   const want = {
-    'csl-lf': ['cardano-serialization-lib 13.2.1 LargestFirstMultiAsset', true],
-    'csl-ri': ['cardano-serialization-lib 13.2.1 RandomImproveMultiAsset', false],
-    'csl-lf-pure': ['cardano-serialization-lib 13.2.1 LargestFirstMultiAsset, prefer_pure_change', true],
-    'csl-ri-pure': ['cardano-serialization-lib 13.2.1 RandomImproveMultiAsset, prefer_pure_change', false],
-    'cjs-rrri': [`@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`, false],
-    'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true]
+    'csl-lf': ['cardano-serialization-lib 13.2.1 LargestFirstMultiAsset', true, true],
+    'csl-ri': ['cardano-serialization-lib 13.2.1 RandomImproveMultiAsset', false, false],
+    'csl-lf-pure': ['cardano-serialization-lib 13.2.1 LargestFirstMultiAsset, prefer_pure_change', true, true],
+    'csl-ri-pure': ['cardano-serialization-lib 13.2.1 RandomImproveMultiAsset, prefer_pure_change', false, false],
+    'cjs-rrri': [`@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`, false, true],
+    'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true, true]
   };
   assert.deepEqual([...BASELINE_METHODS].sort(), Object.keys(want).sort());
-  for (const [name, [version, deterministic]] of Object.entries(want)) {
+  for (const [name, [version, deterministic, seeded]] of Object.entries(want)) {
     const m = makeMethod(T, name);
     assert.equal(m.name, name);
     assert.equal(m.version, version);
     assert.equal(m.deterministic, deterministic, name);
+    assert.equal(m.seeded, seeded, name);
+    // The oracle's default incumbents rule: a csl-ri run is not an
+    // incumbent, a cjs-rrri run is.
+    assert.equal(admitsIncumbent(ORACLE_SETTINGS, m), seeded, `${name} as an incumbent`);
     assert.equal(choosesOwnCollateral(m), name === 'evo-lf', name);
     assert.throws(() => makeMethod(T, name, { bundleCoin: 'shortest' }), /takes no options/);
   }
+  for (const name of ['unfrackit-h12', 'test-largest-first', 'test-stall']) assert.deepEqual([makeMethod(T, name).deterministic, makeMethod(T, name).seeded], [true, true], name);
   assert.equal(CJS_VERSION, '0.14.35');
   assert.equal(EVO_VERSION, '0.8.0');
 });

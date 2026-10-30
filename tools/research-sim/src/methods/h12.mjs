@@ -65,6 +65,7 @@ export function h12Method(T, { settings = {} } = {}) {
     name: 'unfrackit-h12',
     version: `select2.mjs ${T.pins.get('select2.mjs').slice(0, 16)}`,
     deterministic: true,
+    seeded: true,
     build(state, intent, params, opts) {
       if (opts.changePolicy !== 'default') return { ok: false, class: CLASSES.other, detail: 'the H-12 rule makes its own change' };
       const request = h12Request(intent);

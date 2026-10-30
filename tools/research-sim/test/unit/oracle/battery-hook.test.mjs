@@ -26,12 +26,14 @@ const result = (extra = {}) => ({
   bestInSpace: true,
   bestInCandidates: false,
   exhaustive: null,
+  stop: 'solves',
+  work: { candidateSets: 40, solves: 400, nodes: 9000, mostSolveNodes: 2000, lpIterations: 31000, incumbentSets: 2, queuePops: 0 },
   ms: 1234.5,
   wallMs: 1250,
   terminated: false,
   incumbents: [{ name: 'csl-lf', fee: 200000n, inputs: 3, result: 'feasible', oracleFee: 200000n, sameChange: true }, { name: 'csl-ri', fee: null, inputs: 2, result: 'kit', detail: `input ${TXID}#1 is short` }],
   evaluations: { evaluations: 10, cached: 2, feasible: 4, ms: 5 },
-  detail: { mip: { stop: 'limit', bound: 180000, rejections: [{ detail: TXID }] } },
+  detail: { mip: { stop: 'solves', bound: 180000, rejections: [{ detail: TXID }] } },
   settings: { afterExhaustive: 'mip-always' },
   solver: 'highs 1.15.4',
   ...extra
@@ -41,7 +43,8 @@ test('an oracle result becomes a record the guard accepts, without the transacti
   const r = oracleRecord(result());
   assert.equal(r.status, 'best-at-limit');
   assert.equal(r.fee, 190000n);
-  assert.equal(r.stop, 'limit');
+  assert.equal(r.stop, 'solves');
+  assert.deepEqual(r.work, result().work);
   assert.equal(r.mipBound, 180000);
   assert.equal(r.inputs, 2);
   assert.equal(r.size, 412);
@@ -57,10 +60,17 @@ test('the guard still refuses the raw result', () => {
   assert.throws(() => assertClean(result()));
 });
 
-test('a result with no solution and an exhaustive path records its stop as null', () => {
-  const r = oracleRecord(result({ status: 'infeasible', fee: null, best: null, tx: null, bound: null, detail: { nodes: 4 } }));
+test('a result with no solution and an exhaustive path records the exhaustive search\'s stop', () => {
+  const r = oracleRecord(result({ status: 'infeasible', fee: null, best: null, tx: null, bound: null, stop: 'proven', detail: { nodes: 4, stop: 'proven' } }));
   assert.equal(r.fee, null);
   assert.equal(r.inputs, null);
-  assert.equal(r.stop, null);
+  assert.equal(r.stop, 'proven');
+  assert.equal(r.mipBound, null);
+  assert.doesNotThrow(() => assertClean(r));
+});
+
+test('a call the guard stopped records stop guard, no work and no fee', () => {
+  const r = oracleRecord({ status: 'undecided', path: null, paths: null, scope: null, candidates: null, policy: 'csl', fee: null, bound: null, tx: null, best: null, stop: 'guard', work: null, settings: { limit: 'budget' }, ms: 300001, wallMs: 300001, terminated: true });
+  assert.deepEqual([r.status, r.stop, r.work, r.fee, r.terminated], ['undecided', 'guard', null, null, true]);
   assert.doesNotThrow(() => assertClean(r));
 });

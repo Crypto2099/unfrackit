@@ -73,8 +73,11 @@ test('the core settings refuse what is not implemented', () => {
 });
 
 test('the method contract', () => {
-  const m = checkMethod({ name: 'x', version: '1', deterministic: true, build() {} });
-  assert.throws(() => checkMethod({ name: 'x', version: '1', build() {} }), /deterministic/);
+  const m = checkMethod({ name: 'x', version: '1', deterministic: true, seeded: true, build() {} });
+  assert.throws(() => checkMethod({ name: 'x', version: '1', seeded: true, build() {} }), /deterministic/);
+  assert.throws(() => checkMethod({ name: 'x', version: '1', deterministic: false, build() {} }), /seeded must be a boolean/);
+  assert.throws(() => checkMethod({ name: 'x', version: '1', deterministic: true, seeded: false, build() {} }), /a deterministic method is seeded/);
+  assert.doesNotThrow(() => checkMethod({ name: 'x', version: '1', deterministic: false, seeded: false, build() {} }));
   assert.throws(() => checkOptions({ changePolicy: 'ladder' }), /unknown change policy/);
   assert.equal(checkResult(m, { ok: false, class: 'balance' }).class, 'balance');
   assert.equal(checkResult(m, { ok: false, class: 'not-replayable' }).class, 'not-replayable');

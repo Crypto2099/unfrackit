@@ -59,8 +59,8 @@ import { Refusal, connect } from '../history/db.mjs';
 import { IntentCheck } from '../history/rebuild.mjs';
 import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
-import { REPLAY_LIMIT_MS, ANSWER_LIMIT_MS } from '../replay/pool.mjs';
-import { TIME_LIMIT_MS } from '../oracle/settings.mjs';
+import { REPLAY_LIMIT_MS, ANSWER_LIMIT_MS, MAX_BUSY_THREADS } from '../replay/pool.mjs';
+import { ORACLE_SETTINGS } from '../oracle/settings.mjs';
 import { STAGE_COMMAND } from './study.mjs';
 import { readPick, readLog, appendEntry, sanitizeError, redactCommand, unclosedStarts, keptRun, isSimRunId, SIM_GATE, SIM_LIVE_FIRE_START, SIM_LIVE_FIRE, KEPT } from './checklog.mjs';
 
@@ -69,7 +69,7 @@ export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak',
 // study run takes runs at least once, and a run over ten mainnet wallets ends
 // in hours at most.
 export const LIVE_FIRE_REPS = Object.freeze({ repsH1: 1, repsVariants: 1, reps: 1 });
-export const MAX_BUSY_THREADS = 12;
+export { MAX_BUSY_THREADS };
 
 const RUN_OPTIONS = new Set(['runId', 'extractionRun', 'purpose', 'expectNetwork', 'treatment', 'treatmentPins', 'workers', 'oracleWorkers', 'bytes', 'immutableDir', 'immutableHost', 'keepForDebug']);
 const CLEANUP_OPTIONS = new Set(['cleanup', 'runId', 'network']);
@@ -133,7 +133,8 @@ export function planOf(o) {
   return {
     stages: [...LIVE_FIRE_STAGES],
     repetitions: { h1: LIVE_FIRE_REPS.repsH1, variants: LIVE_FIRE_REPS.repsVariants, battery: LIVE_FIRE_REPS.reps },
-    limits_ms: { replay: REPLAY_LIMIT_MS, answer: ANSWER_LIMIT_MS, oracle: TIME_LIMIT_MS },
+    limits_ms: { replay: REPLAY_LIMIT_MS, answer: ANSWER_LIMIT_MS, oracle_guard: ORACLE_SETTINGS.guardMs },
+    oracle_budget: { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, solves: ORACLE_SETTINGS.maxSolves, nodes: ORACLE_SETTINGS.maxNodes, solve_nodes: ORACLE_SETTINGS.maxSolveNodes },
     oracle: true,
     validity: true,
     workers: o.workers,

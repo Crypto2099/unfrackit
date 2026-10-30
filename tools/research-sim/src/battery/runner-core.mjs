@@ -94,7 +94,7 @@ export async function batteryWallet(T, source, job, hooks) {
       id: s.intent.id,
       type: s.intent.type,
       layout: s.layout,
-      method: { name: m.name, version: m.version },
+      method: { name: m.name, version: m.version, seeded: m.seeded },
       opts: r.opts,
       repetition: r.repetition,
       suffices: suffices.get(s.n),
@@ -118,7 +118,8 @@ export async function batteryWallet(T, source, job, hooks) {
         tidyFee: res.tidyFee,
         measures: spendMeasures(chainBefore(state, res), s.intent, t, last.walletInputs, params),
         // The incumbent transactions for the oracle (a chain has none: there
-        // is no oracle for multi-transaction plans).
+        // is no oracle for multi-transaction plans); the battery runner keeps
+        // those of the methods its oracle's incumbents rule admits.
         incumbent: res.kind === 'single' ? { walletInputs: last.walletInputs, bytes: last.bytes, fee: last.fee } : null
       });
     }

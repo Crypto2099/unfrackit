@@ -89,7 +89,7 @@ parentPort.on('message', async (job) => {
         rec.globalMin = globalBest ? globalBest.fee.toString() : null;
         rec.candidateMin = candBest ? candBest.fee.toString() : null;
         const run = async (path, mipSpace) => {
-          const o = await searchOracle(T, state, spend, P, policy, { timeLimitMs: job.limitMs, path, mipSpace, settings });
+          const o = await searchOracle(T, state, spend, P, policy, { ...(job.limitMs === null ? {} : { timeLimitMs: job.limitMs }), path, mipSpace, settings });
           const str = (x) => (x === null || x === undefined ? null : x.toString());
           return {
             status: o.status,
@@ -102,6 +102,8 @@ parentPort.on('message', async (job) => {
             bestFrom: o.bestFrom,
             bestInCandidates: o.bestInCandidates,
             exhaustive: o.exhaustive && { complete: o.exhaustive.complete, status: o.exhaustive.status, fee: str(o.exhaustive.fee) },
+            stop: o.stop,
+            work: o.work,
             evaluations: o.evaluations.evaluations,
             detail: o.detail
           };

@@ -93,6 +93,9 @@ export function meshMethod({ selector = 'default' } = {}) {
     name,
     version: `@meshsdk/transaction ${MESH_VERSION} ${selector === 'default' ? 'CardanoSdkInputSelector' : 'LargestFirstInputSelector'}`,
     deterministic: selector !== 'default',
+    // The default selector's Math.random is a generator seeded with
+    // opts.seed for the build.
+    seeded: true,
     async build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.mesh, intent);
       if (opts.changePolicy !== 'default') return { ok: false, class: CLASSES.other, detail: 'Mesh is surveyed at its own change only' };

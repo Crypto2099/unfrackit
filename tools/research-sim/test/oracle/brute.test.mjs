@@ -26,9 +26,10 @@
 // The least exact fee over the candidate set and over every subset are both
 // reported, which shows what the candidate set leaves out. Needs
 // RESEARCH_SIM_TREATMENT_DIR; RESEARCH_SIM_ORACLE_WORKERS sets the worker
-// count (4), RESEARCH_SIM_ORACLE_LIMIT_MS the oracle's limit per run (60000)
-// and RESEARCH_SIM_ORACLE_SETTINGS the oracle's settings (test/lib/outdir.mjs;
-// the defaults otherwise).
+// count (4, at most 12) and RESEARCH_SIM_ORACLE_SETTINGS the oracle's settings
+// (test/lib/outdir.mjs; the defaults, the work budget among them, otherwise);
+// under limit=wall-clock, RESEARCH_SIM_ORACLE_LIMIT_MS sets the oracle's limit
+// per run (60000).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +37,7 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { skip, TREATMENT_DIR } from '../lib/treatment.mjs';
 import { runJobs } from '../lib/workers.mjs';
-import { oracleOutDir, envNumber, envOracleOverrides } from '../lib/outdir.mjs';
+import { oracleOutDir, envOracleOverrides, envOracleWorkers, envOracleLimitMs } from '../lib/outdir.mjs';
 import { availablePolicies } from '../../src/oracle/policies.mjs';
 import { oracleSettings } from '../../src/oracle/settings.mjs';
 
@@ -53,12 +54,13 @@ export function expected(afterExhaustive, r) {
 
 test('the oracle equals brute force on small wallets, and its bound is sound', { skip, timeout: 24 * 60 * 60 * 1000 }, async (t) => {
   const pinsText = process.env.RESEARCH_SIM_TREATMENT_PINS ? readFileSync(process.env.RESEARCH_SIM_TREATMENT_PINS, 'utf8') : undefined;
-  const limitMs = envNumber('RESEARCH_SIM_ORACLE_LIMIT_MS', 60000);
   const only = process.env.RESEARCH_SIM_ORACLE_SHAPES ? new Set(process.env.RESEARCH_SIM_ORACLE_SHAPES.split(',')) : null;
   const policies = process.env.RESEARCH_SIM_ORACLE_POLICIES ? process.env.RESEARCH_SIM_ORACLE_POLICIES.split(',') : await availablePolicies();
   const overrides = envOracleOverrides();
   const settings = oracleSettings(overrides);
-  t.diagnostic(`policies: ${policies.join(', ')}; afterExhaustive ${settings.afterExhaustive}`);
+  const limitMs = envOracleLimitMs(settings);
+  const workers = envOracleWorkers();
+  t.diagnostic(`policies: ${policies.join(', ')}; settings ${JSON.stringify(settings)}; workers ${workers}`);
   const jobs = [];
   for (const shape of SMALL) if (!only || only.has(shape)) jobs.push({ shape, seed: null, policies, limitMs });
   LARGE.forEach((shape, i) => {
@@ -67,7 +69,7 @@ test('the oracle equals brute force on small wallets, and its bound is sound', {
   const out = join(oracleOutDir(), 'oracle-brute.jsonl');
   const script = new URL('./brute-worker.mjs', import.meta.url);
   const { records, errors } = await runJobs(script, { treatmentDir: TREATMENT_DIR, pinsText, settings: overrides }, jobs, {
-    workers: envNumber('RESEARCH_SIM_ORACLE_WORKERS', 4),
+    workers,
     onRecord: (r) => appendFileSync(out, JSON.stringify(r) + '\n', { mode: 0o600 })
   });
   assert.deepEqual(errors, []);
@@ -83,8 +85,7 @@ test('the oracle equals brute force on small wallets, and its bound is sound', {
     c.statuses[a.status] = (c.statuses[a.status] || 0) + 1;
     c.statusScope[`${a.status}/${a.scope}`] = (c.statusScope[`${a.status}/${a.scope}`] || 0) + 1;
     c.bestFrom[a.bestFrom] = (c.bestFrom[a.bestFrom] || 0) + 1;
-    const stop = a.detail && a.detail.mip ? a.detail.mip.stop : null;
-    if (stop) c.stops[stop] = (c.stops[stop] || 0) + 1;
+    if (a.stop) c.stops[a.stop] = (c.stops[a.stop] || 0) + 1;
     c.autoMs.push(a.ms);
     const tag = `${r.shape}${r.seed === null ? '' : '/' + r.seed} ${r.spend} ${r.policy}`;
     const want = expected(settings.afterExhaustive, r);

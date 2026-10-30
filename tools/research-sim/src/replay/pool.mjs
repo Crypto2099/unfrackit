@@ -17,11 +17,35 @@
 // Each worker runs one job at a time, and is replaced after maxJobs jobs:
 // CSL's asm.js heap only grows, to the high-water mark of the largest wallet
 // the worker has built for, and a fresh thread gives it back.
+//
+// The thread cap: a run keeps at most MAX_BUSY_THREADS threads busy, its
+// replay or battery workers and its oracle workers together, so that the
+// wall-clock limits above hold on a machine whose cores are not
+// oversubscribed. The commands refuse more (checkBusyThreads) and record the
+// counts in run.json.
 
 import { Worker } from 'node:worker_threads';
 
 export const REPLAY_LIMIT_MS = 300 * 1000;
 export const ANSWER_LIMIT_MS = 60 * 1000;
+export const MAX_BUSY_THREADS = 12;
+
+// A worker count as a command line gives it: a positive whole number, or
+// `dflt` when absent.
+export function workerCount(v, flag, dflt = 1) {
+  if (v === undefined) return dflt;
+  const n = typeof v === 'string' && /^[1-9]\d*$/.test(v) ? Number(v) : v;
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error(`${flag} takes a positive whole number`);
+  return n;
+}
+
+// The busy threads of a run, refused above the cap: { workers,
+// oracleWorkers, busy, cap }.
+export function checkBusyThreads(workers, oracleWorkers = 0) {
+  const busy = workers + oracleWorkers;
+  if (busy > MAX_BUSY_THREADS) throw new Error(`refusing: ${oracleWorkers ? '--workers and --oracle-workers together' : '--workers'} may keep at most ${MAX_BUSY_THREADS} threads busy (${busy} asked)`);
+  return { workers, oracleWorkers, busy, cap: MAX_BUSY_THREADS };
+}
 const WORKER = new URL('./worker.mjs', import.meta.url);
 
 export class Pool {

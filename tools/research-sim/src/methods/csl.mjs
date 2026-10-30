@@ -185,6 +185,9 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
     name,
     version: `cardano-serialization-lib ${T.cslkit.CSL_VERSION} ${CSL_STRATEGIES[strategy]}${preferPureChange ? ', prefer_pure_change' : ''}`,
     deterministic: strategy === 'lf',
+    // RandomImproveMultiAsset draws from rand::thread_rng(), which no caller
+    // can seed.
+    seeded: strategy === 'lf',
     build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.csl, intent);
       if (intent.source === 'replay') return cslReplay(T, { strategy, preferPureChange }, state, intent, params, opts);

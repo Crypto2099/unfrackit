@@ -11,6 +11,7 @@
 // cleanup; a run killed midway. The extraction tool's own reader runs over
 // these logs in live-fire-corpus.test.mjs.
 
+import { ORACLE_SETTINGS } from '../../../src/oracle/settings.mjs';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readdirSync, chmodSync } from 'node:fs';
@@ -142,7 +143,8 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
   assert.ok(g.seq < st.seq);
   assert.deepEqual([st.purpose, st.test_h, st.extraction_run, st.command], ['confirm the replays run on real data', TEST_H, 'clean-1', 'live-fire --run-id sim-clean']);
   assert.deepEqual(st.plan.repetitions, { h1: 1, variants: 1, battery: 1 });
-  assert.deepEqual(st.plan.limits_ms, { replay: 300000, answer: 60000, oracle: 60000 });
+  assert.deepEqual(st.plan.limits_ms, { replay: 300000, answer: 60000, oracle_guard: ORACLE_SETTINGS.guardMs });
+  assert.deepEqual(st.plan.oracle_budget, { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, solves: ORACLE_SETTINGS.maxSolves, nodes: ORACLE_SETTINGS.maxNodes, solve_nodes: ORACLE_SETTINGS.maxSolveNodes });
   assert.deepEqual([st.plan.oracle, st.plan.validity, st.plan.workers, st.plan.oracle_workers, st.plan.stages], [true, true, 8, 4, [...LIVE_FIRE_STAGES]]);
   assert.deepEqual(Object.keys(end), ['seq', 'prev', 'date', 'type', 'run_id', 'start_seq', 'command', 'purpose', 'test_h', 'extraction_run', 'code', 'outcome', 'error', 'run_ms', 'steps', 'checks', 'wallet_level_output']);
   assert.equal(end.start_seq, st.seq);

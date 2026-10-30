@@ -48,20 +48,33 @@
 // loop solves, rebuilds the chosen set exactly, keeps it when it is feasible
 // and cheaper than the best, cuts it off, and solves again, until the program
 // is infeasible (no remaining set can beat the best, which is then the
-// optimum over the pool, or there is none) or the time limit passes. A
+// optimum over the pool, or there is none) or its budget is spent. A
 // rebuild whose transaction fails a check, or whose exact fee differs from
 // the program's, is recorded as a rejection.
+//
+// The budget (oracle settings, limit 'budget'): at most maxSolves solves and
+// maxNodes branch-and-bound nodes over them, each solve stopped after
+// maxSolveNodes nodes or the nodes left, whichever is fewer (HiGHS
+// mip_max_nodes), with the best set it holds; a capped solve that finds no
+// set is followed by solves that may take every node left, as under the
+// wall-clock limit a capped solve is followed by one with all the time left.
+// At most maxSets sets are rebuilt. HiGHS's random_seed is set on every
+// solve and no solve has a time limit, so a call does the same work whatever
+// the load. Under limit 'wall-clock' the loop stops at its deadline instead,
+// each solve capped at iterationMs. Either way the solves, their nodes and
+// their simplex iterations are counted.
 //
 // The program's bound: the highest dual bound any solve reported, in
 // lovelace rounded down. Cuts and a lower cutoff only shrink the program, so
 // a bound reported by any solve holds for every set still admitted, and
 // every set excluded was rebuilt exactly, refuted by the bound's exact
 // conditions, or costs at least the best fee; the optimum over the pool is
-// therefore at least the lower of the best fee and this bound. The loop records why it stopped: 'proven' (the program is
-// infeasible, or the pool cannot hold the spend), 'limit' (the time limit),
-// 'solver-error' (a second solver failure), 'status' (a solve ended without
-// a set for another reason, named in statuses) or 'empty' (a solve chose no
-// input).
+// therefore at least the lower of the best fee and this bound. The loop
+// records why it stopped: 'proven' (the program is infeasible, or the pool
+// cannot hold the spend), 'solves', 'nodes' or 'candidate-sets' (the budget
+// limit that ended it), 'wall-clock' (the deadline), 'solver-error'
+// (a second solver failure), 'status' (a solve ended without a set for
+// another reason, named in statuses) or 'empty' (a solve chose no input).
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -286,10 +299,24 @@ function dualBound(model) {
   return typeof v === 'number' && Number.isFinite(v) ? Math.floor(v * ADA) : null;
 }
 
+// The number a HiGHS info item holds, or null when the solve reported none.
+function infoNumber(model, name) {
+  try {
+    const v = model.info.get(name);
+    return typeof v === 'bigint' ? Number(v) : typeof v === 'number' && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 // The loop. pool: UTxO records; evaluate(S): policies.mjs, resolving to an
-// evaluation; best: the incumbent evaluation or null. Resolves to { proven,
-// stop, bound, best, iterations, rejections, solverErrors, cols, rows,
-// solverMs }.
+// evaluation; best: the incumbent evaluation or null; budget: { maxSets,
+// maxSolves, maxNodes, maxSolveNodes } under limit 'budget', or null under
+// 'wall-clock', which takes deadline and iterationMs; seed: HiGHS's
+// random_seed. Resolves to { proven, stop, bound, best, iterations, sets,
+// nodes, mostSolveNodes, lpIterations, refuted, rejections, solverErrors,
+// cols, rows, solverMs }: iterations counts the solves, sets the sets
+// rebuilt, refuted the chosen sets the bound refuted without a rebuild.
 //
 // HiGHS 1.15.4's presolve aborts on some of these programs once enough cuts
 // have been added (a RuntimeError from the WebAssembly runtime, which leaves
@@ -297,13 +324,17 @@ function dualBound(model) {
 // presolve off). On any solver failure the loop takes a fresh solver
 // instance, rebuilds the program with every cut so far and the cutoff, turns
 // presolve off for the rest of the run, and goes on; a second failure ends
-// the run, unproven. Every failure is recorded.
-export async function mipSearch({ highs, model: M, pool, evaluate, best = null, deadline = Infinity, iterationMs = 6000, onImprove = () => {} }) {
+// the run, unproven. Every failure is recorded. An instance an earlier call
+// left aborted is replaced at the start and recorded as inherited; it does
+// not count as one of this call's failures, so a call's result does not
+// depend on what its thread ran before.
+export async function mipSearch({ highs, model: M, pool, evaluate, best = null, budget = null, seed = 0, deadline = Infinity, iterationMs = 6000, onImprove = () => {} }) {
   let H = highs;
   const prog = buildProgram(H, M, pool);
   // feeBelow counts exact fees under the program's value, which would mean
   // the relaxation is not a lower bound; the checks require it to stay 0.
-  const out = { proven: false, stop: null, bound: null, best, iterations: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
+  const out = { proven: false, stop: null, bound: null, best, iterations: 0, sets: 0, nodes: 0, mostSolveNodes: 0, lpIterations: 0, refuted: 0, rejections: [], solverErrors: [], feeDiffers: 0, maxFeeAbove: 0, feeBelow: 0, cols: 0, rows: 0, solverMs: 0, statuses: {} };
+  const failures = () => out.solverErrors.filter((e) => !e.inherited).length;
   if (!prog) {
     out.proven = true;
     out.stop = 'proven';
@@ -319,7 +350,7 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
     model = H.createModel(prog.data);
     // The WebAssembly build is single-threaded and refuses the threads and
     // parallel options.
-    model.options.set({ output_flag: false, mip_rel_gap: 0, mip_abs_gap: 1e-7, mip_feasibility_tolerance: 1e-9, primal_feasibility_tolerance: 1e-9, presolve });
+    model.options.set({ output_flag: false, mip_rel_gap: 0, mip_abs_gap: 1e-7, mip_feasibility_tolerance: 1e-9, primal_feasibility_tolerance: 1e-9, presolve, random_seed: seed });
     for (const c of cuts) model.addRow(-H.infinity, c.upper, c.entries);
     if (out.best) model.changeRowBounds(prog.cutoffRow, -H.infinity, (Number(out.best.fee) - 1) / ADA);
   };
@@ -336,25 +367,40 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
     try {
       open();
     } catch (e) {
-      // An instance an earlier run left aborted.
-      out.solverErrors.push({ iteration: 0, cuts: 0, presolve, error: String(e && (e.message || e)).split('\n')[0] });
+      // An instance an earlier call left aborted.
+      out.solverErrors.push({ iteration: 0, cuts: 0, presolve, inherited: true, error: String(e && (e.message || e)).split('\n')[0] });
       H = await loadSolver({ fresh: true });
       open();
     }
     let uncapped = false;
     for (;;) {
-      const left = deadline - performance.now();
-      if (left <= 0) {
-        out.stop = 'limit';
-        break;
+      let left = Infinity;
+      if (budget) {
+        if (out.iterations >= budget.maxSolves) {
+          out.stop = 'solves';
+          break;
+        }
+        left = budget.maxNodes - out.nodes;
+        if (left <= 0) {
+          out.stop = 'nodes';
+          break;
+        }
+      } else {
+        left = deadline - performance.now();
+        if (left <= 0) {
+          out.stop = 'wall-clock';
+          break;
+        }
       }
       const t0 = performance.now();
       let st;
       try {
         model.zeroAllClocks();
         // Each solve is capped, so that a program whose optimum is slow to
-        // prove still yields sets to rebuild.
-        model.options.set({ time_limit: Math.max(0.01, Math.min(left, uncapped ? left : iterationMs) / 1000) });
+        // prove still yields sets to rebuild: under the budget by nodes, under
+        // the wall-clock limit by time.
+        if (budget) model.options.set({ mip_max_nodes: uncapped ? left : Math.min(left, budget.maxSolveNodes) });
+        else model.options.set({ time_limit: Math.max(0.01, Math.min(left, uncapped ? left : iterationMs) / 1000) });
         model.run();
         st = model.getModelStatus();
       } catch (e) {
@@ -364,7 +410,7 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
         // The instance is replaced either way, so that later runs in this
         // thread start from a working solver.
         H = await loadSolver({ fresh: true });
-        if (out.solverErrors.length > 1) {
+        if (failures() > 1) {
           out.stop = 'solver-error';
           break;
         }
@@ -374,6 +420,10 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       }
       out.solverMs += performance.now() - t0;
       out.iterations++;
+      const nodes = infoNumber(model, 'mip_node_count') ?? 0;
+      out.nodes += nodes;
+      if (nodes > out.mostSolveNodes) out.mostSolveNodes = nodes;
+      out.lpIterations += infoNumber(model, 'simplex_iteration_count') ?? 0;
       const ms = H.constants.modelStatus;
       out.statuses[st] = (out.statuses[st] || 0) + 1;
       if (st === ms.infeasible) {
@@ -383,18 +433,32 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       }
       const db = dualBound(model);
       if (db !== null && (out.bound === null || db > out.bound)) out.bound = db;
+      // A solve stopped at its node limit reports solutionLimit (HiGHS's
+      // status for mip_max_nodes), and is read as a solve stopped at its time
+      // limit is: its best set, if it holds one.
+      const limited = st === ms.timeLimit || st === ms.solutionLimit || st === ms.iterationLimit;
       let sol = null;
-      if ((st === ms.optimal || st === ms.timeLimit || st === ms.objectiveBound) && model.info.get('primal_solution_status') === 2) {
+      if ((st === ms.optimal || limited || st === ms.objectiveBound) && model.info.get('primal_solution_status') === 2) {
         const sv = model.getSolution();
         if (sv && sv.colValue && sv.colValue.length) sol = sv.colValue;
       }
       if (!sol) {
-        // No set yet within the cap: the next solve takes the time left.
-        if (st === ms.timeLimit && !uncapped && deadline - performance.now() > 0) {
-          uncapped = true;
-          continue;
+        // No set yet within the cap: the next solve takes the nodes, or the
+        // time, left.
+        if (budget) {
+          const capped = st === ms.solutionLimit || st === ms.iterationLimit;
+          if (capped && !uncapped && budget.maxNodes - out.nodes > 0) {
+            uncapped = true;
+            continue;
+          }
+          out.stop = capped ? 'nodes' : 'status';
+        } else {
+          if (st === ms.timeLimit && !uncapped && deadline - performance.now() > 0) {
+            uncapped = true;
+            continue;
+          }
+          out.stop = st === ms.timeLimit ? 'wall-clock' : 'status';
         }
-        out.stop = st === ms.timeLimit ? 'limit' : 'status';
         break;
       }
       const idx = [];
@@ -414,6 +478,12 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       // Such a set is refuted by the bound (bound.mjs boundOf) without a
       // rebuild, and cut off like any other.
       const bd = boundOf(M, S);
+      if (bd.feasible && budget && out.sets >= budget.maxSets) {
+        out.stop = 'candidate-sets';
+        break;
+      }
+      if (bd.feasible) out.sets++;
+      else out.refuted++;
       const ev = bd.feasible ? await evaluate(S) : { ok: false, class: 'bound', detail: !bd.covers ? 'a requested asset is not covered' : bd.coinIn < bd.need ? 'the coin falls short' : 'the bytes pass the size limit' };
       if (!ev.ok) out.rejections.push({ inputs: S.length, reason: ev.class, detail: ev.detail, relaxedFee: Math.round(relaxed) });
       else {

@@ -12,17 +12,22 @@
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
 //           [--run-id <id>] [--workers <n>] [--answer-limit-ms <ms>] [--validity]
-//           [--oracle [--oracle-workers <n>] [--oracle-limit-ms <ms>]
+//           [--oracle [--oracle-workers <n>]
 //           [--oracle-settings <name>=<value>,...]]
 //
 // A history directory is read for its *.jsonl files. A test plan runs the
 // test method only and is never a study run. Results go to the private run
-// directory (out/records.mjs); the command prints counts only.
+// directory (out/records.mjs); the command prints counts only. A run keeps at
+// most MAX_BUSY_THREADS (12) threads busy: replay refuses more --workers,
+// battery more --workers and --oracle-workers together (pool.mjs), and
+// run.json records the counts and the cap. The battery's oracle stops on its
+// work budget; --oracle-limit-ms and the wall-clock limit (oracle setting
+// limit=wall-clock, kept for the oracle's checks) are refused.
 
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadTreatment, DEFAULT_PINS } from '../treatment/bridge.mjs';
-import { Pool, REPLAY_LIMIT_MS, ANSWER_LIMIT_MS } from './pool.mjs';
+import { Pool, REPLAY_LIMIT_MS, ANSWER_LIMIT_MS, workerCount, checkBusyThreads } from './pool.mjs';
 import { runReplays, runBatteries } from './run.mjs';
 import { windowPlan, testPlan, STUDY_ROLES, TEST_ROLES, batteryPlan } from '../arms/plan.mjs';
 import { RunOutput } from '../out/records.mjs';
@@ -86,13 +91,33 @@ export function poolsOf(p) {
   return { t1: t1.map(BigInt), t5: t5.map((x) => x.map(BigInt)) };
 }
 
+// The run's busy threads, checked against the cap before anything starts:
+// the replay or battery workers, and the battery's oracle workers when it
+// runs the oracle.
+export function threadsOf(opts, command) {
+  const workers = workerCount(opts.workers, '--workers');
+  const oracleWorkers = command === 'battery' && opts.oracle ? workerCount(opts.oracleWorkers, '--oracle-workers') : 0;
+  return checkBusyThreads(workers, oracleWorkers);
+}
+
 async function setup(opts, command) {
   if (!opts.treatment) throw new Error('--treatment <dir> names the treatment directory');
+  const threads = threadsOf(opts, command);
   const pinsPath = pinsPathOf(opts);
   const T = await loadTreatment(opts.treatment, readFileSync(pinsPath, 'utf8'));
-  const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: Number(opts.workers || 1) });
+  const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: threads.workers });
   const runId = opts.runId || `${command}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  return { T, pool, pinsPath, runId };
+  return { T, pool, pinsPath, runId, threads };
+}
+
+// The battery's oracle settings: the defaults with --oracle-settings over
+// them, under the work budget only.
+export function batteryOracleSettings(opts) {
+  if (opts.oracleLimitMs !== undefined) throw new Error('refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets, maxSolves and maxSolveNodes), with a guard at guardMs');
+  if (!opts.oracle) return null;
+  const s = oracleSettings(parseOracleSettings(opts.oracleSettings));
+  if (s.limit !== 'budget') throw new Error('refusing: the battery\'s oracle stops on its work budget; limit=wall-clock is kept for the oracle\'s checks');
+  return s;
 }
 
 function header(command, opts, T, extra) {
@@ -110,12 +135,12 @@ function header(command, opts, T, extra) {
 export async function cmdReplay(opts) {
   const plan = opts.plan;
   if (!['recent', 'peak', 'test'].includes(plan)) throw new Error('--plan recent | peak | test');
-  const { T, pool, runId } = await setup(opts, 'replay');
+  const { T, pool, runId, threads } = await setup(opts, 'replay');
   const wallets = walletsOf(opts, { stream: 'synthetic' });
   const first = loadSource(T, wallets[0].spec);
   const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, { reps: { h1: opts.repsH1 ? Number(opts.repsH1) : undefined, variants: opts.repsVariants ? Number(opts.repsVariants) : undefined } });
   const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
-  const out = new RunOutput(first.network, runId, header('replay', opts, T, { plan, entries }));
+  const out = new RunOutput(first.network, runId, header('replay', opts, T, { plan, entries, threads }));
   out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
   try {
     const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, limitMs: Number(opts.limitMs || REPLAY_LIMIT_MS), validity: !!opts.validity });
@@ -128,7 +153,8 @@ export async function cmdReplay(opts) {
 }
 
 export async function cmdBattery(opts) {
-  const { T, pool, runId } = await setup(opts, 'battery');
+  const oracleSettingsUsed = batteryOracleSettings(opts);
+  const { T, pool, runId, threads } = await setup(opts, 'battery');
   const wallets = walletsOf(opts, { stream: null });
   const first = loadSource(T, wallets[0].spec);
   const methods = opts.methods === 'test'
@@ -138,14 +164,13 @@ export async function cmdBattery(opts) {
   // battery draws from the frozen pools, which must be given.
   if (!opts.shapes && !opts.pools) throw new Error('--pools <file> names the frozen T1 amounts and T5 shares the battery draws from');
   const pools = opts.pools ? poolsOf(JSON.parse(readFileSync(opts.pools, 'utf8'))) : undefined;
-  // The oracle is off unless asked for: it takes up to a minute per spend
-  // and change policy.
-  const oracleSettingsUsed = opts.oracle ? oracleSettings(parseOracleSettings(opts.oracleSettings)) : null;
-  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods, ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
+  // The oracle is off unless asked for: it takes up to about a minute per
+  // spend and change policy.
+  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods, threads, ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
   out.note({ event: 'start', wallets: wallets.length });
   let oracle = null;
   try {
-    if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: Number(opts.oracleWorkers || 1), ...(opts.oracleLimitMs ? { limitMs: Number(opts.oracleLimitMs) } : {}), settings: oracleSettingsUsed });
+    if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: threads.oracleWorkers, settings: oracleSettingsUsed });
     const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools, oracle, validity: !!opts.validity });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) });
     return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) }, failed: !!(totals.validity && totals.validity.failed) };

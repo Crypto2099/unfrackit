@@ -215,6 +215,13 @@ test('each plan refuses what it does not use, before anything is written', async
   await refuse({ ...corpus, runId: 'r15', snapshot: '100' }, /give no --snapshot/);
   await refuse({ ...corpus, runId: 'r16', expectNetwork: 'preprod' }, /--extraction-run/);
   await refuse({ ...preprod('bad/id') }, /--run-id/);
+  // The thread cap and the work budget, before any stage.
+  await refuse(synthetic('r17', { workers: '13', oracle: undefined }), /--workers may keep at most 12 threads busy \(13 asked\)/);
+  await refuse(synthetic('r18', { workers: '8', oracleWorkers: '5' }), /--workers and --oracle-workers together may keep at most 12 threads busy \(13 asked\)/);
+  await refuse(synthetic('r19', { workers: 'many' }), /--workers takes a positive whole number/);
+  await refuse(synthetic('r20', { oracleLimitMs: '60000' }), /does not use --oracle-limit-ms/);
+  assert.equal(studyOptions(synthetic('ok12', { workers: '8', oracleWorkers: '4' })).workers, '8');
+  assert.equal(studyOptions(synthetic('ok13', { workers: '12', oracle: undefined, oracleWorkers: '4' })).workers, '12', 'without the oracle its workers start no thread');
   assert.equal(studyOptions({ ...corpus, runId: 'ok' }).fromStudy, 'all');
 });
 

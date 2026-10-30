@@ -4,8 +4,18 @@
 // The contract every selection method implements: the H-12 rule, the test
 // method, and the baseline adapters.
 //
-//   { name, version, deterministic, build(state, intent, params, opts),
-//     ownCollateral? }
+//   { name, version, deterministic, seeded, build(state, intent, params,
+//     opts), ownCollateral? }
+//
+//   deterministic  true when the method draws nothing at random
+//   seeded   true when the method's answer is fixed by its inputs and the
+//            seed it is given (opts.seed, or opts.random in a replay): a
+//            deterministic method, or a random one that draws only from that
+//            seed. False for a method whose draws come from a generator no
+//            caller can seed (cardano-serialization-lib's
+//            RandomImproveMultiAsset, csl.mjs), whose runs cannot be
+//            repeated; the oracle takes incumbents only from seeded methods
+//            (oracle/settings.mjs incumbents)
 //
 //   opts     { seed, changePolicy ('default' | 'layout' | 'single' |
 //            'naive'), collateralRule, absorb, collateral, random }
@@ -49,6 +59,8 @@ export function checkMethod(m) {
   if (typeof m.name !== 'string' || !m.name) throw new TypeError('method: no name');
   if (typeof m.version !== 'string' || !m.version) throw new TypeError(`method ${m.name}: no version`);
   if (typeof m.deterministic !== 'boolean') throw new TypeError(`method ${m.name}: deterministic must be a boolean`);
+  if (typeof m.seeded !== 'boolean') throw new TypeError(`method ${m.name}: seeded must be a boolean`);
+  if (m.deterministic && !m.seeded) throw new TypeError(`method ${m.name}: a deterministic method is seeded`);
   if (typeof m.build !== 'function') throw new TypeError(`method ${m.name}: no build function`);
   if (m.ownCollateral !== undefined && !choosesOwnCollateral(m)) throw new TypeError(`method ${m.name}: only the Evolution SDK's methods choose their own collateral`);
   return m;

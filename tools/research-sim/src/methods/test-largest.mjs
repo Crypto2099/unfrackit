@@ -28,6 +28,7 @@ export function testLargestMethod(T) {
     name: 'test-largest-first',
     version: '1',
     deterministic: true,
+    seeded: true,
     build(state, intent, params, opts) {
       try {
         return this.select(state, intent, params, opts);
