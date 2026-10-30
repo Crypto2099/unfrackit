@@ -3,8 +3,9 @@
 
 // The oracle's parts that need no treatment: its settings and work budget,
 // the incumbents rule, the spends it refuses, the input bytes and counts the
-// bounds rest on, the method to policy mapping, and the solver's node limit
-// and seed. The searches themselves need cardano-serialization-lib and are
+// bounds rest on, the method to policy mapping, the solver's node limit and
+// seed, and what it reports and honors for a MIP solve's simplex iterations.
+// The searches themselves need cardano-serialization-lib and are
 // checked in test/oracle/.
 
 import { test } from 'node:test';
@@ -109,6 +110,73 @@ test('highs 1.15.4 honors the node limit and the random seed the oracle sets', a
   const seeded = solve({ mip_max_nodes: 300, random_seed: 7 });
   assert.equal(seeded.seed, 7);
   assert.equal(seeded.nodes, 300);
+});
+
+// What highs 1.15.4 reports and honors for a MIP solve's simplex iterations,
+// the count the oracle records as work.lpIterations, on the market-split
+// program: exact counts, which a fixed seed repeats.
+test('highs 1.15.4 counts a MIP solve\'s LP iterations, ignores simplex_iteration_limit, and stops at a count only by its interrupt callback', async () => {
+  const H = await loadSolver();
+  const read = (model) => ({ status: model.getModelStatus(), nodes: Number(model.info.get('mip_node_count')), iterations: model.info.get('simplex_iteration_count'), primal: model.info.get('primal_solution_status') });
+  // The callbacks that record the last count the MIP interrupt callback saw
+  // and interrupt once it reaches `at`.
+  const interruptAt = (at, seen) => ({
+    [H.constants.callbackType.mipInterrupt](e) {
+      seen.push(e.data.mip_total_lp_iterations);
+      if (e.data.mip_total_lp_iterations >= BigInt(at)) e.interrupt();
+    }
+  });
+  const solve = (opts, at = null) => {
+    const model = H.createModel(marketSplit(H));
+    try {
+      model.options.set({ output_flag: false, mip_rel_gap: 0, random_seed: 0, ...opts });
+      const seen = [];
+      model.run(at === null ? undefined : interruptAt(at, seen));
+      return { ...read(model), seen: seen.length ? Number(seen.at(-1)) : null };
+    } finally {
+      model.dispose();
+    }
+  };
+  // simplex_iteration_count is the MIP's total over every LP it solved: it
+  // grows with the nodes searched, and a fixed seed repeats it exactly.
+  const counts = [1, 40, 300].map((n) => solve({ mip_max_nodes: n }));
+  assert.deepEqual(counts.map((c) => [c.status, c.nodes, c.iterations]), [[16, 1, 407], [16, 40, 557], [16, 300, 2762]]);
+  assert.deepEqual(solve({ mip_max_nodes: 300 }), counts[2]);
+  // simplex_iteration_limit does not apply to a MIP (HiGHS: "when solving
+  // LPs, but not subproblems in the MIP solver"): the solve is the same.
+  for (const limit of [0, 10, 100]) assert.deepEqual(solve({ mip_max_nodes: 300, simplex_iteration_limit: limit }), counts[2], `simplex_iteration_limit ${limit}`);
+  // No MIP option limits iterations.
+  const probe = H.createModel(marketSplit(H));
+  try {
+    assert.deepEqual(probe.options.names().filter((n) => /^mip_/.test(n) && /iter/.test(n)), []);
+  } finally {
+    probe.dispose();
+  }
+  // The MIP interrupt callback sees the same count and stops the solve at
+  // the first checkpoint past a value, interrupted with its best set; the
+  // same seed stops at the same point. A callback that does not interrupt
+  // leaves the solve unchanged.
+  for (const [at, nodes, iterations] of [[500, 81, 709], [3000, 365, 3412]]) {
+    const a = solve({}, at);
+    assert.deepEqual([a.status, a.nodes, a.iterations, a.seen, a.primal], [H.constants.modelStatus.interrupted, nodes, iterations, iterations, 2], `interrupt at ${at}`);
+    assert.deepEqual(solve({}, at), a);
+  }
+  const watched = solve({ mip_max_nodes: 300 }, 2 ** 40);
+  assert.deepEqual({ ...watched, seen: null }, counts[2]);
+  assert.equal(watched.seen, 2762);
+  // The count is each run's own: a model run twice and then interrupted at
+  // 1000 reports that run's iterations, not a running total.
+  const model = H.createModel(marketSplit(H));
+  try {
+    model.options.set({ output_flag: false, mip_rel_gap: 0, random_seed: 0, mip_max_nodes: 300 });
+    model.run();
+    model.run();
+    model.options.set({ mip_max_nodes: 2147483647 });
+    model.run(interruptAt(1000, []));
+    assert.deepEqual(read(model), { status: H.constants.modelStatus.interrupted, nodes: 100, iterations: 1146, primal: 2 });
+  } finally {
+    model.dispose();
+  }
 });
 
 test('a search refuses an unseeded incumbent under seeded-methods, and a time limit under the budget', async () => {
