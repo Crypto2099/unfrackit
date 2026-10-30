@@ -62,6 +62,7 @@ import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { REPLAY_LIMIT_MS, ANSWER_LIMIT_MS, MAX_BUSY_THREADS } from '../replay/pool.mjs';
 import { ORACLE_SETTINGS } from '../oracle/settings.mjs';
 import { STAGE_COMMAND } from './study.mjs';
+import { LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS } from '../options.mjs';
 import { readPick, readLog, appendEntry, sanitizeError, redactCommand, unclosedStarts, keptRun, isSimRunId, SIM_GATE, SIM_LIVE_FIRE_START, SIM_LIVE_FIRE, KEPT } from './checklog.mjs';
 
 export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak', 'history-snapshot', 'battery-pools', 'replay-recent', 'replay-peak', 'battery']);
@@ -71,8 +72,8 @@ export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak',
 export const LIVE_FIRE_REPS = Object.freeze({ repsH1: 1, repsVariants: 1, reps: 1 });
 export { MAX_BUSY_THREADS };
 
-const RUN_OPTIONS = new Set(['runId', 'extractionRun', 'purpose', 'expectNetwork', 'treatment', 'treatmentPins', 'workers', 'oracleWorkers', 'bytes', 'immutableDir', 'immutableHost', 'keepForDebug']);
-const CLEANUP_OPTIONS = new Set(['cleanup', 'runId', 'network']);
+const RUN_OPTIONS = new Set(LIVE_FIRE_RUN_OPTIONS);
+const CLEANUP_OPTIONS = new Set(LIVE_FIRE_CLEANUP_OPTIONS);
 const SIM_ID = /^sim-[A-Za-z0-9._-]+$/;
 const flag = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 const sha256 = (x) => createHash('sha256').update(x).digest('hex');

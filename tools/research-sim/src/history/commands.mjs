@@ -24,22 +24,8 @@ import { snapshotBlock, recentWindow, peakWindow, windowOf, fromExtractionRun, w
 import { walletHistory } from './history.mjs';
 import { historyDir, runDir, JsonLines, writeJson } from './paths.mjs';
 
-export function parseArgs(argv) {
-  const opts = { _: [] };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (!a.startsWith('--')) {
-      opts._.push(a);
-      continue;
-    }
-    const key = a.slice(2).replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
-    const next = argv[i + 1];
-    const val = next === undefined || next.startsWith('--') ? true : (i++, next);
-    if (key in opts) opts[key] = [].concat(opts[key], val);
-    else opts[key] = val;
-  }
-  return opts;
-}
+// The command line reader, with each command's options (../options.mjs).
+export { parseArgs } from '../options.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 

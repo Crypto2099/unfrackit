@@ -72,6 +72,7 @@ import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
+import { STUDY_PLAN_OPTIONS } from '../options.mjs';
 import { workerCount, checkBusyThreads } from '../replay/pool.mjs';
 
 const DB_STAGES = Object.freeze(['history-recent', 'history-peak', 'history-snapshot', 'census', 'near-cap', 'collateral']);
@@ -97,14 +98,8 @@ export const STAGE_COMMAND = Object.freeze({
   battery: 'battery'
 });
 
-// Options by use. Paths are made absolute before they are recorded.
-const COMMON = ['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'repsH1', 'repsVariants', 'limitMs', 'answerLimitMs', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity'];
-const DATABASE = ['expectNetwork', 'snapshot', 'extractionRun', 'wallets', 'wallet', 'fromStudy', 'analysisFreezeTx', 'bytes', 'immutableDir', 'immutableHost', 'set'];
-const ALLOWED = Object.freeze({
-  synthetic: new Set([...COMMON, 'shapes']),
-  preprod: new Set([...COMMON, ...DATABASE, 'days']),
-  corpus: new Set([...COMMON, ...DATABASE])
-});
+// Options by use (the lists are in ../options.mjs). Paths are made absolute before they are recorded.
+const ALLOWED = Object.freeze(Object.fromEntries(Object.entries(STUDY_PLAN_OPTIONS).map(([k, v]) => [k, new Set(v)])));
 const PATHS = ['treatment', 'treatmentPins', 'wallets', 'extractionRun', 'immutableDir'];
 const RUN_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 const HEX64 = /^[0-9a-f]{64}$/;

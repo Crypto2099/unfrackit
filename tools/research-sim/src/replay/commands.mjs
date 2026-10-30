@@ -37,6 +37,7 @@ import { formatHashList } from '../hash.mjs';
 import { loadSource } from './source.mjs';
 import { createBatteryOracle } from '../oracle/battery-hook.mjs';
 import { oracleSettings } from '../oracle/settings.mjs';
+import { ORACLE_LIMIT_MS_GONE } from '../options.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 
@@ -113,7 +114,7 @@ async function setup(opts, command) {
 // The battery's oracle settings: the defaults with --oracle-settings over
 // them, under the work budget only.
 export function batteryOracleSettings(opts) {
-  if (opts.oracleLimitMs !== undefined) throw new Error('refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets, maxSolves and maxSolveNodes), with a guard at guardMs');
+  if (opts.oracleLimitMs !== undefined) throw new Error(ORACLE_LIMIT_MS_GONE);
   if (!opts.oracle) return null;
   const s = oracleSettings(parseOracleSettings(opts.oracleSettings));
   if (s.limit !== 'budget') throw new Error('refusing: the battery\'s oracle stops on its work budget; limit=wall-clock is kept for the oracle\'s checks');
