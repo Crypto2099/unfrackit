@@ -1,0 +1,22 @@
+{
+  "name": "unfrackit-preprod-seeder",
+  "version": "0.1.0",
+  "description": "Creates and verifies preprod test wallets laid out in fixed UTxO shapes.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Adam K. Dean",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "preprod-seeder": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "13.2.1",
+    "bip39": "3.1.0"
+  }
+}
