@@ -1,0 +1,39 @@
+{
+  "name": "unfrackit-research-sim",
+  "version": "0.1.0",
+  "description": "The downstream simulator of the UnFrack.It UTxO-management research: wallet histories and intents read from cardano-db-sync, and their replay.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Adam K. Dean",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "bin": {
+    "research-sim": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test \"test/unit/**/*.test.mjs\"",
+    "test:treatment": "node --test --test-concurrency=1 \"test/treatment/**/*.test.mjs\"",
+    "test:preprod": "node --test --test-concurrency=1 \"test/integration/**/*.test.mjs\"",
+    "test:oracle": "node --test --test-concurrency=1 \"test/oracle/**/*.test.mjs\"",
+    "hash": "node src/cli.mjs hash"
+  },
+  "dependencies": {
+    "@cardano-sdk/input-selection": "0.14.35",
+    "@evolution-sdk/evolution": "0.8.0",
+    "@meshsdk/transaction": "1.9.1",
+    "highs": "1.15.4",
+    "pg": "8.23.0"
+  },
+  "overrides": {
+    "@evolution-sdk/evolution": {
+      "effect": "3.22.2",
+      "@noble/curves": "2.4.0",
+      "@noble/hashes": "2.4.0",
+      "@scure/base": "2.4.0",
+      "@scure/bip32": "2.4.0",
+      "@scure/bip39": "2.4.0"
+    }
+  }
+}
