@@ -21,7 +21,10 @@
 // time (job.skip lists the numbers already done).
 //
 // job: { source, methods: [{ name, options, opts: [{ changePolicy, absorb,
-// seed }], repetitions }], pools, skip, tidySettings, validity }. With
+// seed }], repetitions, batteries }], batteries, pools, skip, tidySettings,
+// validity }. job.batteries ({ standard, h10 }, both when absent) names the
+// batteries the wallet runs; a method's batteries (['standard', 'h10'], every
+// battery when absent) restrict where it runs. With
 // validity, each run's result carries the validity summary of kit/validity.mjs
 // over its spend's transactions.
 
@@ -31,7 +34,7 @@ import { balanceSuffices } from './suffices.mjs';
 import { runSpend } from './run.mjs';
 import { planState } from '../treatment/run.mjs';
 import { makeMethod } from '../methods/registry.mjs';
-import { spendMeasures } from '../replay/measure.mjs';
+import { spendMeasures, tokenLedger } from '../replay/measure.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { newValidity, summarize } from '../kit/validity.mjs';
 
@@ -39,17 +42,21 @@ const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
 // The battery's spends for a wallet, in their fixed order: [{ n, layout,
 // intent | unsettled }].
-export function batterySpends(T, source, params, { pools }) {
+export function batterySpends(T, source, params, { pools, batteries = { standard: true, h10: true } }) {
   if (!source.changeAddress) throw new Error('the change-address rule names no address at the snapshot: the wallet has received no output at a key payment credential and a base address');
   const observed = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress, utxos: source.start, franken: source.franken });
   const plan = planState(T, observed, params, {});
   const tidy = plan.after;
   const list = [
-    ...standardBattery(T, observed, params, { pools }).map((x) => ({ layout: 'observed', x })),
-    ...h10Battery(T, observed, params).map((x) => ({ layout: 'observed', x })),
-    ...h10Battery(T, tidy, params, { observed }).map((x) => ({ layout: 'tidy', x }))
+    ...(batteries.standard ? standardBattery(T, observed, params, { pools }).map((x) => ({ battery: 'standard', layout: 'observed', x })) : []),
+    ...(batteries.h10 ? h10Battery(T, observed, params).map((x) => ({ battery: 'h10', layout: 'observed', x })) : []),
+    ...(batteries.h10 ? h10Battery(T, tidy, params, { observed }).map((x) => ({ battery: 'h10', layout: 'tidy', x })) : [])
   ];
-  return { observed, tidy, tidyPlan: { txs: plan.txs.length, fee: sum(plan.txs.map((t) => t.fee)) }, spends: list.map((s, n) => ({ n, layout: s.layout, ...(s.x.unsettled ? { unsettled: s.x } : { intent: s.x }) })) };
+  const tidyPlan = { txs: plan.txs.length, fee: sum(plan.txs.map((t) => t.fee)) };
+  // The default plan's effect on the token UTxOs it can spend, for the
+  // snapshot-plan record of the wallets that run the standard battery.
+  const tidyLedger = { before: tokenLedger(observed, params), after: tokenLedger(tidy, params) };
+  return { observed, tidy, tidyPlan, tidyLedger, spends: list.map((s, n) => ({ n, battery: s.battery, layout: s.layout, ...(s.x.unsettled ? { unsettled: s.x } : { intent: s.x }) })) };
 }
 
 // The list of (spend, method, options, repetition) runs in their fixed order.
@@ -57,7 +64,7 @@ export function batteryRuns(spends, methods) {
   const runs = [];
   for (const s of spends) {
     if (!s.intent) continue;
-    for (const m of methods) for (const opts of m.opts) for (let rep = 1; rep <= (m.repetitions || 1); rep++) runs.push({ k: runs.length, spend: s.n, method: m.name, options: m.options || {}, opts: { ...opts, seed: opts.seed ?? rep }, repetition: rep });
+    for (const m of methods) if (!m.batteries || m.batteries.includes(s.battery)) for (const opts of m.opts) for (let rep = 1; rep <= (m.repetitions || 1); rep++) runs.push({ k: runs.length, spend: s.n, method: m.name, options: m.options || {}, opts: { ...opts, seed: opts.seed ?? rep }, repetition: rep });
   }
   return runs;
 }
@@ -65,7 +72,7 @@ export function batteryRuns(spends, methods) {
 export async function batteryWallet(T, source, job, hooks) {
   const params = source.params;
   const pools = job.pools || SHAPE_POOLS;
-  const { observed, tidy, tidyPlan, spends } = batterySpends(T, source, params, { pools });
+  const { observed, tidy, tidyPlan, tidyLedger, spends } = batterySpends(T, source, params, { pools, batteries: job.batteries });
   const suffices = new Map();
   for (const s of spends) if (s.intent) suffices.set(s.n, balanceSuffices(T, s.layout === 'observed' ? observed : tidy, params, s.intent).suffices);
   const runs = batteryRuns(spends, job.methods);
@@ -125,7 +132,7 @@ export async function batteryWallet(T, source, job, hooks) {
     }
     hooks.result(r.k, out);
   }
-  return { spends: spends.map((s) => ({ n: s.n, layout: s.layout, id: s.intent ? s.intent.id : s.unsettled.kind, unsettled: s.unsettled ? s.unsettled.unsettled : null, meta: s.intent ? s.intent.meta : s.unsettled.meta })), runs: runs.length, tidyPlan };
+  return { spends: spends.map((s) => ({ n: s.n, battery: s.battery, layout: s.layout, id: s.intent ? s.intent.id : s.unsettled.kind, unsettled: s.unsettled ? s.unsettled.unsettled : null, meta: s.intent ? s.intent.meta : s.unsettled.meta })), runs: runs.length, tidyPlan, tidyLedger };
 }
 
 // The state the payment of an answer was built from: the start state for a

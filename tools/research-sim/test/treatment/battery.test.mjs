@@ -63,6 +63,8 @@ test('battery runs, H-12 records and the oracle hook', { skip, timeout: 3600 * 1
     assert.equal(totals.oracle, calls.length);
     assert.deepEqual([...new Set(calls.map((c) => c.policy))], ['layout']);
     assert.ok(calls.every((c) => c.utxos > 0));
+    assert.ok(calls.every((c) => !c.spend.startsWith('h10-')), 'the oracle prices the standard battery only');
+    assert.ok(battery.some((r) => r.spend.startsWith('h10-')), 'H-10 spends run under the test methods');
     assert.ok(calls.some((c) => c.names.join() === 'test-largest-first,unfrackit-h12'), 'two selectors sharing a policy share one reference');
     assert.ok(calls.some((c) => c.n >= 4), 'both repetitions and both absorption settings are incumbents');
     // Timings are kept apart from the records.

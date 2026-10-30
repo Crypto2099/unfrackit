@@ -202,8 +202,9 @@ async function studyReadable(ctx) {
 }
 
 // The extraction's sample rows by wallet, when its study tables are
-// readable: { split, excluded, random, randomRecent, randomPeak }. `random` is
-// the random sample of either frame; the two frames' memberships are beside it.
+// readable: { split, excluded, random, randomRecent, randomPeak, stratumRecent }.
+// `random` is the random sample of either frame; the two frames' memberships
+// and the recent frame's purposive strata are beside it.
 export async function studySamples(ctx) {
   if (!(await studyReadable(ctx))) return null;
   return samplesFromRows(await q(ctx.client, ctx.blocks, 'study_samples'));
@@ -212,7 +213,7 @@ export async function studySamples(ctx) {
 // The `study_samples` rows as a map by wallet.
 export function samplesFromRows(rows) {
   const m = new Map();
-  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak });
+  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak, stratumRecent: r.stratum_recent });
   return m;
 }
 
@@ -221,7 +222,7 @@ export function samplesFromRows(rows) {
 export function sampleMembership(samples, sa) {
   if (!samples || !samples.has(sa)) return null;
   const s = samples.get(sa);
-  return { recentRandom: !!s.randomRecent, peakRandom: !!s.randomPeak };
+  return { recentRandom: !!s.randomRecent, peakRandom: !!s.randomPeak, recentStratum: !!s.stratumRecent };
 }
 
 // The wallets a history run reads, with the study tables' sample rows (null

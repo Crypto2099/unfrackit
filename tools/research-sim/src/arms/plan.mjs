@@ -124,11 +124,12 @@ export function expandJobs(entries, { roles, needsCollateral, collateralRules = 
 // sensitivity arm on change policy (both CSL strategies with
 // prefer_pure_change set, each scored against the oracle's csl-ppc
 // reference), and the H-12 rule with absorption on and off. Repetitions as
-// above.
+// above. Each method names the batteries it runs: the three baselines run the
+// standard battery and H-10's, the others the standard battery only.
 export function batteryPlan({ roles = STUDY_ROLES, reps = 30, h12 = true } = {}) {
   const methods = [];
-  for (const role of ['lf', 'ri', 'rrri', 'evo', 'lf-pure', 'ri-pure']) methods.push({ name: roles[role], role, opts: [{ changePolicy: 'default' }], repetitions: DETERMINISTIC_ROLES.has(role) ? 1 : reps });
-  if (h12) methods.push({ name: 'unfrackit-h12', role: 'h12', opts: [{ changePolicy: 'default', absorb: true }, { changePolicy: 'default', absorb: false }], repetitions: 1 });
+  for (const role of ['lf', 'ri', 'rrri', 'evo', 'lf-pure', 'ri-pure']) methods.push({ name: roles[role], role, opts: [{ changePolicy: 'default' }], repetitions: DETERMINISTIC_ROLES.has(role) ? 1 : reps, batteries: BASELINES.includes(role) ? ['standard', 'h10'] : ['standard'] });
+  if (h12) methods.push({ name: 'unfrackit-h12', role: 'h12', opts: [{ changePolicy: 'default', absorb: true }, { changePolicy: 'default', absorb: false }], repetitions: 1, batteries: ['standard'] });
   return methods;
 }
 

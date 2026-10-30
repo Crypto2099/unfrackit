@@ -36,7 +36,7 @@
 import { join } from 'node:path';
 import { runDir, ensureDir, writeJson, JsonLines } from '../history/paths.mjs';
 
-export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'battery', 'h12', 'timeout', 'refused']);
+export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'battery', 'h12', 'snapshot-plan', 'timeout', 'refused']);
 export const KEY_FIELDS = Object.freeze(['wallet', 'window', 'arm', 'variant', 'method', 'change', 'collateral', 'repetition']);
 
 const BECH32_ADDR = /(addr|addr_test|stake|stake_test)1[02-9ac-hj-np-z]{20,}/;

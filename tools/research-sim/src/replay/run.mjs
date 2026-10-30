@@ -25,6 +25,7 @@ import { record } from '../out/records.mjs';
 import { loadSource } from './source.mjs';
 import { expandJobs } from '../arms/plan.mjs';
 import { batteryRuns, batterySpends } from '../battery/runner-core.mjs';
+import { countPopulation } from '../battery/population.mjs';
 import { SHAPE_POOLS } from '../battery/battery.mjs';
 import { CONFIRMATORY_RULES } from './collateral.mjs';
 import { sumValidity } from '../kit/validity.mjs';
@@ -160,7 +161,7 @@ export function noteValidity(out, key, v) {
 // The batteries over a set of wallets: every run's result as a 'battery'
 // record (an H-12 run also as 'h12'), a time-out as a 'battery' record with
 // class time-limit, and, when an oracle is given, its reference per wallet,
-// observed-layout spend and distinct oracle change policy, with the single
+// standard-battery spend and distinct oracle change policy, with the single
 // transaction of every run under that policy by a method the oracle's
 // incumbents rule admits as an incumbent (under the default,
 // 'seeded-methods', the seeded methods'). The passing runs of the other
@@ -173,11 +174,17 @@ export function noteValidity(out, key, v) {
 //       the reference for one spend, run however the oracle runs it;
 //       incumbents are [{ name, seeded, walletInputs, bytes, fee }]
 //   oracle.settings  the oracle's settings (the defaults when absent)
-// The wallet's state and battery intents are rebuilt in this thread for it;
-// both are deterministic, so they are the worker's. The totals count the
-// references the oracle's guard stopped (`oracleGuard`).
+// The oracle prices the standard battery's spends only. The wallet's state and
+// battery intents are rebuilt in this thread for it; both are deterministic,
+// so they are the worker's.
+// A wallet carries `population` ({ kind, batteries: { standard, h10 } },
+// battery/population.mjs): its job builds only those batteries, a wallet with
+// none starts no job, and a wallet of the recent random sample whose snapshot
+// state holds no native asset is counted in `tokenless` (not filtered). A
+// wallet with the standard battery also gets one 'snapshot-plan' record. The
+// totals count the references the oracle's guard stopped (`oracleGuard`).
 export async function runBatteries(T, pool, { wallets, methods, out, answerLimitMs, pools, oracle = null, tidySettings = {}, validity = false }) {
-  const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0, ...(oracle ? { oracleGuard: 0 } : {}) };
+  const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0, tokenless: 0, population: countPopulation(wallets), ...(oracle ? { oracleGuard: 0 } : {}) };
   const validities = [];
   const oracleRules = oracle ? oracle.settings || ORACLE_SETTINGS : null;
   // One task per wallet: its battery job, then its oracle calls. Up to
@@ -196,13 +203,19 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
   };
   const task = async (wi) => {
     const w = wallets[wi];
+    if (!(w.population ? w.population.batteries.standard || w.population.batteries.h10 : true)) {
+      buffers[wi] = [];
+      flush();
+      return;
+    }
     const recs = [];
     const emit = (rec) => recs.push(rec);
     const source = loadSource(T, w.spec);
     if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
     const keyOf = (res) => ({ wallet: source.wallet, window: 'snapshot', arm: res.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: res.method.name, change: res.opts.changePolicy, collateral: 'none-needed', repetition: res.repetition });
     const byK = new Map();
-    const job = { source: w.spec, methods, pools, tidySettings, validity };
+    const population = w.population || { kind: 'no-sample', batteries: { standard: true, h10: true } };
+    const job = { source: w.spec, methods, batteries: population.batteries, pools, tidySettings, validity };
     const r = await pool.battery(job, {
       answerLimitMs,
       onSpend: (k, res) => {
@@ -213,7 +226,16 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
     if (!r.ok) throw new Error(`battery failed for wallet ${source.wallet}: ${r.error}`);
     totals.wallets++;
     // A time-out has only its run number; the run list gives its key.
-    const runs = batteryRuns(r.result.spends.map((s) => ({ n: s.n, intent: s.unsettled ? null : { id: s.id } })), methods);
+    const runs = batteryRuns(r.result.spends.map((s) => ({ n: s.n, battery: s.battery, intent: s.unsettled ? null : { id: s.id } })), methods);
+    if (population.batteries.standard) {
+      // The snapshot plan of a wallet that runs the standard battery, for the
+      // recoverable-ADA measure: the default plan's transactions and fee, and
+      // the coin and minimum ADA over the token UTxOs it can spend, before and
+      // after it.
+      const L = r.result.tidyLedger;
+      emit(record('snapshot-plan', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'snapshot-plan', change: 'none', collateral: 'none-needed', repetition: 1 }, { txs: r.result.tidyPlan.txs, fee: r.result.tidyPlan.fee, tokenUtxosBefore: L.before.utxos, coinBefore: L.before.coin, minimumBefore: L.before.minimum, tokenUtxosAfter: L.after.utxos, coinAfter: L.after.coin, minimumAfter: L.after.minimum }));
+      if (population.kind === 'standard-and-h10' && !source.start.some((u) => u.assets.length)) totals.tokenless++;
+    }
     const spendOf = new Map(r.result.spends.map((s) => [s.n, s]));
     for (const run of runs) {
       const res = byK.get(run.k);
@@ -236,12 +258,12 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
     }
     for (const s of r.result.spends) if (s.unsettled) emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: s.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: 'none', change: 'none', collateral: 'none-needed', repetition: 1 }, { spend: s.id, unsettled: s.unsettled }));
     if (oracle) {
-      const built = batterySpends(T, source, source.params, { pools: job.pools || SHAPE_POOLS });
+      const built = batterySpends(T, source, source.params, { pools: job.pools || SHAPE_POOLS, batteries: population.batteries });
       const groups = new Map();
       for (const run of runs) {
         const res = byK.get(run.k);
         const s = spendOf.get(run.spend);
-        if (s.layout !== 'observed') continue;
+        if (s.layout !== 'observed' || s.battery !== 'standard') continue;
         const policy = oracle.policyOf(run.method, run.opts.changePolicy);
         if (!policy) continue;
         const g = `${run.spend}|${policy}`;

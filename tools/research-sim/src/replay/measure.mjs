@@ -115,6 +115,23 @@ export function stateMeasures(state, params) {
   return { utxos: state.utxos.size, largestValueBytes: largest, lockedAda: locked, lockedAdaPerToken: assets.size ? locked / BigInt(assets.size) : null, tokens: assets.size };
 }
 
+// The token UTxOs a plan can spend: those holding a native asset and not held
+// (a held UTxO is never spent). { utxos, coin, minimum }, the minimum as
+// stateMeasures sums it for lockedAda. coin - minimum is the ADA on these
+// UTxOs above their minimum.
+export function tokenLedger(state, params) {
+  let utxos = 0;
+  let coin = 0n;
+  let minimum = 0n;
+  for (const u of state.utxos.values()) {
+    if (!u.assets.length || u.held !== null) continue;
+    utxos++;
+    coin += BigInt(u.coin);
+    minimum += utxoMinimum(params, u);
+  }
+  return { utxos, coin, minimum };
+}
+
 // H-3's per-window part: each policy's share of the minimum ADA of the outputs
 // holding it, shared pro rata by the policy's bytes in mixed outputs,
 // integrated over block time. add(state, seconds) accrues the state's shares

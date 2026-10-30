@@ -35,6 +35,7 @@ import { SHAPE_NAMES } from '../shapes/shapes.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
 import { formatHashList } from '../hash.mjs';
 import { loadSource } from './source.mjs';
+import { assignPopulation, countPopulation } from '../battery/population.mjs';
 import { createBatteryOracle } from '../oracle/battery-hook.mjs';
 import { oracleSettings } from '../oracle/settings.mjs';
 import { ORACLE_LIMIT_MS_GONE } from '../options.mjs';
@@ -156,7 +157,9 @@ export async function cmdReplay(opts) {
 export async function cmdBattery(opts) {
   const oracleSettingsUsed = batteryOracleSettings(opts);
   const { T, pool, runId, threads } = await setup(opts, 'battery');
-  const wallets = walletsOf(opts, { stream: null });
+  // Each file's batteries are decided before anything starts or is written;
+  // a file the rules refuse stops the command here.
+  const wallets = assignPopulation(walletsOf(opts, { stream: null }));
   const first = loadSource(T, wallets[0].spec);
   const methods = opts.methods === 'test'
     ? [{ name: 'test-largest-first', opts: [{ changePolicy: 'layout' }, { changePolicy: 'single' }, { changePolicy: 'naive' }], repetitions: 1 }, { name: 'unfrackit-h12', opts: [{ changePolicy: 'default', absorb: true }, { changePolicy: 'default', absorb: false }], repetitions: 1 }]
@@ -167,7 +170,7 @@ export async function cmdBattery(opts) {
   const pools = opts.pools ? poolsOf(JSON.parse(readFileSync(opts.pools, 'utf8'))) : undefined;
   // The oracle is off unless asked for: it takes up to about a minute per
   // spend and change policy.
-  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods, threads, ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
+  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods, threads, population: countPopulation(wallets), ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
   out.note({ event: 'start', wallets: wallets.length });
   let oracle = null;
   try {

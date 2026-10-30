@@ -59,13 +59,17 @@ test('battery --oracle: references for the study plan\'s change policies', { ski
     const planPolicies = new Set(methods.flatMap((m) => m.opts.map((o) => policyOfMethod(m.name, o.changePolicy))));
     assert.deepEqual([...planPolicies].sort(), ['cjs', 'csl', 'csl-ppc', 'evo', 'layout']);
 
-    // Observed-layout spends only, one record per wallet, spend and policy.
+    // Observed-layout standard-battery spends only (H-10's payments get no
+    // reference), one record per wallet, spend and policy.
+    assert.ok(oracleRecs.every((r) => !r.spend.startsWith('h10-')), 'no reference for an H-10 payment');
     assert.ok(oracleRecs.every((r) => r.arm === 'observed' && r.repetition === 1));
     assert.ok(runs.some((r) => r.arm === 'tidy-once'), 'the plan runs tidy-layout spends');
     const keyOf = (r) => `${r.wallet}|${r.spend}|${r.change}`;
     assert.equal(new Set(oracleRecs.map(keyOf)).size, oracleRecs.length);
-    const spends = new Set(runs.filter((r) => r.arm === 'observed').map((r) => `${r.wallet}|${r.spend}`));
-    assert.ok(spends.size > 10);
+    const spends = new Set(runs.filter((r) => r.arm === 'observed' && !r.spend.startsWith('h10-')).map((r) => `${r.wallet}|${r.spend}`));
+    assert.ok(spends.size > 5);
+    const h10Methods = new Set(runs.filter((r) => r.spend.startsWith('h10-')).map((r) => r.method));
+    assert.deepEqual([...h10Methods].sort(), ['cjs-rrri', 'csl-lf', 'csl-ri'], 'H-10 runs under the three baselines');
     for (const s of spends) for (const p of planPolicies) assert.ok(oracleRecs.some((r) => `${r.wallet}|${r.spend}` === s && r.change === p), `no ${p} record for ${s}`);
     assert.equal(oracleRecs.length, spends.size * planPolicies.size);
 

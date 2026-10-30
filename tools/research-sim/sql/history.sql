@@ -279,6 +279,7 @@ SELECT u.usage,
 SELECT s.sa_id, bool_or(s.kind = 'random') AS random,
        bool_or(s.kind = 'random' AND s.frame = 'recent') AS random_recent,
        bool_or(s.kind = 'random' AND s.frame = 'peak') AS random_peak,
+       bool_or(s.kind = 'stratum' AND s.frame = 'recent') AS stratum_recent,
        max(s.split) AS split, bool_or(coalesce(s.reconstruction_excluded, false)) AS excluded
   FROM study.sample s
  GROUP BY s.sa_id
