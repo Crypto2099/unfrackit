@@ -71,7 +71,7 @@ async function replayCsl(source, { strategy, pure, rule = 'ledger', changePolicy
     ...m,
     build: (...a) => {
       const r = m.build(...a);
-      if (r.ok && r.library) fees.push({ ...r.library, type: a[1].type });
+      if (r.ok && r.library) fees.push({ ...r.library, type: a[1].type, id: a[1].id });
       return r;
     }
   };
@@ -342,14 +342,27 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
       // CSL prices the script fee itself: its fee covers the final minimum,
       // execution and reference-script terms included, unless an observed
       // witness CSL did not count was written after it priced the
-      // transaction. Only the Shelley registration's is unpriced: the burn's
-      // and the deregistration's witnesses CSL counts.
+      // transaction. Only the Shelley registration's is unpriced, on every
+      // transaction CSL builds for it: the burn's and the deregistration's
+      // witnesses CSL counts.
       for (const f of r.fees) if (!f.unpriced.length) assert.ok(f.fee >= f.finalMinFee, `${f.fee} under ${f.finalMinFee}`);
-      if (changePolicy === 'default') assert.deepEqual(r.fees.filter((f) => f.unpriced.length).map((f) => [f.type, f.unpriced]), r.spends[8].outcome === 'failed' && r.spends[8].class === CLASSES.feeMinimum ? [['T7', ['observed vkey witnesses']]] : []);
-      if (strategy === 'lf' && changePolicy === 'default') {
-        assert.equal(r.spends[8].class, CLASSES.feeMinimum, r.spends[8].detail);
-        assert.match(r.spends[8].detail, /^kit: fee: .*; parts the library did not price: observed vkey witnesses$/);
+      if (changePolicy === 'default') {
+        const reg = r.spends[8];
+        const short = reg.outcome === 'failed' && reg.class === CLASSES.feeMinimum;
+        assert.deepEqual(r.fees.filter((f) => f.unpriced.length).map((f) => [f.id, f.unpriced]), short || reg.outcome === 'built' ? [[shelleyReg.id, ['observed vkey witnesses']]] : [], `${reg.outcome} ${reg.class} ${reg.detail}`);
+        if (short) assert.match(reg.detail, /^kit: fee: .*; parts the library did not price: observed vkey witnesses$/);
+        // It builds when CSL burns an ADA-only leftover below the change
+        // minimum into the fee (tx_builder.rs:2151-2167): the transaction then
+        // has no output, as the intent requests none, and the fee covers the
+        // witness too. A csl-ri draw of small ADA-only inputs can leave such a
+        // leftover; csl-lf's largest input never does here.
+        if (reg.outcome === 'built') {
+          const f = r.fees.find((x) => x.id === shelleyReg.id);
+          assert.equal(inspectTx(reg.built.txs[0].bytes).outputs.length, 0);
+          assert.ok(f.fee >= f.finalMinFee, `${f.fee} under ${f.finalMinFee}`);
+        }
       }
+      if (strategy === 'lf' && changePolicy === 'default') assert.equal(r.spends[8].class, CLASSES.feeMinimum, r.spends[8].detail);
     }
   }
   t.diagnostic(JSON.stringify(out));
