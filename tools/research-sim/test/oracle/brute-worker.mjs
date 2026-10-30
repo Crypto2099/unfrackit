@@ -13,8 +13,8 @@ import { loadTreatment } from '../../src/treatment/bridge.mjs';
 import { shapeState } from '../../src/shapes/shapes.mjs';
 import { SYNTHETIC_PARAMS as P } from '../../src/kit/params.mjs';
 import { standardBattery, SHAPE_POOLS } from '../../src/battery/battery.mjs';
-import { makeState, spendable } from '../../src/state/state.mjs';
-import { makeRng } from '../../src/shapes/rng.mjs';
+import { spendable } from '../../src/state/state.mjs';
+import { subWallet } from '../lib/sub-wallet.mjs';
 import { makeEvaluator, setKey, loadLibraryPolicies } from '../../src/oracle/policies.mjs';
 import { makeBoundModel, boundOf } from '../../src/oracle/bound.mjs';
 import { candidateSet } from '../../src/oracle/spend.mjs';
@@ -25,20 +25,6 @@ import { settle } from '../../src/kit/heap.mjs';
 const T = await loadTreatment(workerData.treatmentDir, workerData.pinsText || undefined);
 const settings = oracleSettings(workerData.settings || {});
 const lib = await loadLibraryPolicies();
-
-// A sub-wallet of k spendable UTxOs, 8 <= k <= 12, drawn with mulberry32.
-function subWallet(state, seed) {
-  const rng = makeRng(seed);
-  const pool = spendable(state);
-  const k = 8 + Math.floor(rng.next() * 5);
-  const idx = pool.map((_, i) => i);
-  for (let i = 0; i < k; i++) {
-    const j = i + Math.floor(rng.next() * (idx.length - i));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
-  }
-  const utxos = idx.slice(0, k).map((i) => pool[i]);
-  return makeState({ network: state.network, stakeCred: state.stakeCred, changeAddress: state.changeAddress, utxos, at: state.at });
-}
 
 parentPort.on('message', async (job) => {
   try {
