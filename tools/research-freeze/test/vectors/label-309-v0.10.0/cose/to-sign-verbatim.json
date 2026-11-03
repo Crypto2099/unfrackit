@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "primitive": "cose-to-sign-verbatim",
+  "source": "Label 309 protected-header byte-preservation rule",
+  "description": "The one deliberate asymmetry of the record-signature input: the record body in Sig_structure[3] is recomputed by canonical re-encoding, while the protected header in Sig_structure[1] is byte-preserved from the wire even when its published encoding is not canonical. Each vector pins an honest signature over a non-canonically-encoded protected header that MUST verify, plus the re-encoded Sig_structure over which it MUST NOT be checked.",
+  "vectors": [
+    {
+      "name": "protected-noncanonical-key-order",
+      "signer_secret_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signer_public_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "record_body_cbor_hex": "a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "published_protected_bytes_hex": "a2045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c97787370127",
+      "canonical_protected_bytes_hex": "a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "cose_sign1_hex": "845826a2045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c97787370127a0f65840c72c0fd1bf2a307999e65b70bd63f191db67849db4b78aaf926c8525f0ce9be35ddef277f56f5809e2da9fe6338cc8736250ae1dd6f503272b0660f4ff701109",
+      "expected_sig_structure_hex": "846a5369676e6174757265315826a2045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737012740585863617264616e6f2d706f652d7265636f72642d7369672d7631a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "rejected_sig_structure_if_reencoded_hex": "846a5369676e6174757265315826a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873740585863617264616e6f2d706f652d7265636f72642d7369672d7631a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "expected_result": {
+        "ok": true,
+        "signer_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+        "alg": -8
+      },
+      "note": "The published protected header carries map keys ordered 4 before 1 (bytewise-canonical order is 1 before 4), a valid but non-canonical encoding of the same header map. The verifier MUST place the published COSE_Sign1[0] bytes into Sig_structure[1] verbatim \u2014 the signature verifies. Re-canonicalising the protected header produces rejected_sig_structure_if_reencoded_hex, over which verification of this honest signature fails."
+    },
+    {
+      "name": "protected-noncanonical-int-width",
+      "signer_secret_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "signer_public_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "record_body_cbor_hex": "a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "published_protected_bytes_hex": "a2180127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "canonical_protected_bytes_hex": "a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "cose_sign1_hex": "845827a2180127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737a0f658401cc5def78f5bc93d0e66f8f63b3e79bb984ce1909f7d3e7a1850464904abe6c3791cf23d19bcee27c0ea8fd6a4e123033b1a24da899f5be53d5e8ecfb770c50c",
+      "expected_sig_structure_hex": "846a5369676e6174757265315827a2180127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873740585863617264616e6f2d706f652d7265636f72642d7369672d7631a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "rejected_sig_structure_if_reencoded_hex": "846a5369676e6174757265315826a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873740585863617264616e6f2d706f652d7265636f72642d7369672d7631a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "expected_result": {
+        "ok": true,
+        "signer_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+        "alg": -8
+      },
+      "note": "The published protected header carries the alg label 1 encoded non-minimally as 0x1801, a valid but non-canonical encoding of the same header map. The verifier MUST place the published COSE_Sign1[0] bytes into Sig_structure[1] verbatim \u2014 the signature verifies. Re-canonicalising the protected header produces rejected_sig_structure_if_reencoded_hex, over which verification of this honest signature fails."
+    }
+  ]
+}
