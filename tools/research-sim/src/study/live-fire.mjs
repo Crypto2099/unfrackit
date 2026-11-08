@@ -135,7 +135,7 @@ export function planOf(o) {
     stages: [...LIVE_FIRE_STAGES],
     repetitions: { h1: LIVE_FIRE_REPS.repsH1, variants: LIVE_FIRE_REPS.repsVariants, battery: LIVE_FIRE_REPS.reps },
     limits_ms: { replay: REPLAY_LIMIT_MS, answer: ANSWER_LIMIT_MS, oracle_guard: ORACLE_SETTINGS.guardMs },
-    oracle_budget: { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, solves: ORACLE_SETTINGS.maxSolves, nodes: ORACLE_SETTINGS.maxNodes, solve_nodes: ORACLE_SETTINGS.maxSolveNodes },
+    oracle_budget: { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, program_work: ORACLE_SETTINGS.maxProgramWork },
     oracle: true,
     validity: true,
     workers: o.workers,

@@ -10,11 +10,11 @@
 //   - the oracle's fee equals the least exact fee over the search space its
 //     setting afterExhaustive gives, its status is proven, and it reports
 //     infeasible exactly when no subset of that space is feasible, unless a
-//     limit of its work budget stopped it (stop candidate-sets, solves or
-//     nodes), when its fee is that least fee (none where no subset builds),
-//     a higher one, or none; such runs are counted and listed (atBudget),
-//     since a budget sized on the heaviest shapes can stop a small program
-//     whose proof takes many cheap solves. The space is: every
+//     limit of its work budget stopped it (stop candidate-sets or
+//     program-work), when its fee is that least fee (none where no subset
+//     builds), a higher one, or none; such runs are counted and listed
+//     (atBudget), since a budget sized on the heaviest shapes can stop a
+//     small program whose proof takes many cheap solves. The space is: every
 //     subset under 'mip-always' (the default), where the program over every
 //     spendable UTxO follows the exhaustive search; the candidate set under
 //     'report'; under 'mip', the candidate set when one of its subsets
@@ -55,7 +55,7 @@ export const SUB_SEEDS = (i) => [4001 + 2 * i, 4002 + 2 * i];
 // where no subset builds), a higher one, or none where one exists; null for
 // anything else (a fee below it, or a fee where no subset builds), which
 // fails the check.
-const BUDGET_STOPS = new Set(['candidate-sets', 'solves', 'nodes']);
+const BUDGET_STOPS = new Set(['candidate-sets', 'program-work']);
 export function budgetVerdict(a, min) {
   if (a.status !== 'best-at-limit' && a.status !== 'undecided') return null;
   if (a.fee === min) return 'equal';

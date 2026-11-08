@@ -19,15 +19,16 @@
 // when the exhaustive search finds nothing, 'report' never).
 //
 // The budget (setting limit 'budget'): maxCandidateSets candidate sets
-// evaluated exactly, the exhaustive search's and the program's together; the
-// program's maxSolves solves and maxNodes branch-and-bound nodes, each solve
-// capped at maxSolveNodes (mip.mjs). The
+// evaluated exactly, the exhaustive search's and the program's together, and
+// the program's maxProgramWork units of nnzSolvesPlusIterations, each solve
+// capped at a tenth of them (mip.mjs). The
 // incumbents are evaluated apart, uncounted, so a reference's search does
 // not grow with the number of runs that seed it. Under limit 'wall-clock'
 // the run stops at timeLimitMs instead. Either way `work` reports what the
-// run used and `stop` which limit ended it (exhaustive.mjs, mip.mjs); its
+// run used and `stop` which limit ended it (exhaustive.mjs, mip.mjs); of its
 // size-weighted counts (nnzSolves, nnzNodes, nnzIterations,
-// nnzSolvesPlusIterations, mip.mjs) are recorded and limit nothing.
+// nnzSolvesPlusIterations, mip.mjs), only the last limits anything, and
+// only under the budget.
 // Statuses, from the last search that ran:
 //
 //   optimal        the search completed: the exhaustive path's queue ran out
@@ -86,7 +87,7 @@ export async function searchOracle(T, state, spend, params, policy, opts = {}) {
   // of the limit (at least a second), so that a slow proof still leaves time
   // to rebuild other sets.
   const iterationMs = budgeted ? null : Math.max(1000, timeLimitMs / 10);
-  const programBudget = (used) => (budgeted ? { maxSets: settings.maxCandidateSets - used, maxSolves: settings.maxSolves, maxNodes: settings.maxNodes, maxSolveNodes: settings.maxSolveNodes } : null);
+  const programBudget = (used) => (budgeted ? { maxSets: settings.maxCandidateSets - used, maxWork: settings.maxProgramWork } : null);
   const path = opts.path || 'auto';
   const onProgress = opts.onProgress || (() => {});
   checkSpend(spend);

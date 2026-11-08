@@ -34,7 +34,7 @@ export const LIVE_FIRE_RUN_OPTIONS = Object.freeze(['runId', 'extractionRun', 'p
 export const LIVE_FIRE_CLEANUP_OPTIONS = Object.freeze(['cleanup', 'runId', 'network']);
 
 // Options an earlier version took, refused by name wherever they appear.
-export const ORACLE_LIMIT_MS_GONE = 'refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets, maxSolves and maxSolveNodes), with a guard at guardMs';
+export const ORACLE_LIMIT_MS_GONE = 'refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets and maxProgramWork), with a guard at guardMs';
 const RETIRED = Object.freeze({ oracleLimitMs: ORACLE_LIMIT_MS_GONE });
 
 const unique = (...lists) => [...new Set(lists.flat())];

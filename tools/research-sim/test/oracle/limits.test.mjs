@@ -2,10 +2,12 @@
 // Copyright 2026 Adam K. Dean
 
 // The oracle's limits, in its workers. Under the work budget (the default):
-// a call stopped by its budget of candidate sets, of solves or of nodes
-// returns best-at-limit with its stop naming that limit and its work equal to
-// it; the same call twice, in two workers at once and again in a worker that
-// has run other calls, gives the same record but for its times; and the
+// a call stopped by its budget of candidate sets returns best-at-limit with
+// stop candidate-sets and its work equal to it, and one stopped by its
+// program work has stop program-work and its units at or past the budget,
+// with a solve interrupted at its share; the same call twice, in two workers
+// at once and again in a worker that has run other calls, gives the same
+// record but for its times; and the
 // parent's guard terminates a worker whose call outlasts guardMs, records the
 // call undecided with stop guard, and a fresh worker serves the next call.
 // Under limit 'wall-clock', kept for measuring what a time limit allows, a
@@ -58,7 +60,7 @@ test('a budget of a few candidate sets stops best-at-limit, and the same call gi
     assert.equal(a.status, 'best-at-limit');
     assert.equal(a.stop, 'candidate-sets');
     assert.equal(a.work.candidateSets, 4);
-    assert.ok(a.work.solves >= 4 && a.work.solves <= settings.maxSolves, `solves ${a.work.solves}`);
+    assert.ok(a.work.solves >= 4 && a.work.nnzSolvesPlusIterations < settings.maxProgramWork, `solves ${a.work.solves}, units ${a.work.nnzSolvesPlusIterations}`);
     assert.equal(a.terminated, false);
     assert.equal(a.settings.maxCandidateSets, 4);
     assert.ok(a.fee !== null && a.bound !== null && a.bound <= a.fee);
@@ -70,26 +72,25 @@ test('a budget of a few candidate sets stops best-at-limit, and the same call gi
   }
 });
 
-test('the node limit stops each solve and the node budget the call; the solve budget stops it too', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
+test('the program-work budget stops the call, each solve interrupted at its share, the same in two workers', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
   const { s, spend } = spendOf('S4', 'payroll-100');
   const o = createOracle({ treatmentDir: TREATMENT_DIR, pinsText, workers: 2 });
   try {
-    const nodes = oracleSettings({ maxNodes: '600', maxSolveNodes: '150' });
-    const solves = oracleSettings({ maxSolves: '3' });
-    const [a, b, c] = await Promise.all([o.oracle(s, spend, P, 'csl', { settings: nodes }), o.oracle(s, spend, P, 'csl', { settings: solves }), o.oracle(s, spend, P, 'csl', { settings: nodes })]);
+    const settings = oracleSettings({ maxProgramWork: '200000' });
+    const [a, b] = await Promise.all([o.oracle(s, spend, P, 'csl', { settings }), o.oracle(s, spend, P, 'csl', { settings })]);
     t.diagnostic(tag(a));
-    t.diagnostic(tag(b));
-    assert.equal(a.stop, 'nodes');
-    assert.equal(a.work.nodes, 600);
-    // A capped solve that holds a set stops at the cap; one that holds none
-    // is followed by one that may take every node left.
-    assert.ok(a.work.mostSolveNodes >= 150 && a.work.mostSolveNodes <= 600, `most ${a.work.mostSolveNodes}`);
-    assert.ok(a.detail.mip.statuses[16] >= 1, 'a solve ended at its node limit (solutionLimit)');
+    assert.equal(a.stop, 'program-work');
     assert.ok(['best-at-limit', 'undecided'].includes(a.status));
-    assert.equal(b.stop, 'solves');
-    assert.equal(b.work.solves, 3);
-    assert.ok(['best-at-limit', 'undecided'].includes(b.status));
-    assert.deepEqual(timeless(c), timeless(a));
+    assert.equal(a.settings.maxProgramWork, 200000);
+    // The call stops once its units reach the budget, which the last solve
+    // can pass by what it counts between two checkpoints.
+    const w = a.work;
+    assert.equal(w.nnzSolvesPlusIterations, w.nnzSolves + 3 * w.lpIterations);
+    assert.ok(w.nnzSolvesPlusIterations >= 200000, `units ${w.nnzSolvesPlusIterations}`);
+    assert.ok(w.solves >= 2, `solves ${w.solves}`);
+    // HiGHS reports a solve stopped by the interrupt as interrupted (17).
+    assert.ok(a.detail.mip.statuses[17] >= 1, 'a solve was interrupted at its units');
+    assert.deepEqual(timeless(b), timeless(a));
   } finally {
     await o.close();
   }

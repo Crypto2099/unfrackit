@@ -26,14 +26,14 @@ const result = (extra = {}) => ({
   bestInSpace: true,
   bestInCandidates: false,
   exhaustive: null,
-  stop: 'solves',
+  stop: 'program-work',
   work: { candidateSets: 40, solves: 400, nodes: 9000, mostSolveNodes: 2000, lpIterations: 31000, incumbentSets: 2, queuePops: 0 },
   ms: 1234.5,
   wallMs: 1250,
   terminated: false,
   incumbents: [{ name: 'csl-lf', fee: 200000n, inputs: 3, result: 'feasible', oracleFee: 200000n, sameChange: true }, { name: 'csl-ri', fee: null, inputs: 2, result: 'kit', detail: `input ${TXID}#1 is short` }],
   evaluations: { evaluations: 10, cached: 2, feasible: 4, ms: 5 },
-  detail: { mip: { stop: 'solves', bound: 180000, rejections: [{ detail: TXID }] } },
+  detail: { mip: { stop: 'program-work', bound: 180000, rejections: [{ detail: TXID }] } },
   settings: { afterExhaustive: 'mip-always' },
   solver: 'highs 1.15.4',
   ...extra
@@ -43,7 +43,7 @@ test('an oracle result becomes a record the guard accepts, without the transacti
   const r = oracleRecord(result());
   assert.equal(r.status, 'best-at-limit');
   assert.equal(r.fee, 190000n);
-  assert.equal(r.stop, 'solves');
+  assert.equal(r.stop, 'program-work');
   assert.deepEqual(r.work, result().work);
   assert.equal(r.mipBound, 180000);
   assert.equal(r.inputs, 2);

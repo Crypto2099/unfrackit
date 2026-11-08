@@ -52,9 +52,10 @@ test('the commands refuse before anything is loaded', async () => {
 test('the battery\'s oracle settings: the defaults, overrides of the budget, never the wall-clock limit', () => {
   assert.equal(batteryOracleSettings({}), null);
   assert.deepEqual(batteryOracleSettings({ oracle: true }), ORACLE_SETTINGS);
-  const s = batteryOracleSettings({ oracle: true, oracleSettings: 'maxCandidateSets=50,maxSolves=5' });
-  assert.deepEqual([s.limit, s.maxCandidateSets, s.maxSolves, s.maxSolveNodes], ['budget', 50, 5, ORACLE_SETTINGS.maxSolveNodes]);
-  assert.throws(() => batteryOracleSettings({ oracle: true, oracleSettings: 'maxSolves=0' }), /not implemented/);
+  const s = batteryOracleSettings({ oracle: true, oracleSettings: 'maxCandidateSets=50,maxProgramWork=5000' });
+  assert.deepEqual([s.limit, s.maxCandidateSets, s.maxProgramWork, s.guardMs], ['budget', 50, 5000, ORACLE_SETTINGS.guardMs]);
+  assert.throws(() => batteryOracleSettings({ oracle: true, oracleSettings: 'maxProgramWork=0' }), /not implemented/);
+  assert.throws(() => batteryOracleSettings({ oracle: true, oracleSettings: 'maxSolves=5' }), /unknown oracle setting maxSolves/);
   assert.throws(() => batteryOracleSettings({ oracleLimitMs: '1000' }), /--oracle-limit-ms is gone/);
 });
 

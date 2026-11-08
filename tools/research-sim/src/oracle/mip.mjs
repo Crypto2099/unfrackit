@@ -52,27 +52,38 @@
 // rebuild whose transaction fails a check, or whose exact fee differs from
 // the program's, is recorded as a rejection.
 //
-// The budget (oracle settings, limit 'budget'): at most maxSolves solves and
-// maxNodes branch-and-bound nodes over them, each solve stopped after
-// maxSolveNodes nodes or the nodes left, whichever is fewer (HiGHS
-// mip_max_nodes), with the best set it holds; a capped solve that finds no
-// set is followed by solves that may take every node left, as under the
-// wall-clock limit a capped solve is followed by one with all the time left.
-// At most maxSets sets are rebuilt. HiGHS's random_seed is set on every
-// solve and no solve has a time limit, so a call does the same work whatever
-// the load. Under limit 'wall-clock' the loop stops at its deadline instead,
-// each solve capped at iterationMs. Either way the solves, their nodes and
-// their simplex iterations are counted.
+// Size-weighted work: each solve is charged the nonzero count of the
+// constraint matrix it solved, the program as built plus every cut added
+// before it (a cut holds one entry per pool UTxO), all read from the model
+// this loop builds and so the same on any machine. nnzSolves sums that count
+// over the solves; nnzNodes sums it times the solve's nodes (at least 1);
+// nnzIterations sums it times the solve's simplex iterations;
+// nnzSolvesPlusIterations is nnzSolves plus ITERATION_WEIGHT per simplex
+// iteration, a solve's setup growing with the matrix and its simplex work
+// with the iterations. The last is the budget; the others are counted and
+// limit nothing.
 //
-// Size-weighted work, counted and not budgeted: each solve is charged the
-// nonzero count of the constraint matrix it solved, the program as built
-// plus every cut added before it (a cut holds one entry per pool UTxO), all
-// read from the model this loop builds and so the same on any machine.
-// nnzSolves sums that count over the solves; nnzNodes sums it times the
-// solve's nodes (at least 1); nnzIterations sums it times the solve's
-// simplex iterations; nnzSolvesPlusIterations is nnzSolves plus
-// ITERATION_WEIGHT per simplex iteration, a solve's setup growing with the
-// matrix and its simplex work with the iterations.
+// The budget (oracle settings, limit 'budget'): at most maxWork units of
+// nnzSolvesPlusIterations over the call's solves. A solve's units are its
+// matrix's nonzeros plus ITERATION_WEIGHT times its simplex iterations so far,
+// the count HiGHS's MIP interrupt callback reads as mip_total_lp_iterations
+// (the LP iterations of every node, the root's cut rounds and the
+// heuristics; HiGHS has no option that limits a MIP's iterations). No solve
+// starts once the call's units reach maxWork. Each solve may use
+// solveCap(maxWork), a tenth of it, or what is left when that is less, and is
+// interrupted at the first callback checkpoint where its units reach that,
+// with the best set it holds; a capped solve that finds no set is followed by
+// solves bounded only by what is left. This mirrors the wall-clock limit
+// below, whose solves are capped at a tenth of the call's time and whose
+// capped solve without a set is followed by one with all the time left, and
+// under which the budget's value was measured. A call can pass maxWork by
+// the units a solve counts between two checkpoints (all its nonzeros, when it
+// starts with less than that left). At most maxSets sets are rebuilt.
+// HiGHS's random_seed is set on every solve and no solve has a time or node
+// limit, so a call does the same work whatever the load or the machine.
+// Under limit 'wall-clock' the loop stops at its deadline instead, each
+// solve capped at iterationMs. Either way the solves, their nodes, their
+// simplex iterations and the size-weighted counts are recorded.
 //
 // The program's bound: the highest dual bound any solve reported, in
 // lovelace rounded down. Cuts and a lower cutoff only shrink the program, so
@@ -81,7 +92,7 @@
 // conditions, or costs at least the best fee; the optimum over the pool is
 // therefore at least the lower of the best fee and this bound. The loop
 // records why it stopped: 'proven' (the program is infeasible, or the pool
-// cannot hold the spend), 'solves', 'nodes' or 'candidate-sets' (the budget
+// cannot hold the spend), 'program-work' or 'candidate-sets' (the budget
 // limit that ended it), 'wall-clock' (the deadline), 'solver-error'
 // (a second solver failure), 'status' (a solve ended without a set for
 // another reason, named in statuses) or 'empty' (a solve chose no input).
@@ -96,6 +107,28 @@ export const SOLVER_PACKAGE = 'highs';
 export const SOLVER_VERSION = '1.15.4';
 // The nonzeros one simplex iteration counts as in nnzSolvesPlusIterations.
 export const ITERATION_WEIGHT = 3;
+
+// The units of nnzSolvesPlusIterations one solve may use under a budget of
+// maxWork, unless a capped solve has found no set: a tenth of the budget, as
+// the wall-clock limit caps a solve at a tenth of the call's time.
+export function solveCap(maxWork) {
+  return Math.max(1, Math.floor(maxWork / 10));
+}
+
+// The callbacks of one budgeted solve of a matrix of nnz nonzeros that may
+// use `allowance` units: interrupt it at the first MIP checkpoint where nnz
+// plus ITERATION_WEIGHT times its simplex iterations so far reaches the
+// allowance. HiGHS calls the MIP interrupt callback where it checks its own
+// limits (its time and node limits among them), with the solve's own
+// iteration count, which it then reports as simplex_iteration_count.
+export function interruptAt(H, nnz, allowance) {
+  return {
+    [H.constants.callbackType.mipInterrupt](e) {
+      const n = e.data.mip_total_lp_iterations;
+      if (nnz + ITERATION_WEIGHT * Number(n) >= allowance) e.interrupt();
+    }
+  };
+}
 
 const key = (a) => `${a.policy}.${a.name}`;
 const ADA = 1e6;
@@ -324,12 +357,12 @@ function infoNumber(model, name) {
 
 // The loop. pool: UTxO records; evaluate(S): policies.mjs, resolving to an
 // evaluation; best: the incumbent evaluation or null; budget: { maxSets,
-// maxSolves, maxNodes, maxSolveNodes } under limit 'budget', or null under
-// 'wall-clock', which takes deadline and iterationMs; seed: HiGHS's
-// random_seed. Resolves to { proven, stop, bound, best, iterations, sets,
-// nodes, mostSolveNodes, lpIterations, nnzSolves, nnzNodes, nnzIterations,
-// nnzSolvesPlusIterations, refuted, rejections, solverErrors, cols, rows,
-// nnz, rowsLast, nnzLast, solverMs }: iterations counts the solves, sets the
+// maxWork } under limit 'budget', or null under 'wall-clock', which takes
+// deadline and iterationMs; seed: HiGHS's random_seed. Resolves to {
+// proven, stop, bound, best, iterations, sets, nodes, mostSolveNodes,
+// lpIterations, nnzSolves, nnzNodes, nnzIterations, nnzSolvesPlusIterations,
+// refuted, rejections, solverErrors, cols, rows, nnz, rowsLast, nnzLast,
+// solverMs }: iterations counts the solves, sets the
 // sets rebuilt, refuted the chosen sets the bound refuted without a rebuild;
 // cols, rows and nnz are the program's as built, rowsLast and nnzLast the
 // program's at its last solve, cuts included.
@@ -394,16 +427,13 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       open();
     }
     let uncapped = false;
+    const cap = budget ? solveCap(budget.maxWork) : null;
     for (;;) {
       let left = Infinity;
       if (budget) {
-        if (out.iterations >= budget.maxSolves) {
-          out.stop = 'solves';
-          break;
-        }
-        left = budget.maxNodes - out.nodes;
+        left = budget.maxWork - out.nnzSolvesPlusIterations;
         if (left <= 0) {
-          out.stop = 'nodes';
+          out.stop = 'program-work';
           break;
         }
       } else {
@@ -418,11 +448,13 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       try {
         model.zeroAllClocks();
         // Each solve is capped, so that a program whose optimum is slow to
-        // prove still yields sets to rebuild: under the budget by nodes, under
-        // the wall-clock limit by time.
-        if (budget) model.options.set({ mip_max_nodes: uncapped ? left : Math.min(left, budget.maxSolveNodes) });
-        else model.options.set({ time_limit: Math.max(0.01, Math.min(left, uncapped ? left : iterationMs) / 1000) });
-        model.run();
+        // prove still yields sets to rebuild: under the budget by its units,
+        // under the wall-clock limit by time.
+        if (budget) model.run(interruptAt(H, nnzNow, uncapped ? left : Math.min(left, cap)));
+        else {
+          model.options.set({ time_limit: Math.max(0.01, Math.min(left, uncapped ? left : iterationMs) / 1000) });
+          model.run();
+        }
         st = model.getModelStatus();
       } catch (e) {
         out.solverMs += performance.now() - t0;
@@ -461,25 +493,25 @@ export async function mipSearch({ highs, model: M, pool, evaluate, best = null, 
       }
       const db = dualBound(model);
       if (db !== null && (out.bound === null || db > out.bound)) out.bound = db;
-      // A solve stopped at its node limit reports solutionLimit (HiGHS's
-      // status for mip_max_nodes), and is read as a solve stopped at its time
-      // limit is: its best set, if it holds one.
-      const limited = st === ms.timeLimit || st === ms.solutionLimit || st === ms.iterationLimit;
+      // A solve interrupted at its units reports interrupted, and is read as
+      // a solve stopped at its time limit is: its best set, if it holds one.
+      // solutionLimit and iterationLimit (a node or an iteration limit, which
+      // the oracle does not set) are read the same way.
+      const limited = st === ms.timeLimit || st === ms.interrupted || st === ms.solutionLimit || st === ms.iterationLimit;
       let sol = null;
       if ((st === ms.optimal || limited || st === ms.objectiveBound) && model.info.get('primal_solution_status') === 2) {
         const sv = model.getSolution();
         if (sv && sv.colValue && sv.colValue.length) sol = sv.colValue;
       }
       if (!sol) {
-        // No set yet within the cap: the next solve takes the nodes, or the
+        // No set yet within the cap: the next solve takes the units, or the
         // time, left.
         if (budget) {
-          const capped = st === ms.solutionLimit || st === ms.iterationLimit;
-          if (capped && !uncapped && budget.maxNodes - out.nodes > 0) {
+          if (st === ms.interrupted && !uncapped && budget.maxWork - out.nnzSolvesPlusIterations > 0) {
             uncapped = true;
             continue;
           }
-          out.stop = capped ? 'nodes' : 'status';
+          out.stop = st === ms.interrupted ? 'program-work' : 'status';
         } else {
           if (st === ms.timeLimit && !uncapped && deadline - performance.now() > 0) {
             uncapped = true;

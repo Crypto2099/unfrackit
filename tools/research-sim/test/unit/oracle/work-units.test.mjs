@@ -4,8 +4,9 @@
 // The program path's size-weighted work counts (mip.mjs): on a program small
 // enough to count by hand, exact values, checked against the matrix HiGHS
 // receives and the nodes and iterations it reports for each solve; the same
-// on repeats; and, with the treatment, the same from two oracle workers on a
-// synthetic shape.
+// on repeats; the budget on nnzSolvesPlusIterations, its per-solve cap, the
+// solve that follows a capped one without a set, and its stop; and, with the
+// treatment, the same counts from two oracle workers on a synthetic shape.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,7 +50,7 @@ async function watchedSolver() {
     };
     m.run = (cbs) => {
       const r = run(cbs);
-      solves.push({ nnz, rows, cols: data.numCols, nodes: Number(m.info.get('mip_node_count')), iterations: Number(m.info.get('simplex_iteration_count')) });
+      solves.push({ nnz, rows, cols: data.numCols, nodes: Number(m.info.get('mip_node_count')), iterations: Number(m.info.get('simplex_iteration_count')), status: m.getModelStatus(), holdsSet: m.info.get('primal_solution_status') === 2 });
       return r;
     };
     return m;
@@ -72,7 +73,7 @@ test('the size-weighted counts on a program counted by hand', async () => {
   assert.equal(prog.data.matrix.values.every((v) => v !== 0), true);
 
   const { W, solves } = await watchedSolver();
-  const budget = { maxSets: 100, maxSolves: 100, maxNodes: 1000, maxSolveNodes: 100 };
+  const budget = { maxSets: 100, maxWork: 1000 };
   const r = await mipSearch({ highs: W, model: M, pool: POOL, evaluate, budget, seed: 0 });
   assert.equal(r.proven, true);
   // Solve k sees the program and k - 1 cuts.
@@ -133,4 +134,49 @@ test('the size-weighted counts are the same from two oracle workers and on a rep
   } finally {
     await o.close();
   }
+});
+
+// The budget on the same program, whose first solve takes 4 simplex
+// iterations (37 units: 25 nonzeros plus 3 times 4) and finds the optimum,
+// and whose second (28 nonzeros) proves it. Each solve may use a tenth of the
+// budget; HiGHS checks its limits at a first checkpoint before any iteration
+// and again after the 4.
+test('the program-work budget: a tenth per solve, the solve after a capped one without a set, the stop', async () => {
+  const H = await loadSolver();
+  const ms = H.constants.modelStatus;
+  const run = async (maxWork) => {
+    const { W, solves } = await watchedSolver();
+    const r = await mipSearch({ highs: W, model: M, pool: POOL, evaluate, budget: { maxSets: 100, maxWork }, seed: 0 });
+    const units = solves.map((s) => s.nnz + ITERATION_WEIGHT * s.iterations);
+    assert.equal(r.nnzSolvesPlusIterations, units.reduce((a, b) => a + b, 0));
+    return { stop: r.stop, proven: r.proven, fee: r.best ? r.best.fee : null, units, solves: solves.map((s) => [s.status, s.iterations, s.holdsSet]), counters: counters(r) };
+  };
+  // 1,000: a cap of 100 interrupts nothing.
+  const free = await run(1000);
+  assert.deepEqual([free.stop, free.proven, free.fee, free.units, free.solves], ['proven', true, 167833n, [37, 28], [[ms.optimal, 4, true], [ms.infeasible, 0, false]]]);
+  // 300: a cap of 30. The first solve reaches it at the checkpoint after its
+  // 4 iterations (37 units, 7 past the cap), interrupted with its set, which
+  // is rebuilt; the second, capped again, proves.
+  const capped = await run(300);
+  assert.deepEqual([capped.stop, capped.proven, capped.fee, capped.units, capped.solves], ['proven', true, 167833n, [37, 28], [[ms.interrupted, 4, true], [ms.infeasible, 0, false]]]);
+  // 250: a cap of 25, which the 25 nonzeros reach at once. The first solve
+  // is interrupted before any iteration without a set, so the next may use
+  // all that is left (225) and finds the optimum; the third proves it.
+  const followed = await run(250);
+  assert.deepEqual([followed.stop, followed.proven, followed.fee, followed.units, followed.solves], ['proven', true, 167833n, [25, 37, 28], [[ms.interrupted, 0, false], [ms.optimal, 4, true], [ms.infeasible, 0, false]]]);
+  // 60: the follow-up may use the 35 left and is interrupted at 37 with its
+  // set; the call then stands at 62, past the budget by 2, and stops on it,
+  // unproven, with that set's fee.
+  const spent = await run(60);
+  assert.deepEqual([spent.stop, spent.proven, spent.fee, spent.units, spent.solves], ['program-work', false, 167833n, [25, 37], [[ms.interrupted, 0, false], [ms.interrupted, 4, true]]]);
+  // 40: the follow-up starts with 15 left, less than its 25 nonzeros, and is
+  // interrupted at its first checkpoint without a set: the call stops on its
+  // budget at 50 units, with no set.
+  const none = await run(40);
+  assert.deepEqual([none.stop, none.proven, none.fee, none.units, none.solves], ['program-work', false, null, [25, 25], [[ms.interrupted, 0, false], [ms.interrupted, 0, false]]]);
+  // 25: the first solve uses the whole budget; no solve follows.
+  const one = await run(25);
+  assert.deepEqual([one.stop, one.units], ['program-work', [25]]);
+  // The same budget twice: the same solves and every counter the same.
+  for (const w of [1000, 300, 250, 60, 40]) assert.deepEqual(await run(w), await run(w), `maxWork ${w}`);
 });

@@ -4,7 +4,8 @@
 // The oracle's parts that need no treatment: its settings and work budget,
 // the incumbents rule, the spends it refuses, the input bytes and counts the
 // bounds rest on, the method to policy mapping, the solver's node limit and
-// seed, and what it reports and honors for a MIP solve's simplex iterations.
+// seed, what it reports and honors for a MIP solve's simplex iterations, and
+// the interrupt that stops a solve at its units of program work.
 // The searches themselves need cardano-serialization-lib and are
 // checked in test/oracle/.
 
@@ -13,7 +14,7 @@ import assert from 'node:assert/strict';
 import { oracleSettings, ORACLE_SETTINGS, admitsIncumbent } from '../../../src/oracle/settings.mjs';
 import { checkSpend, OracleRefusal } from '../../../src/oracle/spend.mjs';
 import { inputBytes } from '../../../src/oracle/bound.mjs';
-import { leastCount, loadSolver } from '../../../src/oracle/mip.mjs';
+import { leastCount, loadSolver, interruptAt, solveCap, ITERATION_WEIGHT } from '../../../src/oracle/mip.mjs';
 import { policyOfMethod } from '../../../src/oracle/policies.mjs';
 import { programFollows, statusOf, searchOracle } from '../../../src/oracle/search.mjs';
 
@@ -28,18 +29,26 @@ test('settings: the defaults are the recommended answers, other values are refus
   assert.equal(ORACLE_SETTINGS.afterExhaustive, 'mip-always');
   assert.equal(ORACLE_SETTINGS.limit, 'budget');
   assert.equal(ORACLE_SETTINGS.solverSeed, 0);
-  for (const k of ['maxCandidateSets', 'maxSolves', 'maxNodes', 'maxSolveNodes', 'guardMs']) assert.ok(Number.isSafeInteger(ORACLE_SETTINGS[k]) && ORACLE_SETTINGS[k] > 0, k);
+  // The budget: 1,500 candidate sets and 1,115,069 units of program work;
+  // the guard at 5 minutes.
+  assert.deepEqual([ORACLE_SETTINGS.maxCandidateSets, ORACLE_SETTINGS.maxProgramWork, ORACLE_SETTINGS.guardMs], [1500, 1115069, 300000]);
+  // The budget's earlier parts are unknown settings now.
+  for (const k of ['maxSolves', 'maxNodes', 'maxSolveNodes', 'maxLpIterations']) {
+    assert.equal(k in ORACLE_SETTINGS, false, k);
+    assert.throws(() => oracleSettings({ [k]: '100' }), new RegExp(`^Error: unknown oracle setting ${k}$`), k);
+  }
   assert.equal(oracleSettings({ incumbents: 'all-methods' }).incumbents, 'all-methods');
   assert.equal(oracleSettings({ limit: 'wall-clock' }).limit, 'wall-clock');
   assert.throws(() => oracleSettings({ limit: 'nodes' }), /oracle setting limit=nodes is not implemented \(implemented: budget, wall-clock\)/);
   assert.throws(() => oracleSettings({ incumbents: 'none' }), /not implemented/);
   // The budget's values, from a command line or the environment as strings.
   assert.equal(oracleSettings({ maxCandidateSets: '25' }).maxCandidateSets, 25);
-  assert.equal(oracleSettings({ maxSolveNodes: 7 }).maxSolveNodes, 7);
+  assert.equal(oracleSettings({ maxProgramWork: '200000' }).maxProgramWork, 200000);
+  assert.equal(oracleSettings({ maxProgramWork: 7 }).maxProgramWork, 7);
   assert.equal(oracleSettings({ solverSeed: '0' }).solverSeed, 0);
-  for (const v of ['0', '-1', '1.5', '1e3', 'many', '', 2 ** 31]) assert.throws(() => oracleSettings({ maxSolves: v }), /not implemented \(a whole number/, String(v));
+  for (const v of ['0', '-1', '1.5', '1e3', 'many', '', 2 ** 31, 0, 1.5]) assert.throws(() => oracleSettings({ maxProgramWork: v }), /oracle setting maxProgramWork=.* is not implemented \(a whole number from 1 to 2147483647\)/, String(v));
   assert.throws(() => oracleSettings({ solverSeed: '-1' }), /not implemented/);
-  assert.equal(Object.isFrozen(oracleSettings({ maxSolves: '3' })), true);
+  assert.equal(Object.isFrozen(oracleSettings({ maxProgramWork: '3' })), true);
   assert.equal(oracleSettings({ setFee: 'ledger-minimum' }).setFee, 'ledger-minimum');
   assert.equal(oracleSettings({ afterExhaustive: 'mip' }).afterExhaustive, 'mip');
   assert.equal(oracleSettings({ afterExhaustive: 'report' }).afterExhaustive, 'report');
@@ -177,6 +186,39 @@ test('highs 1.15.4 counts a MIP solve\'s LP iterations, ignores simplex_iteratio
   } finally {
     model.dispose();
   }
+});
+
+// The interrupt mip.mjs sets on a budgeted solve, on the market-split
+// program: it stops the solve at the first checkpoint where the matrix's
+// nonzeros plus ITERATION_WEIGHT times the iterations so far reach the
+// allowance, as the MIP interrupt callback's own count does above.
+test('a budgeted solve is interrupted at the first checkpoint where its units reach its allowance', async () => {
+  const H = await loadSolver();
+  assert.equal(ITERATION_WEIGHT, 3);
+  // A tenth of the budget, rounded down, at least one unit.
+  assert.deepEqual([solveCap(1115069), solveCap(1000), solveCap(250), solveCap(9), solveCap(1)], [111506, 100, 25, 1, 1]);
+  const solve = (nnz, allowance) => {
+    const model = H.createModel(marketSplit(H));
+    try {
+      model.options.set({ output_flag: false, mip_rel_gap: 0, random_seed: 0 });
+      model.run(interruptAt(H, nnz, allowance));
+      return { status: model.getModelStatus(), nodes: Number(model.info.get('mip_node_count')), iterations: Number(model.info.get('simplex_iteration_count')), primal: model.info.get('primal_solution_status') };
+    } finally {
+      model.dispose();
+    }
+  };
+  const interrupted = H.constants.modelStatus.interrupted;
+  // 500 iterations' worth of units past the nonzeros, whatever the
+  // nonzeros: the solve stops where the callback first sees 500 iterations
+  // or more (709, at 81 nodes), with its best set.
+  for (const nnz of [0, 1000, 50000]) assert.deepEqual(solve(nnz, nnz + ITERATION_WEIGHT * 500), { status: interrupted, nodes: 81, iterations: 709, primal: 2 }, `nnz ${nnz}`);
+  // 499 iterations and two units: the same checkpoint.
+  assert.deepEqual(solve(1000, 1000 + ITERATION_WEIGHT * 499 + 2), { status: interrupted, nodes: 81, iterations: 709, primal: 2 });
+  // Nonzeros alone at or past the allowance: interrupted at the first
+  // checkpoint, before any iteration, holding no set.
+  for (const allowance of [5000, 10000]) assert.deepEqual(solve(10000, allowance), { status: interrupted, nodes: 0, iterations: 0, primal: 0 }, `allowance ${allowance}`);
+  // The same program, seed and allowance: the same stop.
+  assert.deepEqual(solve(1000, 10000), solve(1000, 10000));
 });
 
 test('a search refuses an unseeded incumbent under seeded-methods, and a time limit under the budget', async () => {

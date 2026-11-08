@@ -67,15 +67,20 @@ export const ORACLE_SETTINGS = Object.freeze({
   // sets one call evaluates exactly, the exhaustive search's evaluations and
   // the program's rebuilt sets together, so the program after a completed
   // exhaustive search takes the rest; the incumbents are evaluated apart and
-  // not counted. maxSolves: the program's solves in one call. maxNodes: the
-  // branch-and-bound nodes of all its solves together. maxSolveNodes: the
-  // most nodes one solve takes (HiGHS mip_max_nodes) before it yields its
-  // best set, unless a capped solve has found no set, when the next takes
-  // every node left. Provisional values, to be sized by measurement.
+  // not counted. maxProgramWork: the program's work in one call, counted as
+  // nnzSolvesPlusIterations (mip.mjs): each solve is charged the nonzeros of
+  // the matrix it solves plus ITERATION_WEIGHT (3) for each of its simplex
+  // iterations. Each solve may use a tenth of it, or what is left when that
+  // is less, and a capped solve that finds no set is followed by solves that
+  // may use all that is left, as under the wall-clock limit. A running solve
+  // is interrupted at the first checkpoint where its count reaches what it
+  // may use, so a call can pass the budget by the units a solve counts
+  // between two checkpoints (its nonzeros, if it starts with less than that
+  // left). 1,115,069 is the median count of the heaviest synthetic shape's
+  // calls that reached a 60-second wall-clock limit; every cheap proof of the
+  // brute-force check fits in it, the largest using 0.93 of it.
   maxCandidateSets: 1500,
-  maxSolves: 100,
-  maxNodes: 20000,
-  maxSolveNodes: 2000,
+  maxProgramWork: 1115069,
   // The guard: the parent terminates a worker whose call has not returned
   // this long after it started, a wall-clock backstop set well above any
   // budgeted call. A call it stops is undecided. Provisional.
@@ -96,7 +101,7 @@ const IMPLEMENTED = {
 // The numeric settings and the least value each takes; given as a string
 // (from a command line or the environment), a value must be a whole number
 // in decimal digits.
-const NUMERIC = { maxCandidateSets: 1, maxSolves: 1, maxNodes: 1, maxSolveNodes: 1, guardMs: 1, solverSeed: 0 };
+const NUMERIC = { maxCandidateSets: 1, maxProgramWork: 1, guardMs: 1, solverSeed: 0 };
 const INT32_MAX = 2147483647;
 
 // The exhaustive path's constants: the pure-ADA UTxOs it adds, and the
