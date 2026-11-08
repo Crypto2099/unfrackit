@@ -140,7 +140,7 @@ export function buildWithChange(T, { state, params, inputs, intent, policy, coll
   let r;
   if (replay) {
     const collateralFor = setAsideCollateralFor(params, intent, collateral, change);
-    r = assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor, walletCreds: new Set([...state.utxos.values()].map((u) => u.cred)) });
+    r = assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor });
     if (r.ok) r.outputs = [...requested, ...r.change];
   } else {
     const outputsFor = (fee) => {

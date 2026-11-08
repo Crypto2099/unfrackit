@@ -2,8 +2,9 @@
 // Copyright 2026 Adam K. Dean
 
 // The negative controls of src/kit/controls.mjs on constructed transactions:
-// each is caught by its own check; a transaction with no outputs, whose
-// leftover the fee absorbs, has neither a fee nor a value control. No CSL.
+// each is caught by its own check, a transaction whose required signer is not
+// its input's key among them; a transaction with no outputs, whose leftover
+// the fee absorbs, has neither a fee nor a value control. No CSL.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { minFee } from '../../../src/kit/fee.mjs';
 import { inspectTx } from '../../../src/kit/inspect.mjs';
 import { parseAddress } from '../../../src/history/address.mjs';
-import { tx, input, out, baseAddr, keyHash } from '../../lib/txcbor.mjs';
+import { tx, input, out, baseAddr, keyHash, encBytes, encArray } from '../../lib/txcbor.mjs';
 
 const P = SYNTHETIC_PARAMS;
 const TXA = 'a1'.repeat(32);
@@ -22,13 +23,14 @@ const resolve = (coin) => (ref) => (ref === `${TXA}#0` ? { coin, assets: [], add
 const state = { utxos: new Map() };
 
 // A one-input transaction at its minimum fee: with an output taking the
-// rest, or with none (the input is the fee).
-function make(coin, withOutput) {
+// rest, or with none (the input is the fee); `extra` body fields and `vkeys`
+// witnesses.
+function make(coin, withOutput, { extra = {}, vkeys = 1 } = {}) {
   let fee = 200000n;
   let bytes;
   for (let i = 0; i < 6; i++) {
     const outs = withOutput ? [out(EXT, coin - fee)] : [];
-    bytes = tx({ inputs: [input(TXA, 0)], outputs: outs, fee: withOutput ? fee : coin, vkeys: 1 }).toString('hex');
+    bytes = tx({ inputs: [input(TXA, 0)], outputs: outs, fee: withOutput ? fee : coin, vkeys, extra }).toString('hex');
     if (!withOutput) break;
     const need = minFee(P, inspectTx(bytes).size, 0n);
     if (need === fee) break;
@@ -49,4 +51,10 @@ test('a transaction with no outputs has no fee or value control, and the size an
   assert.equal(c.value, null);
   assert.equal(c.size, EXPECTED.size);
   assert.equal(c.witnesses, EXPECTED.witnesses);
+});
+
+test('a transaction with a required signer other than its input\'s key: two witnesses pass, and the witness control is caught', () => {
+  const extra = { 14: encArray([encBytes(Buffer.from(keyHash(1), 'hex'))]) };
+  const c = negativeControls(state, P, make(5000000n, true, { extra, vkeys: 2 }), { resolve: resolve(5000000n) });
+  assert.deepEqual(c, EXPECTED);
 });

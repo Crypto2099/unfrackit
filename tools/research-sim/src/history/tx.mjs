@@ -182,6 +182,16 @@ export function compareRewardAccounts(a, b) {
   return Buffer.compare(a.subarray(1), b.subarray(1));
 }
 
+// Required signers (body field 14), the key hashes as hex in wire order.
+export function requiredSigners(tx) {
+  if (!tx.body.fields.has(14)) return [];
+  return setItems(tx.body.fields.get(14).node).map((x) => {
+    const h = asBytes(x, 'required signer');
+    if (h.length !== 28) throw new CborError('required signer of the wrong length');
+    return h.toString('hex');
+  });
+}
+
 // Certificates in order, each { type, items, raw }.
 export function certificates(tx) {
   if (!tx.body.fields.has(4)) return [];

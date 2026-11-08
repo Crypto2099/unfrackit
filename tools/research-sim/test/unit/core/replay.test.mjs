@@ -4,7 +4,9 @@
 // The replay's parts: output records and their guard, run plans, collateral
 // eligibility, H-6's rescue join, and, with the treatment, the replay
 // assembler against CSL's assembly, spend-redeemer re-indexing, collateral
-// and its witness, and the negative controls on replayed transactions.
+// and its witness, the negative controls on replayed transactions, and a
+// required signer at a wallet key the selection does not spend, replayed by
+// every builder with the validity checks on.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -203,4 +205,76 @@ test('the replay assembler: a plain intent assembles to CSL\'s bytes; spend rede
   assert.equal(again.hash, d.hash);
   assert.equal(again.vkeys.length, d.vkeys.length);
   assert.deepEqual(again.redeemers, d.redeemers);
+});
+
+// A required signer that is a wallet key, with no fixed witness (the history
+// reader keeps none for the keys of the wallet inputs the observed
+// transaction spent), when the selection takes no UTxO at that key: every
+// builder writes a witness for it and the kit requires one, so the witness
+// control is caught. The wallet holds UTxOs at two payment keys under one
+// stake key; the payment needs the second key's UTxO, which the
+// largest-first methods take alone. Then the same with no UTxO left at the
+// signer's key: its witness is still written.
+test('a required signer at a wallet key the selection does not spend: witnessed by every builder, and the validity checks pass', { skip, timeout: 5 * 60 * 1000 }, async () => {
+  const { replay } = await import('../../../src/replay/engine.mjs');
+  const { makeMethod, BASELINE_METHODS } = await import('../../../src/methods/registry.mjs');
+  const { shapeState } = await import('../../../src/shapes/shapes.mjs');
+  const { SYNTHETIC_PARAMS } = await import('../../../src/kit/params.mjs');
+  const { outputBytes } = await import('../../../src/kit/assemble.mjs');
+  const { inspectTx } = await import('../../../src/kit/inspect.mjs');
+  const { utxoFromOutput } = await import('../../../src/state/utxo.mjs');
+  const { addressBytes } = await import('../../../src/history/address.mjs');
+  const { recipientAddress } = await import('../../../src/battery/recipients.mjs');
+  const { blake2b224, blake2b256 } = await import('../../../src/history/blake2b.mjs');
+  const { encBytes, encArray, encTag } = await import('../../../src/history/cbor.mjs');
+  const { ZERO_IMPLICIT } = await import('../../../src/state/intent.mjs');
+  const SP = SYNTHETIC_PARAMS;
+  const state = shapeState(T, 'S1').state;
+  const first = addressBytes(state.changeAddress);
+  const signer = first.subarray(1, 29).toString('hex');
+  const second = Buffer.concat([first.subarray(0, 1), blake2b224(Buffer.from('second payment key')), first.subarray(29)]);
+  const utxo = (label, address, coin) => utxoFromOutput(blake2b256(Buffer.from(label)).toString('hex'), 0, outputBytes(T, { address: addressTextOf(address), coin, assets: [] }), { origin: 'deposit' });
+  const atFirst = utxo('signer key utxo', first, 3n * ADA);
+  const atSecond = utxo('second key utxo', second, 50n * ADA);
+  assert.notEqual(atFirst.cred, atSecond.cred);
+  assert.equal(atFirst.cred, signer);
+  const payee = recipientAddress('synthetic', 500);
+  const coin = 10n * ADA;
+  const intent = {
+    id: 'a5'.repeat(32),
+    source: 'replay',
+    type: 'T1',
+    time: { slot: 10, blockTime: 10, blockIndex: 0, epoch: 0, block: 10 },
+    requested: [{ cbor: outputBytes(T, { address: payee, coin, assets: [] }).toString('hex'), address: payee, coin, assets: [], datum: null, scriptRef: null, raised: null, wallet: false, scriptPayment: false, index: null, from: null, inflow: false }],
+    implicit: { ...ZERO_IMPLICIT },
+    fixed: { inputs: [], referenceInputs: [], body: { 14: encTag(258, encArray([encBytes(Buffer.from(signer, 'hex'))])).toString('hex') }, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: 0n, fixedBytes: 0, refScriptBytes: 0 },
+    collateral: { required: false, observed: null },
+    invalid: null,
+    burst: null,
+    observed: { tx: 'a5'.repeat(32), size: 0, fee: 300000n, epoch: 0, protocolMajor: null, minFeeA: 44n, minFeeB: 155381n, walletInputs: [], walletOutputs: [], walletWitnesses: [] },
+    classes: {},
+    derived: null,
+    meta: null
+  };
+  const sourceOf = (start) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start, events: [{ kind: 'intent', txId: 1, intent }], arrival: new Map(), windowStart: 0, windowEnd: 20, params: SP });
+  const LARGEST_FIRST = new Set(['csl-lf', 'csl-lf-pure', 'evo-lf', 'test-largest-first']);
+  for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
+    const source = sourceOf(start);
+    for (const name of [...BASELINE_METHODS, 'test-largest-first']) {
+      const r = await replay(T, SP, source, { arm: 'observed', variant: 'default', repetition: 1, method: makeMethod(T, name), opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25, keepTx: true, validity: true });
+      const s = r.spends[0];
+      assert.equal(s.outcome, 'built', `${label} ${name}: ${s.outcome} ${s.class} ${s.detail}`);
+      const v = r.summary.validity;
+      assert.equal(v.failed, 0, `${label} ${name}: ${JSON.stringify(v.failures)}`);
+      assert.equal(v.controls.witnesses, v.txs, `${label} ${name}`);
+      const t = s.built.txs[s.built.txs.length - 1];
+      const d = inspectTx(t.bytes);
+      const keys = new Set([...t.walletInputs.map((ref) => s.built.before.utxos.get(ref).cred), signer]);
+      assert.equal(d.vkeys.length, keys.size, `${label} ${name}: one witness per input key and the signer`);
+      if (LARGEST_FIRST.has(name)) {
+        assert.deepEqual(t.walletInputs, [atSecond.ref], `${label} ${name}: the second key's UTxO alone`);
+        assert.equal(d.vkeys.length, 2);
+      }
+    }
+  }
 });

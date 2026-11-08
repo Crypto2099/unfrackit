@@ -34,15 +34,19 @@
 //                 Utxo.hs:183-212, feesOK part 1); a fee under it is its own
 //                 class, fee-minimum, apart from balance: the network rejects
 //                 the transaction although its value balances
-//   witnesses     at least one vkey witness per distinct key payment
-//                 credential among the inputs and the collateral inputs (both
-//                 are spending inputs for this rule: eras/alonzo/impl/src/
-//                 Cardano/Ledger/Alonzo/TxBody.hs:307-313,
+//   witnesses     at least one vkey witness per distinct key among the key
+//                 payment credentials of the inputs and the collateral inputs
+//                 (both are spending inputs for this rule: eras/alonzo/impl/
+//                 src/Cardano/Ledger/Alonzo/TxBody.hs:307-313,
 //                 alonzoSpendableInputsTxBodyF; eras/shelley/impl/src/Cardano/
-//                 Ledger/Shelley/UTxO.hs:205-227, inputAuthors), plus the
-//                 intent's fixed witnesses (eras/shelley/impl/src/Cardano/
-//                 Ledger/Shelley/Rules/Utxow.hs:420-434,
-//                 validateNeededWitnesses). Witnesses
+//                 Ledger/Shelley/UTxO.hs:205-227, inputAuthors) and the
+//                 transaction's required signers (body field 14, which the
+//                 Conway rule adds to the needed keys: eras/conway/impl/src/
+//                 Cardano/Ledger/Conway/UTxO.hs:172-180,
+//                 getConwayWitsVKeyNeeded, Conway's getWitsVKeyNeeded at
+//                 :132), plus the intent's fixed witnesses that no such key
+//                 accounts for (eras/shelley/impl/src/Cardano/Ledger/Shelley/
+//                 Rules/Utxow.hs:420-434, validateNeededWitnesses). Witnesses
 //                 here are synthetic, so they are counted, not verified; a key
 //                 payment credential is spent with a vkey witness (CIP-0019,
 //                 "Payment part").
@@ -95,7 +99,10 @@ export const outputMinimum = (params, rawLength) => params.coinsPerUtxoByte * (1
 //   implicit     { withdrawals, refunds, deposits, donation, mint, burn }
 //   scriptFee    bigint, the intent's script fee
 //   extraWitnesses  the number of vkey witnesses the intent's fixed parts
-//                need beyond the inputs' key payment credentials
+//                need beyond the keys the transaction itself names (the
+//                inputs' and collateral inputs' key payment credentials and
+//                the required signers), such as a stake key's, a voter's or
+//                a native script's (replay/engine.mjs fixedExtraWitnesses)
 //   requested    a Set of output indexes that are requested outputs, which
 //                classifies a minimum failure as 'other' rather than as change
 export function checkTx(bytes, ctx) {
@@ -157,6 +164,7 @@ export function checkTx(bytes, ctx) {
     const r = ctx.resolve(x.ref);
     if (r && r.addr && r.addr.paymentKind === 'key') keys.add(r.addr.payment);
   }
+  for (const h of t.requiredSigners) keys.add(h);
   const required = keys.size + (ctx.extraWitnesses || 0);
   if (t.vkeys.length < required) fail('witnesses', CLASSES.other, `${t.vkeys.length} vkey witnesses, ${required} needed`);
 

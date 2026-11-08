@@ -239,18 +239,17 @@ export function cjsImplicitValue(imp) {
 // spend the collateral the engine set aside, at that fee.
 export function replayAssembler(T, { state, params, intent, collateral }) {
   const fixedRefs = new Set(intent.fixed ? intent.fixed.inputs.map((x) => x.ref) : []);
-  const walletCreds = new Set([...state.utxos.values()].map((u) => u.cred));
   const walletInputs = (refs) => recordsOf(state, refs.filter((r) => !fixedRefs.has(r)));
   const collateralFor = setAsideCollateralFor(params, intent, collateral, state.changeAddress);
   // At a given fee: { ok, bytes, size, k } or the collateral failure.
   const at = (refs, change, fee) => {
     const co = collateralFor(fee);
     if (co && !co.ok) return co;
-    const a = assembleReplayOnce(T, { intent, inputs: walletInputs(refs), change, collateral: co ? co.collateral : null, fee, walletCreds });
+    const a = assembleReplayOnce(T, { intent, inputs: walletInputs(refs), change, collateral: co ? co.collateral : null, fee });
     return { ok: true, bytes: a.bytes, size: inspectTx(a.bytes).size, k: a.k };
   };
   // At its least self-covering fee: { ok, fee, ... } or the collateral failure.
-  const atMinimumFee = (refs, change) => assembleReplayAtMinimumFee(T, params, { intent, inputs: walletInputs(refs), changeFor: () => ({ ok: true, change }), collateralFor, walletCreds });
+  const atMinimumFee = (refs, change) => assembleReplayAtMinimumFee(T, params, { intent, inputs: walletInputs(refs), changeFor: () => ({ ok: true, change }), collateralFor });
   return { fixedRefs, walletInputs, at, atMinimumFee };
 }
 

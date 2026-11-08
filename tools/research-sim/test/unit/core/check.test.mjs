@@ -12,7 +12,7 @@ import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { minFee } from '../../../src/kit/fee.mjs';
 import { inspectTx } from '../../../src/kit/inspect.mjs';
 import { parseAddress } from '../../../src/history/address.mjs';
-import { encUint, encBytes, encArray, encMap } from '../../../src/history/cbor.mjs';
+import { encUint, encBytes, encArray, encMap, encTag } from '../../../src/history/cbor.mjs';
 import { valueSize } from '../../../src/history/value.mjs';
 import { tx, input, out, baseAddr, scriptAddr, keyHash, withFee, withoutOneWitness, withBodyField } from '../../lib/txcbor.mjs';
 
@@ -96,6 +96,28 @@ test('one vkey witness short fails the witness check only', () => {
   // Two inputs at one key need one witness.
   const one = balanced({ ins: [{ ref: `${TXA}#0`, address: ADDR0, coin: 3000000n }, { ref: `${TXA}#1`, address: ADDR0, coin: 3000000n }], outs: [{ address: ADDR0, coin: 0n }], vkeys: 1 });
   assert.equal(checkTx(one.bytes, { params: P, resolve: one.resolve }).facts.required, 1);
+});
+
+test('a required signer needs its own witness unless it is an input\'s key', () => {
+  const ins = [{ ref: `${TXA}#0`, address: ADDR0, coin: 10000000n }];
+  const outs = [{ address: ADDR0, coin: 0n }];
+  // An input at key 0 and required signer key 1 (body field 14, as a tagged
+  // set): one witness is short, two pass.
+  const signer1 = { 14: encTag(258, encArray([encBytes(Buffer.from(keyHash(1), 'hex'))])) };
+  const one = balanced({ ins, outs, extra: signer1, vkeys: 1 });
+  const r = checkTx(one.bytes, { params: P, resolve: one.resolve });
+  assert.deepEqual(r.failures.map((f) => [f.check, f.cls]), [['witnesses', CLASSES.other]]);
+  assert.equal(r.facts.required, 2);
+  const two = balanced({ ins, outs, extra: signer1, vkeys: 2 });
+  assert.equal(checkTx(two.bytes, { params: P, resolve: two.resolve }).ok, true);
+  // A required signer that is the input's key needs no second witness.
+  const same = balanced({ ins, outs, extra: { 14: encArray([encBytes(Buffer.from(keyHash(0), 'hex'))]) }, vkeys: 1 });
+  const s = checkTx(same.bytes, { params: P, resolve: same.resolve });
+  assert.equal(s.ok, true, JSON.stringify(s.failures));
+  assert.equal(s.facts.required, 1);
+  // The fixed witnesses the transaction's keys do not account for add to the
+  // count.
+  assert.equal(checkTx(two.bytes, { params: P, resolve: two.resolve, extraWitnesses: 1 }).facts.required, 3);
 });
 
 test('an output under its minimum is change-minimum, or other for a requested output', () => {

@@ -571,12 +571,10 @@ export function observedEvaluator(intent) {
 
 // The wallet's payment keys a replayed transaction needs a synthetic witness
 // for (kit/replay.mjs replayWitnessKeys): the collateral is the library's own
-// collateral inputs, read from its transaction, and the wallet's credentials
-// those of the pool, which holds that collateral.
+// collateral inputs, read from its transaction, which the pool holds.
 function walletKeysOf(state, intent, inputs, collateralRefs) {
-  const f = intent.fixed;
   const collateral = collateralRefs.map((r) => state.utxos.get(r)).filter(Boolean);
-  return replayWitnessKeys(f, { inputs, collateral, walletCreds: f ? new Set([...state.utxos.values()].map((u) => u.cred)) : null });
+  return replayWitnessKeys(intent.fixed, { inputs, collateral });
 }
 
 // Builds the intent with the library: the battery path for a battery spend,

@@ -2,13 +2,17 @@
 // Copyright 2026 Adam K. Dean
 
 // The replay helpers every adapter shares (kit/replay.mjs): the list items of
-// an intent part, its required signers, the wallet keys a replayed transaction
-// is witnessed for, the scripts it holds and a redeemer's target as a key; and
-// the Evolution SDK's redeemer lookup through that key. No treatment needed.
+// an intent part, its required signers, the keys of its fixed vkey witnesses,
+// the wallet keys a replayed transaction is witnessed for, the scripts it
+// holds and a redeemer's target as a key; the Evolution SDK's redeemer lookup
+// through that key; and the fixed witnesses the engine adds to the keys the
+// kit reads from a transaction (replay/engine.mjs fixedExtraWitnesses). No
+// treatment needed.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { listItems, requiredSigners, replayWitnessKeys, intentScripts, redeemerKey, targetKey } from '../../../src/kit/replay.mjs';
+import { listItems, requiredSigners, fixedWitnessKeys, replayWitnessKeys, intentScripts, redeemerKey, targetKey } from '../../../src/kit/replay.mjs';
+import { fixedExtraWitnesses } from '../../../src/replay/engine.mjs';
 import { redeemerFinder } from '../../../src/methods/evo.mjs';
 import * as E from '@evolution-sdk/evolution';
 import { encUint, encBytes, encArray, encMap, encTag } from '../../../src/history/cbor.mjs';
@@ -27,23 +31,54 @@ test('list items of a list and of a tag-258 set, each as its bytes', () => {
   assert.throws(() => listItems(encMap([]).toString('hex')), /expected a list/);
 });
 
-test('required signers, and the wallet keys a replayed transaction is witnessed for', () => {
-  const signers = encTag(258, encArray([encBytes(Buffer.alloc(28, 0xa1)), encBytes(Buffer.alloc(28, 0xb2))])).toString('hex');
-  const f = fixedOf({ inputs: [{ ref: 'aa#0', walletKey: h28(0xc3) }, { ref: 'bb#1', walletKey: null }], body: { 14: signers } });
-  assert.deepEqual(requiredSigners(f), [h28(0xa1), h28(0xb2)]);
+// A vkey witness [vkey, signature] for a 32-byte key of byte b, and its key
+// hash.
+const vkeyOf = (b) => Buffer.alloc(32, b);
+const keyOf = (b) => blake2b224(vkeyOf(b)).toString('hex');
+const witnessOf = (b) => encArray([encBytes(vkeyOf(b)), encBytes(Buffer.alloc(64, 0x77))]);
+
+test('required signers, the keys of the fixed witnesses, and the wallet keys a replayed transaction is witnessed for', () => {
+  // Two required signers: the first split off (its witness was the wallet's,
+  // which the history reader does not keep), the second another party's with
+  // its witness among the fixed ones.
+  const signers = encTag(258, encArray([encBytes(Buffer.from(keyOf(0xa1), 'hex')), encBytes(Buffer.from(keyOf(0xb2), 'hex'))])).toString('hex');
+  const f = fixedOf({ inputs: [{ ref: 'aa#0', walletKey: h28(0xc3) }, { ref: 'bb#1', walletKey: null }], body: { 14: signers }, witnesses: { 0: encArray([witnessOf(0xb2)]).toString('hex') } });
+  assert.deepEqual(requiredSigners(f), [keyOf(0xa1), keyOf(0xb2)]);
   assert.deepEqual(requiredSigners(fixedOf()), []);
   assert.deepEqual(requiredSigners(null), []);
+  assert.deepEqual([...fixedWitnessKeys(f)], [keyOf(0xb2)]);
+  assert.deepEqual([...fixedWitnessKeys(fixedOf({ witnesses: { 0: encTag(258, encArray([witnessOf(1), witnessOf(2)])).toString('hex') } }))], [keyOf(1), keyOf(2)]);
+  assert.equal(fixedWitnessKeys(fixedOf()).size, 0);
+  assert.equal(fixedWitnessKeys(null).size, 0);
   const inputs = [{ cred: h28(0x01) }, { cred: h28(0x01) }, { cred: h28(0x02) }];
-  // The inputs' credentials once each and the held fixed input's wallet key.
-  assert.deepEqual([...replayWitnessKeys(f, { inputs })].sort(), [h28(0x01), h28(0x02), h28(0xc3)].sort());
-  // The collateral's credential, and only the required signers among the
-  // wallet's credentials.
-  const keys = replayWitnessKeys(f, { inputs, collateral: [{ cred: h28(0x0c) }], walletCreds: new Set([h28(0xa1), h28(0x01)]) });
-  assert.deepEqual([...keys].sort(), [h28(0x01), h28(0x02), h28(0xc3), h28(0x0c), h28(0xa1)].sort());
+  // The inputs' credentials once each, the held fixed input's wallet key and
+  // the split-off signer, though no input is at its key; not the signer whose
+  // witness is fixed.
+  assert.deepEqual([...replayWitnessKeys(f, { inputs })].sort(), [h28(0x01), h28(0x02), h28(0xc3), keyOf(0xa1)].sort());
+  // The collateral's credential.
+  const keys = replayWitnessKeys(f, { inputs, collateral: [{ cred: h28(0x0c) }] });
+  assert.deepEqual([...keys].sort(), [h28(0x01), h28(0x02), h28(0xc3), h28(0x0c), keyOf(0xa1)].sort());
   // A required signer that is an input's credential counts once.
   const g = fixedOf({ body: { 14: encArray([encBytes(Buffer.alloc(28, 0x01))]).toString('hex') } });
-  assert.equal(replayWitnessKeys(g, { inputs, walletCreds: new Set([h28(0x01)]) }).size, 2);
+  assert.equal(replayWitnessKeys(g, { inputs }).size, 2);
   assert.equal(replayWitnessKeys(null, { inputs: [] }).size, 0);
+});
+
+test('the fixed witnesses beyond the keys the kit reads: a required signer\'s and a fixed input\'s are not counted, a stake key\'s is', () => {
+  // A non-wallet fixed input at key 0x4e with its witness, a required
+  // signer's witness (0x5f) and a stake key's witness (0x6a).
+  const net = 0;
+  const inAddr = Buffer.concat([Buffer.from([net]), Buffer.from(keyOf(0x4e), 'hex'), Buffer.alloc(28, 0x99)]);
+  const fixedIn = { ref: `${'ee'.repeat(32)}#0`, cbor: unspentOutput('ee'.repeat(32), 0, encodeOutput({ address: inAddr, coin: 2000000n, assets: [] }, 'array')).toString('hex'), walletKey: null };
+  const witnesses = { 0: encArray([witnessOf(0x4e), witnessOf(0x5f), witnessOf(0x6a)]).toString('hex') };
+  const intent = (body) => ({ fixed: fixedOf({ inputs: [fixedIn], body, witnesses }) });
+  assert.equal(fixedExtraWitnesses(intent({ 14: encTag(258, encArray([encBytes(Buffer.from(keyOf(0x5f), 'hex'))])).toString('hex') })), 1);
+  // Without the required signer, its witness is one the kit's keys do not
+  // account for.
+  assert.equal(fixedExtraWitnesses(intent({})), 2);
+  // A split-off signer has no fixed witness, so nothing is taken off.
+  assert.equal(fixedExtraWitnesses(intent({ 14: encArray([encBytes(Buffer.from(keyOf(0xa1), 'hex'))]).toString('hex') })), 2);
+  assert.equal(fixedExtraWitnesses({ fixed: null }), 0);
 });
 
 test('the scripts an intent holds, by hash: the witness set\'s, then reference scripts', () => {

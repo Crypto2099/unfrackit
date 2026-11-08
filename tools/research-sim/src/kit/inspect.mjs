@@ -7,9 +7,10 @@
 // layout is the Conway CDDL's (IntersectMBO/cardano-ledger at
 // 391db20866113f08bc6317cb5c341304365986c6,
 // eras/conway/impl/cddl/data/conway.cddl: transaction 16-17, body 107-128,
-// output 197-202, witness set 760-771, vkeywitness 773).
+// output 197-202, required signers 119 and 623, witness set 760-771,
+// vkeywitness 773).
 
-import { decodeTx, inputs, outputs, fee, mint, withdrawals, donation, vkeyWitnesses, collateralInputs, referenceInputs, collateralReturn, totalCollateral, redeemers } from '../history/tx.mjs';
+import { decodeTx, inputs, outputs, fee, mint, withdrawals, donation, vkeyWitnesses, collateralInputs, referenceInputs, collateralReturn, totalCollateral, redeemers, requiredSigners } from '../history/tx.mjs';
 import { decodeOutput } from '../history/output.mjs';
 import { parseAddress } from '../history/address.mjs';
 import { decode, asBytes, asUint } from '../history/cbor.mjs';
@@ -41,6 +42,7 @@ export function inspectTx(bytesIn) {
     mint: mint(tx),
     withdrawals: withdrawals(tx),
     donation: donation(tx),
+    requiredSigners: requiredSigners(tx),
     vkeys: vkeyWitnesses(tx),
     redeemers: redeemers(tx),
     bodyFields: [...tx.body.order],

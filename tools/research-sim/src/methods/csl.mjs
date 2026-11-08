@@ -339,14 +339,14 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 // not in it), add_change_if_needed and build_tx, as for a battery spend.
 //
 // The witness set is CSL's (scripts, datums, redeemers), with the vkey
-// witnesses a signer adds: one synthetic witness per distinct payment key
-// among the wallet inputs, the wallet's held fixed inputs, the collateral
-// input and the required signers that are wallet keys (kit/replay.mjs
-// replayWitnessKeys), then the intent's other vkey witnesses and its bootstrap
-// witnesses as observed. These are written after CSL priced the transaction;
-// when the transaction outgrows the one CSL priced, library.unpriced names
-// the observed ones, and a failed check names them in its detail
-// (replay/engine.mjs).
+// witnesses a signer adds: one synthetic witness per distinct key among the
+// payment keys of the wallet inputs, the wallet's held fixed inputs and the
+// collateral input, and the required signers with no fixed witness of the
+// intent (kit/replay.mjs replayWitnessKeys), then the intent's other vkey
+// witnesses and its bootstrap witnesses as observed. These are written after
+// CSL priced the transaction; when the transaction outgrows the one CSL
+// priced, library.unpriced names the observed ones, and a failed check names
+// them in its detail (replay/engine.mjs).
 //
 // A replayed intent carries no network id (body field 15), which the transaction
 // builder never writes (:2340, network_id: None): the engine leaves it out of
@@ -606,16 +606,9 @@ function addFixedParts(T, tb, intent, S, at) {
 }
 
 // The keys a replayed spend's synthetic witnesses stand for
-// (kit/replay.mjs replayWitnessKeys): the collateral is the UTxO set aside,
-// and the wallet's credentials those of the pool and the collateral.
-function walletKeyCount(state, intent, inputs, collateral) {
-  const f = intent.fixed;
-  let creds = null;
-  if (f && f.body[14] !== undefined) {
-    creds = new Set([...state.utxos.values()].map((u) => u.cred));
-    if (collateral) creds.add(collateral.cred);
-  }
-  return replayWitnessKeys(f, { inputs, collateral: collateral ? [collateral] : [], walletCreds: creds }).size;
+// (kit/replay.mjs replayWitnessKeys): the collateral is the UTxO set aside.
+function walletKeyCount(intent, inputs, collateral) {
+  return replayWitnessKeys(intent.fixed, { inputs, collateral: collateral ? [collateral] : [] }).size;
 }
 
 function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opts) {
@@ -721,7 +714,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     const body = k(tx.body());
     const walletRefs = walletRefsOf(body);
     const inputs = recordsOf(state, walletRefs);
-    const n = walletKeyCount(state, intent, inputs, collateral);
+    const n = walletKeyCount(intent, inputs, collateral);
     const ws = k(tx.witness_set());
     const synthetic = k(T.build.makeWitnessSet(n));
     const vk = synthetic.vkeys() ? k(synthetic.vkeys()) : k(C.Vkeywitnesses.new());

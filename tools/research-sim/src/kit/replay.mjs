@@ -14,11 +14,12 @@
 // out of it.
 //
 // The module also holds the replay helpers every adapter shares: an intent's
-// list items (listItems), its required signers (requiredSigners), the wallet
-// keys a replayed transaction is witnessed for (replayWitnessKeys), the
-// scripts it holds (intentScripts) and a redeemer's target as a key
-// (redeemerKey, targetKey); and the comparison the engine makes of every
-// built transaction's redeemers with the intent's (missingRedeemers).
+// list items (listItems), its required signers (requiredSigners), the keys of
+// its fixed vkey witnesses (fixedWitnessKeys), the wallet keys a replayed
+// transaction is witnessed for (replayWitnessKeys), the scripts it holds
+// (intentScripts) and a redeemer's target as a key (redeemerKey, targetKey);
+// and the comparison the engine makes of every built transaction's redeemers
+// with the intent's (missingRedeemers).
 //
 // Body:
 //   0   inputs: the wallet inputs and the intent's fixed inputs, sorted by
@@ -48,8 +49,8 @@
 // Witness set:
 //   0   synthetic vkey witnesses, one per distinct payment key among the wallet
 //       inputs, the wallet's held fixed inputs and the collateral input, and
-//       one per required signer (body field 14) that is one of the wallet's
-//       payment keys (replayWitnessKeys)
+//       one per required signer (body field 14) the intent's fixed witnesses
+//       hold no witness for (replayWitnessKeys)
 //       (state/utxo.mjs: real public keys from fixed seeds and fixed
 //       signatures, 101 bytes each as real ones, the treatment's
 //       build.mjs makeWitnessSet), then the intent's other vkey witnesses as
@@ -169,19 +170,34 @@ export function requiredSigners(fixed) {
   });
 }
 
+// The key hashes (hex) of the intent's fixed vkey witnesses (witness-set key
+// 0, [vkey, signature] each), as a Set.
+export function fixedWitnessKeys(fixed) {
+  if (!fixed || fixed.witnesses[0] === undefined) return new Set();
+  return new Set(listItems(fixed.witnesses[0]).map((b) => {
+    const n = decode(b);
+    if (n.mt !== 4 || n.items.length !== 2) throw new Error('vkey witness: expected [vkey, signature]');
+    return blake2b224(asBytes(n.items[0], 'vkey')).toString('hex');
+  }));
+}
+
 // The wallet's payment keys a replayed transaction carries a synthetic vkey
 // witness for, the count every replay assembles with: the credentials of the
 // wallet inputs, the wallet keys of the held fixed inputs, the credentials of
-// the collateral inputs, and the required signers (body field 14) that are
-// among the wallet's payment credentials. The caller names the collateral
-// inputs (the UTxO the engine set aside, or the collateral a library chose
-// itself) and the wallet's credentials (none: no required signer counts).
-// A Set of key hashes (hex).
-export function replayWitnessKeys(fixed, { inputs, collateral = [], walletCreds = null }) {
+// the collateral inputs, and the required signers (body field 14) the
+// intent's fixed witnesses hold no witness for. The history reader keeps as
+// fixed only the witnesses of keys other than those of the wallet inputs the
+// observed transaction spent (history/intent.mjs), so a required signer
+// without one was signed by a wallet key, and the ledger needs its witness
+// whichever inputs the arm chooses (kit/check.mjs, witnesses). The caller
+// names the collateral inputs (the UTxO the engine set aside, or the
+// collateral a library chose itself). A Set of key hashes (hex).
+export function replayWitnessKeys(fixed, { inputs, collateral = [] }) {
   const keys = new Set(inputs.map((u) => u.cred));
   if (fixed) for (const x of fixed.inputs) if (x.walletKey) keys.add(x.walletKey);
   for (const u of collateral) keys.add(u.cred);
-  if (walletCreds) for (const h of requiredSigners(fixed)) if (walletCreds.has(h)) keys.add(h);
+  const signed = fixedWitnessKeys(fixed);
+  for (const h of requiredSigners(fixed)) if (!signed.has(h)) keys.add(h);
   return keys;
 }
 
@@ -361,17 +377,16 @@ export function replayRefusal(intent) {
 }
 
 // parts: { intent, inputs [UTxO records], change [{ address, coin, assets }],
-// collateral null | { utxo, returnAddress, total }, fee, walletCreds (the
-// wallet's payment credentials, for required signers) }.
+// collateral null | { utxo, returnAddress, total }, fee }.
 export function assembleReplayOnce(T, parts) {
-  const { intent, inputs, change, collateral, fee, walletCreds = null } = parts;
+  const { intent, inputs, change, collateral, fee } = parts;
   const fixed = intent.fixed;
   const refusal = replayRefusal(intent);
   if (refusal) throw new NotReplayable(refusal);
   const allRefs = [...inputs.map((u) => u.ref), ...(fixed ? fixed.inputs.map((x) => x.ref) : [])];
   if (new Set(allRefs).size !== allRefs.length) throw new Error('replay: an input is given twice');
   const sorted = allRefs.slice().sort(cmpRef);
-  const keys = replayWitnessKeys(fixed, { inputs, collateral: collateral ? [collateral.utxo] : [], walletCreds });
+  const keys = replayWitnessKeys(fixed, { inputs, collateral: collateral ? [collateral.utxo] : [] });
 
   const body = [];
   const put = (k, v) => body.push([k, v]);
@@ -418,14 +433,14 @@ export function assembleReplayOnce(T, parts) {
 // { ok: true, collateral } or a failure. The fee rises until it covers the
 // size it produces (the fee's and the change coin's encodings are part of the
 // size), as kit/assemble.mjs does.
-export function assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor = () => null, walletCreds = null }) {
+export function assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor = () => null }) {
   const scriptFee = intent.fixed ? intent.fixed.scriptFee || 0n : 0n;
   const at = (fee) => {
     const ch = changeFor(fee);
     if (!ch.ok) return ch;
     const co = collateralFor(fee);
     if (co && !co.ok) return co;
-    const a = assembleReplayOnce(T, { intent, inputs, change: ch.change, collateral: co ? co.collateral : null, fee, walletCreds });
+    const a = assembleReplayOnce(T, { intent, inputs, change: ch.change, collateral: co ? co.collateral : null, fee });
     const t = inspectTx(a.bytes);
     return { ok: true, bytes: a.bytes, fee, size: t.size, serializedSize: t.serializedSize, k: a.k, change: ch.change, collateral: co ? co.collateral : null, hash: t.hash, need: minFee(params, t.size, scriptFee) };
   };

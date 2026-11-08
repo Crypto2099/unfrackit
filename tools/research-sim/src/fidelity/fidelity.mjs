@@ -25,15 +25,13 @@
 //   kit's form. A requested output built from an inflow is left out, since
 //   the observed wallet output that received the inflow carries it;
 // - witnesses: the kit's (kit/replay.mjs replayWitnessKeys), one synthetic
-//   vkey witness per distinct payment key of the wallet inputs, the held
-//   wallet inputs and the required signers among the wallet's payment
-//   credentials at the spend, and every other witness as observed, a
-//   bootstrap witness of a non-wallet Byron input among them as its own
-//   bytes;
+//   vkey witness per distinct key among the payment keys of the wallet inputs
+//   and the held wallet inputs and the required signers with no fixed
+//   witness, and every other witness as observed, a bootstrap witness of a
+//   non-wallet Byron input among them as its own bytes;
 // - no collateral, since a spend that runs no script needs none.
-// The wallet's payment credentials at a spend are those of its UTxO set just
-// before it, followed through the history file's events as the chain had
-// them.
+// The wallet's UTxO set is followed through the history file's events as the
+// chain had it, and must end at the file's end count (stateCheck).
 //
 // A spend runs a script when it carries a Plutus redeemer or is
 // phase-2-invalid (spend type T6); such spends are left out. Native scripts
@@ -58,7 +56,6 @@ import { join, resolve } from 'node:path';
 import { readHistory } from '../state/history.mjs';
 import { utxoFromCbor, addressTextOf } from '../state/utxo.mjs';
 import { decodeOutputBytes } from '../history/output.mjs';
-import { parseAddress } from '../history/address.mjs';
 import { sortAssets } from '../history/value.mjs';
 import { assembleReplayOnce, withoutLeftovers, emptyAuxiliaryData } from '../kit/replay.mjs';
 import { leastSelfCoveringFee } from '../kit/assemble.mjs';
@@ -113,18 +110,16 @@ export function rebuildParts(intent, { keepLeftovers = false } = {}) {
   return { intent: Object.freeze({ ...it, requested }), inputs, change, mapFormChange };
 }
 
-// One spend rebuilt and compared. walletCreds: the wallet's payment
-// credentials at the spend (an object with has(keyHash)), for its required
-// signers. Throws Apart, or the kit's error, when the kit cannot assemble it.
-// { within, relative, bytes, kept: { within, relative }, traits }, `kept`
-// the same comparison with the leftovers kept.
-export function rebuildSpend(T, intent, { walletCreds = null } = {}) {
+// One spend rebuilt and compared. Throws Apart, or the kit's error, when the
+// kit cannot assemble it. { within, relative, bytes, kept: { within,
+// relative }, traits }, `kept` the same comparison with the leftovers kept.
+export function rebuildSpend(T, intent) {
   const o = intent.observed;
   const P = { minFeeA: o.minFeeA, minFeeB: o.minFeeB };
   const observed = minFee(P, o.size);
   const once = (parts) => {
     const at = (fee) => {
-      const a = assembleReplayOnce(T, { intent: parts.intent, inputs: parts.inputs, change: parts.change, collateral: null, fee, walletCreds });
+      const a = assembleReplayOnce(T, { intent: parts.intent, inputs: parts.inputs, change: parts.change, collateral: null, fee });
       const size = inspectTx(a.bytes).size;
       return { ok: true, fee, size, k: a.k, need: minFee(P, size) };
     };
@@ -169,8 +164,6 @@ function tally(into, traits) {
   }
 }
 
-const credOfOutput = (hex) => parseAddress(decodeOutputBytes(Buffer.from(hex, 'hex')).address).payment;
-
 // One history file (its text) into its window's totals.
 export function fileFidelity(T, text, w, { analysisFreezeTx = null } = {}) {
   const h = readHistory(text, { analysisFreezeTx });
@@ -179,28 +172,14 @@ export function fileFidelity(T, text, w, { analysisFreezeTx = null } = {}) {
   w.wallets.add(h.header.wallet);
   const split = h.header.split || 'none';
   w.splits[split] = (w.splits[split] || 0) + 1;
-  // The wallet's UTxO set as the chain had it, by reference, with each
-  // payment credential's count.
-  const refs = new Map();
-  const count = new Map();
-  const add = (ref, cred) => {
-    if (refs.has(ref)) return;
-    refs.set(ref, cred);
-    count.set(cred, (count.get(cred) || 0) + 1);
-  };
-  const del = (ref) => {
-    const c = refs.get(ref);
-    if (c === undefined) return;
-    refs.delete(ref);
-    const n = count.get(c) - 1;
-    if (n) count.set(c, n);
-    else count.delete(c);
-  };
-  const walletCreds = { has: (keyHash) => count.has(keyHash) };
-  for (const u of h.start) add(u.ref, u.cred);
+  // The wallet's UTxO set as the chain had it, by reference.
+  const refs = new Set();
+  const add = (ref) => refs.add(ref);
+  const del = (ref) => refs.delete(ref);
+  for (const u of h.start) add(u.ref);
   h.events.forEach((e, i) => {
     if (e.kind === 'deposit') {
-      for (const u of e.utxos) add(u.ref, u.cred);
+      for (const u of e.utxos) add(u.ref);
     } else if (e.kind === 'held-consumed') {
       for (const r of e.refs) del(r);
     } else if (e.kind === 'self-reorganization') {
@@ -208,7 +187,7 @@ export function fileFidelity(T, text, w, { analysisFreezeTx = null } = {}) {
       const raw = JSON.parse(lines[2 + i]);
       for (const x of (raw.observed && raw.observed.walletInputs) || []) del(x.ref);
       for (const r of e.heldConsumed) del(r);
-      for (const o of e.walletOutputs) add(`${e.tx}#${o.index}`, credOfOutput(o.cbor));
+      for (const o of e.walletOutputs) add(`${e.tx}#${o.index}`);
     } else if (e.kind === 'intent') {
       const it = e.intent;
       w.intents++;
@@ -217,7 +196,7 @@ export function fileFidelity(T, text, w, { analysisFreezeTx = null } = {}) {
       } else {
         w.spends++;
         try {
-          const r = rebuildSpend(T, it, { walletCreds });
+          const r = rebuildSpend(T, it);
           w.rebuilt++;
           if (r.within) w.within++;
           w.relative.push(r.relative);
@@ -235,7 +214,7 @@ export function fileFidelity(T, text, w, { analysisFreezeTx = null } = {}) {
       for (const x of it.observed.walletInputs) del(x.ref);
       if (it.fixed) for (const x of it.fixed.inputs) if (x.held) del(x.ref);
       if (it.invalid) for (const r of it.invalid.heldConsumed) del(r);
-      for (const o of it.observed.walletOutputs) add(`${it.id}#${o.index}`, credOfOutput(o.cbor));
+      for (const o of it.observed.walletOutputs) add(`${it.id}#${o.index}`);
     }
   });
   // The set followed through the events must end at the file's end count.

@@ -99,7 +99,7 @@ import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
-import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers, missingRedeemers } from '../kit/replay.mjs';
+import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers, missingRedeemers, requiredSigners } from '../kit/replay.mjs';
 import { checkResult, checkOptions, choosesOwnCollateral, NOT_REPLAYABLE } from '../methods/contract.mjs';
 import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
 import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
@@ -185,9 +185,12 @@ export function spendCollateralAvailability(T, params, state, intent, suffices) 
   return out;
 }
 
-// The number of the intent's fixed vkey witnesses that no fixed input's key
-// accounts for (stake keys, required signers, voters): with the inputs' keys
-// they are the witnesses the kit requires.
+// The number of the intent's fixed vkey witnesses that neither a fixed
+// input's key nor a required signer accounts for (stake keys, voters, native
+// scripts' keys): with the keys the kit reads from the transaction (its
+// inputs' and collateral inputs' key payment credentials and its required
+// signers, kit/check.mjs) they are the witnesses the kit requires, each
+// counted once.
 export function fixedExtraWitnesses(intent) {
   const f = intent.fixed;
   if (!f || f.witnesses[0] === undefined) return 0;
@@ -195,10 +198,11 @@ export function fixedExtraWitnesses(intent) {
   const n = decode(b);
   const arr = n.mt === 6 ? n.item : n;
   const inputKeys = new Set(fixedInputValues(intent).filter((x) => x.addr.paymentKind === 'key' && !x.walletKey).map((x) => x.addr.payment));
+  const signers = new Set(requiredSigners(f));
   let extra = 0;
   for (const w of arr.items) {
-    const vkey = Buffer.from(raw(b, w.items[0])).subarray(2);
-    if (!inputKeys.has(blake2b224(vkey).toString('hex'))) extra++;
+    const h = blake2b224(Buffer.from(raw(b, w.items[0])).subarray(2)).toString('hex');
+    if (!inputKeys.has(h) && !signers.has(h)) extra++;
   }
   return extra;
 }
