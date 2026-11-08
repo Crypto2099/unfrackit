@@ -83,8 +83,10 @@ export const ORACLE_SETTINGS = Object.freeze({
   maxProgramWork: 1115069,
   // The guard: the parent terminates a worker whose call has not returned
   // this long after it started, a wall-clock backstop set well above any
-  // budgeted call. A call it stops is undecided. Provisional.
-  guardMs: 300000,
+  // budgeted call. A call it stops is undecided. 410,000 is three times the
+  // slowest call of the budget's verification run (all 21 synthetic shapes,
+  // 8 workers) by the parent's clock, 135.0 s, rounded up.
+  guardMs: 410000,
   // HiGHS's random_seed, set on every solve.
   solverSeed: 0
 });
