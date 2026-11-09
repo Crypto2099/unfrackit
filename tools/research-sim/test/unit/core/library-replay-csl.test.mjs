@@ -5,10 +5,10 @@
 // treatment: the four CSL methods and one substituted change policy on the
 // synthetic streams of S1, S7, S8, M1 and M7 (T7 a stake registration, T8 a
 // mint into the wallet, T1 with a held fixed input, a validity interval and a
-// message; the streams' T6 names a script whose hash its address does not
-// carry, so CSL, which finds a script by its hash, cannot place it) under two
-// collateral rules; and constructed intents for the parts the streams do not
-// carry: a Plutus spend with its datum and redeemer, a Plutus mint whose
+// message, T6 a Plutus spend whose input's address carries the hash of the
+// script in its witness set) under two collateral rules, the day-35 T6 built
+// by the largest-first methods; and constructed intents for further parts: a
+// Plutus spend with its datum and redeemer, a Plutus mint whose
 // script is a reference script, a burn, a deregistration with its refund and a
 // reward withdrawal, a treasury donation, a deposit CSL counts differently,
 // a network id with an empty auxiliary data, which the engine leaves out, body
@@ -157,13 +157,13 @@ test('CSL replays the synthetic streams\' certificates, mints and fixed inputs, 
           seen[`${name} ${r.name} ${rule} ${changePolicy}`] = o;
           assert.deepEqual(controlsOf(source, r), [], `${name} ${r.name}`);
           checkParts(source, r);
-          // The streams' Plutus spend names a script whose hash is not its
-          // input's: not replayable for CSL, by that reason only.
-          const nr = r.spends.filter((s) => s.outcome === 'not-replayable');
-          assert.deepEqual(nr.map((s) => s.type), ['T6']);
-          assert.match(nr[0].detail, /no script with hash/);
+          // The streams' Plutus spend carries the script its input's address
+          // names, so CSL finds it by its hash: no spend is not replayable,
+          // and the largest-first methods build the day-35 T6 (the day-40 T6
+          // is a forfeit).
+          assert.deepEqual(r.spends.filter((s) => s.outcome === 'not-replayable').map((s) => `${s.type}: ${s.detail}`), []);
           for (const f of r.fees) assert.ok(f.fee >= f.finalMinFee);
-          if (strategy === 'lf') for (const type of ['T7', 'T8']) assert.ok(o[`${type}:built`] >= 1, `${name} ${r.name} ${rule} ${changePolicy}: no ${type} built`);
+          if (strategy === 'lf') for (const type of ['T6', 'T7', 'T8']) assert.ok(o[`${type}:built`] >= 1, `${name} ${r.name} ${rule} ${changePolicy}: no ${type} built`);
         }
       }
     }

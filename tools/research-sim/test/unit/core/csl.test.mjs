@@ -146,6 +146,66 @@ test('output sizes, Values and minimums against CSL on every UTxO of the 21 shap
   assert.equal(n, 8337 + 75 + 221 + 405 + 105);
 });
 
+// Every script a synthetic stream's transaction names (a script input's
+// payment credential, a mint policy, a script withdrawal or certificate, a
+// requested output paid back to a script address) is one the transaction
+// carries in its witness set or as a reference script, by the hash CSL
+// computes for it: the ledger's, over the language tag and the script.
+test('the 21 shapes\' synthetic streams: every script credential and mint policy is the hash of a script the transaction carries', { skip }, async () => {
+  const { syntheticStream } = await import('../../../src/shapes/streams.mjs');
+  const { listItems } = await import('../../../src/kit/replay.mjs');
+  const C = T.CSL;
+  const LANGS = [[3, 'new_plutus_v1'], [6, 'new_plutus_v2'], [7, 'new_plutus_v3']];
+  const scriptOf = (cred) => (cred && cred.kind() === C.CredKind.Script ? cred.to_scripthash().to_hex() : null);
+  const CERT_KINDS = ['as_stake_registration', 'as_stake_deregistration', 'as_stake_delegation', 'as_reg_cert', 'as_unreg_cert', 'as_vote_delegation', 'as_stake_and_vote_delegation', 'as_stake_registration_and_delegation', 'as_vote_registration_and_delegation', 'as_stake_vote_registration_and_delegation'];
+  const seen = { input: 0, mint: 0, withdrawal: 0, certificate: 0, payment: 0 };
+  for (const name of SHAPE_NAMES) {
+    const intents = syntheticStream(T, shapeState(T, name), P).events.filter((e) => e.kind === 'intent' && e.intent.fixed).map((e) => e.intent);
+    for (const it of intents) {
+      const f = it.fixed;
+      const carried = new Set();
+      if (f.witnesses[1] !== undefined) for (const r of listItems(f.witnesses[1])) carried.add(C.NativeScript.from_bytes(r).hash().to_hex());
+      for (const [k, lang] of LANGS) if (f.witnesses[k] !== undefined) for (const r of listItems(f.witnesses[k])) carried.add(C.PlutusScript.from_bytes_with_version(r, C.Language[lang]()).hash().to_hex());
+      for (const x of [...f.inputs, ...f.referenceInputs]) {
+        const ref = C.TransactionUnspentOutput.from_bytes(Buffer.from(x.cbor, 'hex')).output().script_ref();
+        if (ref) carried.add((ref.is_native_script() ? ref.native_script() : ref.plutus_script()).hash().to_hex());
+      }
+      const needs = (hash, what) => {
+        if (hash === null) return;
+        assert.ok(carried.has(hash), `${name} ${it.type}: ${what} names script ${hash}, which the transaction does not carry`);
+        seen[what]++;
+      };
+      for (const x of f.inputs) needs(scriptOf(C.TransactionUnspentOutput.from_bytes(Buffer.from(x.cbor, 'hex')).output().address().payment_cred()), 'input');
+      if (f.body[9] !== undefined) {
+        const ps = C.Mint.from_bytes(Buffer.from(f.body[9], 'hex')).keys();
+        for (let i = 0; i < ps.len(); i++) needs(ps.get(i).to_hex(), 'mint');
+      }
+      if (f.body[5] !== undefined) {
+        const ws = C.Withdrawals.from_bytes(Buffer.from(f.body[5], 'hex')).keys();
+        for (let i = 0; i < ws.len(); i++) needs(scriptOf(ws.get(i).payment_cred()), 'withdrawal');
+      }
+      if (f.body[4] !== undefined) {
+        const cs = C.Certificates.from_bytes(Buffer.from(f.body[4], 'hex'));
+        for (let i = 0; i < cs.len(); i++) {
+          const c = cs.get(i);
+          if (!c.has_required_script_witness()) continue;
+          const part = CERT_KINDS.map((m) => c[m]()).find((x) => x !== undefined);
+          assert.ok(part, `${name} ${it.type}: a certificate needing a script, of a kind this test does not read`);
+          needs(scriptOf(part.stake_credential()), 'certificate');
+        }
+      }
+      for (const o of it.requested) if (o.scriptPayment) needs(scriptOf(C.TransactionOutput.from_bytes(Buffer.from(o.cbor, 'hex')).address().payment_cred()), 'payment');
+    }
+    await settle();
+  }
+  // Each stream's Plutus spend: its script input and the output paid back to
+  // the script address; each stream's native-script mint. The streams'
+  // stake registration is at the wallet's stake key.
+  const n = SHAPE_NAMES.length;
+  assert.equal(n, 21);
+  assert.deepEqual(seen, { input: n, mint: n, withdrawal: 0, certificate: 0, payment: n });
+});
+
 test('transaction sizes: the ledger size is the serialized length less the validity flag; the treatment pays the ledger\'s minimum, and CSL\'s fee counts the flag', { skip }, () => {
   const CSL = T.CSL;
   const p = planState(T, shapeState(T, 'S3').state, P, {});

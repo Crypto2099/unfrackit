@@ -91,8 +91,9 @@ test('a method whose transaction lacks one of the intent\'s redeemers fails, its
       assert.ok(!/redeemers/.test(s.detail || ''), `${name} ${i}: ${s.detail}`);
       if (s.outcome === 'built') assert.equal(missingRedeemers(intents[i], inspectTx(s.built.txs[0].bytes).tx), 0, `${name} ${i}`);
     }
-    // The stream's script hash is not its script's, which CSL refuses.
-    assert.ok(r.spends.slice(name.startsWith('csl') ? 1 : 0, 3).every((s) => s.outcome === 'built'), `${name}: ${r.spends.map((s) => s.detail).join(' | ')}`);
+    // The stream's script input names the script its witness set carries,
+    // so every method builds it, CSL included.
+    assert.ok(r.spends.slice(0, 3).every((s) => s.outcome === 'built'), `${name}: ${r.spends.map((s) => s.detail).join(' | ')}`);
   }
 
   // Taking the redeemers off: the kit's checks otherwise pass, so the

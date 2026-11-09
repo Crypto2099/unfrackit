@@ -38,7 +38,9 @@
 //   day 60     mark 2
 //   day 70     T1   pay 100 ADA
 //
-// Ids and synthetic hashes are BLAKE2b-256 or BLAKE2b-224 of fixed texts.
+// Ids and synthetic hashes are BLAKE2b-256 or BLAKE2b-224 of fixed texts,
+// except the hash of a script a transaction carries, which is the ledger's:
+// BLAKE2b-224 of the language tag (0 native, 2 Plutus V2) and the script.
 
 import { blake2b256, blake2b224 } from '../history/blake2b.mjs';
 import { encUint, encBytes, encArray, encMap, encTag, encText } from '../history/cbor.mjs';
@@ -190,8 +192,10 @@ export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
 
   events.push({ kind: 'mark', n: 1, blockTime: 30 * DAY });
 
-  // A Plutus spend.
-  const scriptHash = hash28(`${name} script`);
+  // A Plutus spend: the script address's credential is the hash of the
+  // Plutus V2 script in the witness set.
+  const script = Buffer.alloc(300, 0x4d);
+  const scriptHash = blake2b224(Buffer.concat([Buffer.from([2]), script])).toString('hex');
   const scriptAddr = Buffer.concat([Buffer.from([0x70 | net]), Buffer.from(scriptHash, 'hex')]);
   const scriptAddrText = addressTextOf(scriptAddr);
   const datumHash = blake2b256(Buffer.from('d87980', 'hex')).toString('hex');
@@ -207,7 +211,7 @@ export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
     witnesses: {
       4: encArray([Buffer.from('d87980', 'hex')]).toString('hex'),
       5: encArray([encArray([encUint(0), encUint(0), Buffer.from('d87980', 'hex'), encArray([encUint(exUnits[0]), encUint(exUnits[1])])])]).toString('hex'),
-      6: encArray([encBytes(Buffer.alloc(300, 0x4d))]).toString('hex')
+      6: encArray([encBytes(script)]).toString('hex')
     },
     redeemers,
     auxiliaryData: null,
