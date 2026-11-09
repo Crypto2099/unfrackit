@@ -30,6 +30,10 @@
 //                        coinsPerUtxoByte * (160 + its output's bytes as
 //                        written; setting heldBytes 'ledger')
 //   lockedAdaPerToken    lockedAda over the distinct assets held
+// Each counts every UTxO of the state, held ones included. A held output that
+// a replayed intent created is in the state under its observed reference
+// until the event or later intent that consumes it (state/state.mjs
+// heldOutputRefs), as a held UTxO of the start state or of a deposit is.
 
 import { valueSize } from '../history/value.mjs';
 import { outputMinimum } from '../kit/check.mjs';

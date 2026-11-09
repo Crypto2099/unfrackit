@@ -39,10 +39,11 @@ export function fixedResolver(fixed) {
 
 // opts: { implicit, scriptFee, extraWitnesses, fixed, requested (Set of the
 // last transaction's requested output indexes), heldInputs (refs of held
-// UTxOs the intent spends), notWallet (state/state.mjs applyTx), validity
-// ({ acc, at }: kit/validity.mjs reads each transaction the kit passes with CSL
-// and runs the negative controls on it, adding to acc; it changes nothing the
-// call returns) }. The
+// UTxOs the intent spends), notWallet and heldRef (state/state.mjs applyTx;
+// heldRef names the held outputs of every transaction), validity ({ acc, at }:
+// kit/validity.mjs reads each transaction the kit passes with CSL and runs the
+// negative controls on it, adding to acc; it changes nothing the call
+// returns) }. The
 // intent's implicit values, script fee and fixed parts belong to its last
 // transaction (a chain's earlier transactions are the planner's, with none).
 export function checkAndApply(state, params, txs, opts = {}) {
@@ -76,7 +77,7 @@ export function checkAndApply(state, params, txs, opts = {}) {
         extraWitnesses: last ? opts.extraWitnesses || 0 : 0
       });
     }
-    s = applyTx(s, { bytes: txs[i].bytes, walletInputs: txs[i].walletInputs, heldInputs: last ? opts.heldInputs || [] : [], notWallet: opts.notWallet || null }).state;
+    s = applyTx(s, { bytes: txs[i].bytes, walletInputs: txs[i].walletInputs, heldInputs: last ? opts.heldInputs || [] : [], notWallet: opts.notWallet || null, heldRef: opts.heldRef || null }).state;
     states.push(s);
   }
   // states: the state after each transaction, so a chain's payment can be

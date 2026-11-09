@@ -20,12 +20,15 @@
 // transaction's body hash, the outputs that carry the wallet's stake
 // credential (CIP-0019, "Delegation part"), so that a chain's later
 // transactions spend the earlier ones' outputs. Payments to other stake
-// credentials leave the wallet.
+// credentials leave the wallet. A held output a replayed intent's
+// transaction creates is added under its observed reference instead
+// (heldOutputRefs), since the events and intents that later consume it name
+// that reference.
 
 import { parseAddress, addressBytes } from '../history/address.mjs';
 import { decodeOutputBytes } from '../history/output.mjs';
 import { utxoFromOutput, addressTextOf } from './utxo.mjs';
-import { inspectTx } from '../kit/inspect.mjs';
+import { inspectTx, unspentOutputParts } from '../kit/inspect.mjs';
 
 const txidOf = (ref) => ref.slice(0, ref.indexOf('#'));
 const indexOf = (ref) => Number(ref.slice(ref.indexOf('#') + 1));
@@ -93,8 +96,9 @@ export function isWalletAddress(s, addressBytesOrParsed) {
 // (a Set of bech32 addresses) names outputs to treat as payments although
 // their address carries the wallet's stake credential: only the comparison
 // with the treatment's own runner uses it, whose test payees share the
-// shapes' stake key.
-export function applyTx(s, { bytes, walletInputs, heldInputs = [], notWallet = null }, at = s.at) {
+// shapes' stake key. `heldRef` (heldOutputRefs(intent).ref) names the
+// reference a held output takes, or null to keep the transaction's own.
+export function applyTx(s, { bytes, walletInputs, heldInputs = [], notWallet = null, heldRef = null }, at = s.at) {
   const t = inspectTx(bytes);
   const m = new Map(s.utxos);
   const inputs = new Set(t.inputs.map((x) => x.ref));
@@ -114,10 +118,90 @@ export function applyTx(s, { bytes, walletInputs, heldInputs = [], notWallet = n
   for (const o of t.outputs) {
     if (!isWalletAddress(s, o.addr)) continue;
     if (notWallet && notWallet.has(addressTextOf(o.address))) continue;
-    const u = utxoFromOutput(t.hash, o.index, o.raw, { franken: s.franken, origin: 'built' });
+    let u = utxoFromOutput(t.hash, o.index, o.raw, { franken: s.franken, origin: 'built' });
+    const ref = u.held !== null && heldRef ? heldRef(o) : null;
+    if (ref) {
+      u = utxoFromOutput(txidOf(ref), indexOf(ref), o.raw, { franken: s.franken, origin: 'built' });
+      if (m.has(ref)) throw new Error(`apply: held output ${ref} is already in the state`);
+    }
     m.set(u.ref, u);
   }
   return { state: withUtxos(s, m.values(), at), hash: t.hash };
+}
+
+// Whether two outputs, decoded (history/output.mjs decodeOutput, or an
+// output of kit/inspect.mjs inspectTx), hold the same address, coin, assets,
+// datum and reference script, whatever their encoding.
+const datumKey = (d) => (!d ? '' : d.kind === 'hash' ? `hash ${d.hash}` : `inline ${d.cbor}`);
+const assetsKey = (assets) => assets.map((a) => `${a.policy}.${a.name}=${a.qty}`).sort().join(',');
+export function sameOutputContent(a, b) {
+  return (
+    Buffer.compare(Buffer.from(a.address), Buffer.from(b.address)) === 0 &&
+    BigInt(a.coin) === BigInt(b.coin) &&
+    assetsKey(a.assets) === assetsKey(b.assets) &&
+    datumKey(a.datum) === datumKey(b.datum) &&
+    (a.scriptRef ? a.scriptRef.cbor : null) === (b.scriptRef ? b.scriptRef.cbor : null)
+  );
+}
+
+// The references under which a replayed intent's transactions add the held
+// outputs they create. Each held output takes the reference of the observed
+// output its requested output stands for: the observed transaction's hash
+// (intent.observed.tx, the intent's id for an intent the history reader
+// writes) and the requested output's index, or for a requested output made
+// from an inflow (index null), the observed output it came from (`from`). A
+// held output is matched to a requested output not yet matched by the
+// output's bytes, which the kit's assembly and CSL's add_output keep, else by
+// its address, coin, assets, datum and reference script, for a library that
+// writes the output in another encoding. A matched output of an intent with no
+// observed output to name (a battery's, a synthetic one with no index) keeps
+// the built transaction's reference. A held output that matches no requested
+// output also keeps it and is counted in `unmatched`: change is never sent to
+// a held address (nameable below), so only a method that alters a requested
+// output makes one. ref(o) takes an output of kit/inspect.mjs inspectTx and
+// returns the reference or null, once per held output, in the order the
+// transactions are applied.
+export function heldOutputRefs(intent) {
+  const tx = intent.observed && typeof intent.observed.tx === 'string' ? intent.observed.tx : null;
+  const left = intent.requested.map((o) => ({ o, used: false, decoded: null }));
+  const decoded = (e) => (e.decoded ||= decodeOutputBytes(Buffer.from(e.o.cbor, 'hex')));
+  let unmatched = 0;
+  return {
+    ref(out) {
+      const raw = Buffer.from(out.raw).toString('hex');
+      let e = left.find((x) => !x.used && x.o.cbor === raw);
+      if (!e) e = left.find((x) => !x.used && sameOutputContent(decoded(x), out));
+      if (!e) {
+        unmatched++;
+        return null;
+      }
+      e.used = true;
+      const index = e.o.index ?? e.o.from ?? null;
+      return tx && index !== null ? `${tx}#${index}` : null;
+    },
+    get unmatched() {
+      return unmatched;
+    }
+  };
+}
+
+// The intent with each held fixed input that the arm's state holds carrying
+// the state's output for it, where the two differ in content: a held output
+// the arm built from a requested output whose coin the history reader raised,
+// or one made from an inflow. The method then builds, and the kit checks, the
+// spend against the UTxO the arm holds, as the ledger would. Otherwise the
+// intent itself.
+export function heldInputsFromState(state, intent) {
+  const f = intent.fixed;
+  if (!f || !f.inputs.some((x) => x.held && state.utxos.has(x.ref))) return intent;
+  let changed = false;
+  const inputs = f.inputs.map((x) => {
+    const u = x.held ? state.utxos.get(x.ref) : undefined;
+    if (!u || u.cbor === x.cbor || sameOutputContent(unspentOutputParts(u.cbor), unspentOutputParts(x.cbor))) return x;
+    changed = true;
+    return { ...x, cbor: u.cbor };
+  });
+  return changed ? { ...intent, fixed: { ...f, inputs } } : intent;
 }
 
 // UTxOs received from outside the wallet (a deposit).

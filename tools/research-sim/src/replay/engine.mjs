@@ -14,9 +14,15 @@
 // state holds no spendable UTxO, so a plan there proposes nothing and is not
 // run. The events then apply in chain order:
 //   deposit              the UTxOs are added, in every arm, when they occurred
-//   held-consumed        the held UTxOs leave the state
+//   held-consumed        the held UTxOs leave the state; one the state does
+//                        not hold (its creating intent was not built in the
+//                        arm) is counted as missing
 //   intent               built by the method, checked by the ledger kit and
-//                        applied (below)
+//                        applied (below); a held output its transactions
+//                        create enters the state under its observed
+//                        reference (state/state.mjs heldOutputRefs), which
+//                        later events and intents name, and one that matches
+//                        no requested output is counted as unmatched
 //   self-reorganization  counted, its reshuffle of the wallet's inputs not
 //                        replayed; held UTxOs it consumed leave the state,
 //                        and its reward withdrawals, when it carries any, are
@@ -91,7 +97,7 @@
 // to finalization are released by settling the heap (kit/heap.mjs) after each
 // plan and every `settleEvery` spends.
 
-import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap } from '../state/state.mjs';
+import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap, heldOutputRefs, heldInputsFromState } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
 import { newValidity, summarize } from '../kit/validity.mjs';
@@ -269,7 +275,7 @@ export async function replay(T, params, source, job) {
   }
   const settings = armSettings(arm, variant, repetition);
   let state = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress ?? null, utxos: source.start, at: { slot: null, time: source.windowStart }, franken: source.franken });
-  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, infeasibleCollateral: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, withdrawalDeposits: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
+  const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, infeasibleCollateral: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, withdrawalDeposits: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, heldUnmatched: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
   // The change address the source names at a point of the replay.
   const follow = (address) => {
     if (address === undefined || address === state.changeAddress) return;
@@ -392,8 +398,8 @@ export async function replay(T, params, source, job) {
       }
       continue;
     }
-    // An intent.
-    const intent = e.intent;
+    // An intent, its held fixed inputs as the arm holds them.
+    const intent = heldInputsFromState(state, e.intent);
     advance(intent.time.blockTime);
     const n = ordinal++;
     counts.intents++;
@@ -451,6 +457,7 @@ export async function replay(T, params, source, job) {
       state = r.state;
       arrive([...intent.requested.filter((o) => o.wallet).flatMap((o) => o.assets), ...intent.implicit.mint], e.txId);
       counts.built++;
+      counts.heldUnmatched += r.heldUnmatched;
       const fee = sum(r.txs.map((t) => t.fee));
       const last = r.txs[r.txs.length - 1];
       const wcf = walletControlledFee(params, last.fee, { scriptFee: intent.fixed ? intent.fixed.scriptFee : 0n, fixedBytes: intent.fixed ? intent.fixed.fixedBytes : 0 });
@@ -562,6 +569,7 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
   const requested = requestedIndexes(intent, inspected);
   const fixedIns = fixedInputValues(intent);
   const heldInputs = fixedIns.filter((x) => x.held && state.utxos.has(x.ref)).map((x) => x.ref);
+  const names = heldOutputRefs(intent);
   const applied = checkAndApply(state, params, r.txs, {
     implicit: intent.implicit,
     scriptFee: intent.fixed ? intent.fixed.scriptFee : 0n,
@@ -569,11 +577,12 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
     extraWitnesses: fixedExtraWitnesses(intent),
     requested,
     heldInputs,
+    heldRef: names.ref,
     validity
   });
   if (!applied.ok) return { ok: false, class: applied.failure.cls, detail: `kit: ${applied.failure.check}: ${applied.failure.detail}${unpricedText(r, dropped)}`, ms };
   if (dropped) return { ok: false, class: CLASSES.other, detail: `kit: redeemers: the transaction lacks ${dropped} of the intent's ${intent.fixed.redeemers.length} redeemers${unpricedText(r, dropped)}`, ms };
-  return { ok: true, txs: r.txs, state: applied.state, inspected, requested, size: applied.checks[applied.checks.length - 1].facts.size, ms };
+  return { ok: true, txs: r.txs, state: applied.state, inspected, requested, size: applied.checks[applied.checks.length - 1].facts.size, heldUnmatched: names.unmatched, ms };
 }
 
 // A parallel burst's separate pass: every intent built in order from the
@@ -583,8 +592,9 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
 async function burstPass(T, params, start, events, method, opts, validity = null) {
   let s = start;
   let built = 0;
-  for (const { intent, changeAddress } of events) {
+  for (const { intent: given, changeAddress } of events) {
     if (changeAddress !== undefined) s = withChangeAddress(s, changeAddress);
+    const intent = heldInputsFromState(s, given);
     if (intent.invalid) {
       const f = forfeit(params, s, intent, opts.collateralRule);
       if (!f.ok) break;
