@@ -38,6 +38,8 @@
 //   day 60     mark 2
 //   day 70     T1   pay 100 ADA
 //
+// A heavy wallet (heavy.mjs) has its own stream over its own holdings.
+//
 // Ids and synthetic hashes are BLAKE2b-256 or BLAKE2b-224 of fixed texts,
 // except the hash of a script a transaction carries, which is the ledger's:
 // BLAKE2b-224 of the language tag (0 native, 2 Plutus V2) and the script.
@@ -50,56 +52,13 @@ import { utxoFromOutput, addressTextOf } from '../state/utxo.mjs';
 import { spendable, holdings } from '../state/state.mjs';
 import { recipientAddress } from '../battery/recipients.mjs';
 import { executionFee } from '../history/params.mjs';
-import { assembleReplayOnce } from '../kit/replay.mjs';
-import { inspectTx } from '../kit/inspect.mjs';
 import { spreadFungible } from '../battery/battery.mjs';
-
-const ADA = 1000000n;
-const DAY = 86400;
-const hash32 = (s) => blake2b256(Buffer.from(`unfrackit-research-sim stream ${s}`, 'ascii')).toString('hex');
-const hash28 = (s) => blake2b224(Buffer.from(`unfrackit-research-sim stream ${s}`, 'ascii')).toString('hex');
-const key = (a) => `${a.policy}.${a.name}`;
-const cmpKey = (a, b) => (a.policy < b.policy ? -1 : a.policy > b.policy ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-
-// The minimum coin of an output at its own width.
-function atMinimum(params, build) {
-  let coin = ADA;
-  for (let i = 0; i < 8; i++) {
-    const b = build(coin);
-    const min = params.coinsPerUtxoByte * (160n + BigInt(b.length));
-    if (min === coin) return { coin, bytes: b };
-    coin = min;
-  }
-  throw new Error('the minimum coin did not settle');
-}
-
-function requestedOut(address, bytes, coin, assets, extra = {}) {
-  return { cbor: bytes.toString('hex'), address, coin, assets, datum: extra.datum || null, scriptRef: null, raised: null, wallet: !!extra.wallet, scriptPayment: !!extra.scriptPayment, index: extra.index ?? null, from: null, inflow: !!extra.inflow };
-}
-
-function payOut(params, address, coin, assets) {
-  const a = addressBytes(address);
-  if (coin === null) {
-    const m = atMinimum(params, (c) => encodeOutput({ address: a, coin: c, assets }, 'array'));
-    return requestedOut(address, m.bytes, m.coin, assets);
-  }
-  return requestedOut(address, encodeOutput({ address: a, coin, assets }, 'array'), coin, assets);
-}
-
-const ZERO = () => ({ withdrawals: 0n, refunds: 0n, deposits: 0n, donation: 0n, mint: [], burn: [] });
-
-// Fixed bytes: the kit's assembly with the fixed parts less the same without
-// them, over one stand-in input and no change, as the history reader computes
-// it from an observed transaction.
-function fixedBytesOf(T, intent) {
-  const stand = { ref: `${'00'.repeat(32)}#0`, cred: '00'.repeat(28) };
-  const a = assembleReplayOnce(T, { intent, inputs: [stand], change: [], collateral: null, fee: 200000n });
-  const b = assembleReplayOnce(T, { intent: { ...intent, fixed: null }, inputs: [stand], change: [], collateral: null, fee: 200000n });
-  return inspectTx(a.bytes).size - inspectTx(b.bytes).size;
-}
+import { ADA, DAY, hash32, hash28, key, cmpKey, atMinimum, requestedOut, payOut, ZERO, fixedBytesOf } from './stream-parts.mjs';
+import { heavyStream } from './heavy.mjs';
 
 export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
   if (kind !== 'synthetic') throw new Error(`unknown stream ${kind}`);
+  if (shape.heavy) return heavyStream(T, shape, params);
   const state = shape.state;
   const name = shape.name;
   const change = state.changeAddress;

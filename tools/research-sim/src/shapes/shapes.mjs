@@ -7,6 +7,7 @@
 // off, M5 is S6 with maxUnlock on, S6 and M5 skip the maxUnlock variant);
 // CL1, CL3, E1 and E2 run at the defaults.
 
+import { heavyShape, isHeavyName } from './heavy.mjs';
 import { generateShape, serializeShape, SHAPE_NAMES, HARNESS_SHAPES } from './generate.mjs';
 import { utxoFromCbor } from '../state/utxo.mjs';
 import { makeState } from '../state/state.mjs';
@@ -44,6 +45,7 @@ export function shapeSettings(name, variant = 'default') {
 // harness's change address), every UTxO an initial one. `order` is the
 // shape's generated order, which the harness's runners take.
 export function shapeState(T, name) {
+  if (isHeavyName(name)) return heavyShape(T, name);
   const shape = generateShape(T, name);
   const hex = serializeShape(T, shape);
   const utxos = hex.map((h) => utxoFromCbor(h, { origin: 'initial' }));
