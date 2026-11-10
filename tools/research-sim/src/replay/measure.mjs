@@ -105,15 +105,33 @@ function outputLength(u) {
 }
 export const utxoMinimum = (params, u) => outputMinimum(params, outputLength(u));
 
+// What stateMeasures reads of a UTxO, kept with the UTxO (it never changes
+// once made): its Value's size, its asset keys, and its minimum under the
+// parameters object it was last measured with.
+const MEASURED = new WeakMap();
+function measured(params, u) {
+  let m = MEASURED.get(u);
+  if (m === undefined) {
+    m = { valueBytes: valueSize(u.coin, u.assets), keys: u.assets.map(key), params: null, minimum: 0n };
+    MEASURED.set(u, m);
+  }
+  if (u.assets.length && m.params !== params) {
+    m.minimum = utxoMinimum(params, u);
+    m.params = params;
+  }
+  return m;
+}
+
 export function stateMeasures(state, params) {
   let largest = 0;
   let locked = 0n;
   const assets = new Set();
   for (const u of state.utxos.values()) {
-    largest = Math.max(largest, valueSize(u.coin, u.assets));
+    const m = measured(params, u);
+    if (m.valueBytes > largest) largest = m.valueBytes;
     if (u.assets.length) {
-      locked += utxoMinimum(params, u);
-      for (const a of u.assets) assets.add(key(a));
+      locked += m.minimum;
+      for (const k of m.keys) assets.add(k);
     }
   }
   return { utxos: state.utxos.size, largestValueBytes: largest, lockedAda: locked, lockedAdaPerToken: assets.size ? locked / BigInt(assets.size) : null, tokens: assets.size };

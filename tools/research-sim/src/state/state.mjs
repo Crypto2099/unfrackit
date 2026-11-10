@@ -72,7 +72,28 @@ export function makeState({ network, stakeCred, changeAddress, utxos, at = { slo
   });
 }
 
-const withUtxos = (s, utxos, at = s.at) => Object.freeze({ ...s, utxos: sortedMap(utxos), at: Object.freeze({ ...at }) });
+// The sorted map of a state's successor. Its callers hand over a copy of the
+// previous state's map with some UTxOs removed and others added or replaced,
+// so the UTxOs carried over unchanged are still in the previous state's
+// order, which is sorted, and only the rest need sorting and merging in. The
+// result is the map sortedMap makes of the same list.
+function successorMap(prev, utxos) {
+  const kept = [];
+  const fresh = [];
+  for (const u of utxos) (prev.get(u.ref) === u ? kept : fresh).push(u);
+  fresh.sort((a, b) => cmpRef(a.ref, b.ref));
+  const m = new Map();
+  let i = 0;
+  let j = 0;
+  while (i < kept.length || j < fresh.length) {
+    const u = j >= fresh.length || (i < kept.length && cmpRef(kept[i].ref, fresh[j].ref) <= 0) ? kept[i++] : fresh[j++];
+    if (m.has(u.ref)) throw new Error(`state: ${u.ref} twice`);
+    m.set(u.ref, u);
+  }
+  return m;
+}
+
+const withUtxos = (s, utxos, at = s.at) => Object.freeze({ ...s, utxos: successorMap(s.utxos, utxos), at: Object.freeze({ ...at }) });
 
 // The state with the change address the rule names at a later point.
 export function withChangeAddress(s, changeAddress) {
