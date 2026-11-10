@@ -83,6 +83,11 @@ async function runWay(way, runId, go) {
   }
 }
 
+// The totals but the replays' trigger count, which counts the unseeded
+// selectors' triggers too, and those follow their draws; the seeded methods'
+// triggers are compared as records.
+const fixedTotals = ({ triggers: _triggers, ...rest }) => rest;
+
 function assertSame(runs, countedKinds) {
   const [a, ...rest] = runs.map((r) => split(r.records, countedKinds));
   assert.ok(a.seeded.length > 100, `${a.seeded.length} seeded records`);
@@ -92,7 +97,7 @@ function assertSame(runs, countedKinds) {
     const at = b.seeded.findIndex((l, j) => l !== a.seeded[j]);
     assert.equal(at, -1, `${WAYS[i + 1].name}: the first record that differs is number ${at}`);
     assert.deepEqual(b.unseeded, a.unseeded, `${WAYS[i + 1].name}: the unseeded selectors' keys and counts`);
-    assert.deepEqual(runs[i + 1].totals, runs[0].totals, `${WAYS[i + 1].name}: totals`);
+    assert.deepEqual(fixedTotals(runs[i + 1].totals), fixedTotals(runs[0].totals), `${WAYS[i + 1].name}: totals`);
   });
 }
 
