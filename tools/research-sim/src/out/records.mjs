@@ -83,10 +83,14 @@ export function assertClean(record, path = '') {
   return record;
 }
 
+// Whether a record's wallet field can carry a shape's name: a capital letter
+// and at most five letters or digits more.
+export const recordsShapeName = (name) => typeof name === 'string' && /^[A-Z][A-Za-z0-9]{0,5}$/.test(name);
+
 export function recordKey(k) {
   for (const f of KEY_FIELDS) if (k[f] === undefined) throw new TypeError(`record key: no ${f}`);
   if (!(Number.isSafeInteger(k.wallet) || typeof k.wallet === 'string')) throw new TypeError('record key: wallet must be a stake-credential id or a shape name');
-  if (typeof k.wallet === 'string' && !/^[A-Z][A-Za-z0-9]{0,5}$/.test(k.wallet)) throw new TypeError(`record key: ${k.wallet} is not a shape name`);
+  if (typeof k.wallet === 'string' && !recordsShapeName(k.wallet)) throw new TypeError(`record key: ${k.wallet} is not a shape name`);
   return Object.fromEntries(KEY_FIELDS.map((f) => [f, k[f]]));
 }
 

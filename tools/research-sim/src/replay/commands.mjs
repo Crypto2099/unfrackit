@@ -15,7 +15,9 @@
 //           [--oracle [--oracle-workers <n>]
 //           [--oracle-settings <name>=<value>,...]]
 //
-// A history directory is read for its *.jsonl files. A test plan runs the
+// A history directory is read for its *.jsonl files. --shapes takes `all`
+// (the 21 fixed shapes) or a comma-separated list of fixed shapes and heavy
+// wallets H<k>E<e> (shapes/heavy.mjs). A test plan runs the
 // test method only and is never a study run. Results go to the private run
 // directory (out/records.mjs); the command prints counts only. No time limit
 // decides a result: every replay, answer and oracle call runs to completion,
@@ -34,8 +36,9 @@ import { loadTreatment, DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { Pool, workerCount } from './pool.mjs';
 import { runReplays, runBatteries } from './run.mjs';
 import { windowPlan, testPlan, STUDY_ROLES, TEST_ROLES, batteryPlan } from '../arms/plan.mjs';
-import { RunOutput } from '../out/records.mjs';
+import { RunOutput, recordsShapeName } from '../out/records.mjs';
 import { SHAPE_NAMES } from '../shapes/shapes.mjs';
+import { isHeavyName } from '../shapes/heavy.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
 import { formatHashList } from '../hash.mjs';
 import { loadSource } from './source.mjs';
@@ -60,12 +63,24 @@ export function historyFiles(paths) {
   return out;
 }
 
-function walletsOf(opts, { stream }) {
-  if (opts.shapes) {
-    const names = String(opts.shapes) === 'all' ? SHAPE_NAMES : String(opts.shapes).split(',');
-    for (const n of names) if (!SHAPE_NAMES.includes(n)) throw new Error(`unknown shape ${n}`);
-    return names.map((name) => ({ spec: { kind: 'shape', name, stream } }));
+// The wallets --shapes names: `all` is the 21 fixed shapes; a list may name
+// fixed shapes and heavy wallets H<k>E<e>. A heavy name is refused, before
+// anything runs, when it is not one the generator makes (k from 1 to 30, at
+// least 10 events) or when it is longer than a record's wallet field can
+// carry (six characters; H20E005 is valid and too long).
+export function shapeNamesOf(v) {
+  if (String(v) === 'all') return [...SHAPE_NAMES];
+  const names = String(v).split(',');
+  for (const n of names) {
+    if (SHAPE_NAMES.includes(n)) continue;
+    if (!isHeavyName(n)) throw new Error(`unknown shape ${n}: --shapes takes all, a fixed shape or a heavy wallet H<k>E<e> (k from 1 to 30, at least 10 events)`);
+    if (!recordsShapeName(n)) throw new Error(`heavy wallet ${n}: a record names a shape in at most six characters`);
   }
+  return names;
+}
+
+function walletsOf(opts, { stream }) {
+  if (opts.shapes) return shapeNamesOf(opts.shapes).map((name) => ({ spec: { kind: 'shape', name, stream } }));
   const files = historyFiles(list(opts.history));
   if (!files.length) throw new Error('name the wallets: --history <file or directory> or --shapes <names|all>');
   return files.map((path) => ({ spec: { kind: 'history', path, analysisFreezeTx: opts.analysisFreezeTx || null } }));
@@ -144,8 +159,8 @@ function header(command, opts, T, threads, extra) {
 export async function cmdReplay(opts) {
   const plan = opts.plan;
   if (!['recent', 'peak', 'test'].includes(plan)) throw new Error('--plan recent | peak | test');
-  const { T, pool, runId, threads } = await setup(opts, 'replay');
   const wallets = walletsOf(opts, { stream: 'synthetic' });
+  const { T, pool, runId, threads } = await setup(opts, 'replay');
   const first = loadSource(T, wallets[0].spec);
   const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, { reps: { h1: opts.repsH1 ? Number(opts.repsH1) : undefined, variants: opts.repsVariants ? Number(opts.repsVariants) : undefined } });
   const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
@@ -163,10 +178,10 @@ export async function cmdReplay(opts) {
 
 export async function cmdBattery(opts) {
   const oracleSettingsUsed = batteryOracleSettings(opts);
-  const { T, pool, runId, threads } = await setup(opts, 'battery');
   // Each file's batteries are decided before anything starts or is written;
   // a file the rules refuse stops the command here.
   const wallets = assignPopulation(walletsOf(opts, { stream: null }));
+  const { T, pool, runId, threads } = await setup(opts, 'battery');
   const first = loadSource(T, wallets[0].spec);
   const methods = opts.methods === 'test'
     ? [{ name: 'test-largest-first', opts: [{ changePolicy: 'layout' }, { changePolicy: 'single' }, { changePolicy: 'naive' }], repetitions: 1 }, { name: 'unfrackit-h12', opts: [{ changePolicy: 'default', absorb: true }, { changePolicy: 'default', absorb: false }], repetitions: 1 }]
