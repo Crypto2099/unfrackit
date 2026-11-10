@@ -108,9 +108,36 @@ function compress(h, block, t, last) {
   for (let i = 0; i < 16; i++) h[i] = h[i] ^ v[i] ^ v[i + 16];
 }
 
+// A transaction's bytes are hashed again by every check that reads it, and in
+// a replay only one hash call in five or six has an input no earlier call had,
+// so the digests of inputs up to MEMO_INPUT_MAX bytes are kept, by input and
+// length, until the table holds MEMO_ENTRIES digests or MEMO_BYTES bytes of
+// inputs, when it is emptied. The memo changes no digest: a call returns its
+// own copy of the bytes.
+const MEMO_INPUT_MAX = 4096;
+const MEMO_ENTRIES = 20000;
+const MEMO_BYTES = 16 * 1024 * 1024;
+const memo = new Map();
+let memoBytes = 0;
+
 export function blake2b(input, outLen = 64) {
   if (!(outLen >= 1 && outLen <= 64)) throw new Error('BLAKE2b digest length must be 1 to 64 bytes');
   const data = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  if (data.length > MEMO_INPUT_MAX) return digest(data, outLen);
+  const key = `${outLen}:${data.toString('latin1')}`;
+  const known = memo.get(key);
+  if (known !== undefined) return Buffer.from(known);
+  const out = digest(data, outLen);
+  if (memo.size >= MEMO_ENTRIES || memoBytes + data.length > MEMO_BYTES) {
+    memo.clear();
+    memoBytes = 0;
+  }
+  memo.set(key, Buffer.from(out));
+  memoBytes += data.length;
+  return out;
+}
+
+function digest(data, outLen) {
   const h = new Uint32Array(IV32);
   h[0] ^= 0x01010000 ^ outLen;
   const block = Buffer.alloc(128);
