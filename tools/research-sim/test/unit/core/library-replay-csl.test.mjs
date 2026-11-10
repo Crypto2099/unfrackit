@@ -93,7 +93,7 @@ function controlsOf(source, r) {
       const ctx = { resolve, implicit: it.implicit, scriptFee: it.fixed ? it.fixed.scriptFee : 0n, extraWitnesses: fixedExtraWitnesses(it) };
       if (!inspectTx(t.bytes).outputs.length) {
         // CSL adds leftover ADA under an output's minimum to the fee
-        // (tx_builder.rs:2151-2167), so a spend with no requested output can
+        // (tx_builder.rs:2149-2168), so a spend with no requested output can
         // have no output at all; the fee and value controls need one.
         const c = { params: source.params, ...ctx };
         const reasons = (x) => [...new Set(x.failures.map((f) => f.check))].join(',');
@@ -352,7 +352,7 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
         assert.deepEqual(r.fees.filter((f) => f.unpriced.length).map((f) => [f.id, f.unpriced]), short || reg.outcome === 'built' ? [[shelleyReg.id, ['observed vkey witnesses']]] : [], `${reg.outcome} ${reg.class} ${reg.detail}`);
         if (short) assert.match(reg.detail, /^kit: fee: .*; parts the library did not price: observed vkey witnesses$/);
         // It builds when CSL burns an ADA-only leftover below the change
-        // minimum into the fee (tx_builder.rs:2151-2167): the transaction then
+        // minimum into the fee (tx_builder.rs:2149-2168): the transaction then
         // has no output, as the intent requests none, and the fee covers the
         // witness too. A csl-ri draw of small ADA-only inputs can leave such a
         // leftover; csl-lf's largest input never does here.

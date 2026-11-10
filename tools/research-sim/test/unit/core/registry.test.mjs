@@ -24,10 +24,10 @@ test('every study baseline is made by name, with its library version, determinis
   // [version, deterministic, seeded]: csl-ri and csl-ri-pure draw from a
   // generator no caller can seed; cjs-rrri is random and seeded by its run.
   const want = {
-    'csl-lf': ['cardano-serialization-lib 13.2.1 LargestFirstMultiAsset', true, true],
-    'csl-ri': ['cardano-serialization-lib 13.2.1 RandomImproveMultiAsset', false, false],
-    'csl-lf-pure': ['cardano-serialization-lib 13.2.1 LargestFirstMultiAsset, prefer_pure_change', true, true],
-    'csl-ri-pure': ['cardano-serialization-lib 13.2.1 RandomImproveMultiAsset, prefer_pure_change', false, false],
+    'csl-lf': ['cardano-serialization-lib 17.0.0 LargestFirstMultiAsset', true, true],
+    'csl-ri': ['cardano-serialization-lib 17.0.0 RandomImproveMultiAsset', false, false],
+    'csl-lf-pure': ['cardano-serialization-lib 17.0.0 LargestFirstMultiAsset, prefer_pure_change', true, true],
+    'csl-ri-pure': ['cardano-serialization-lib 17.0.0 RandomImproveMultiAsset, prefer_pure_change', false, false],
     'cjs-rrri': [`@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`, false, true],
     'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true, true]
   };

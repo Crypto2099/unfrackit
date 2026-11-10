@@ -15,8 +15,8 @@
 //            it has returned an error with the reason "time limit", and the
 //            wallet's remaining spends continue in a fresh worker
 // Each worker runs one job at a time, and is replaced after maxJobs jobs:
-// CSL's asm.js heap only grows, to the high-water mark of the largest wallet
-// the worker has built for, and a fresh thread gives it back.
+// CSL's WebAssembly memory only grows, to the high-water mark of the largest
+// wallet the worker has built for, and a fresh thread gives it back.
 //
 // The thread cap: a run keeps at most MAX_BUSY_THREADS threads busy, its
 // replay or battery workers and its oracle workers together, so that the

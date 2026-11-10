@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// cardano-serialization-lib 13.2.1 selecting and making change on its own,
+// cardano-serialization-lib 17.0.0 selecting and making change on its own,
 // for the oracle's tests until the baseline adapters exist: the requested
 // outputs added from their bytes, add_inputs_from over the spendable UTxOs in
 // txid#index order with LargestFirstMultiAsset or RandomImproveMultiAsset,

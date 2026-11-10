@@ -11,18 +11,18 @@
 // transaction pays (setting setFee 'as-built') or the ledger minimum of its
 // size ('ledger-minimum').
 //
-//   csl      cardano-serialization-lib 13.2.1's own change, the change of the
+//   csl      cardano-serialization-lib 17.0.0's own change, the change of the
 //            csl-lf and csl-ri baselines: a TransactionBuilder configured from
 //            the run's parameters, the set added with add_regular_input at
 //            each UTxO's own address (so the library counts one witness per
 //            distinct payment key), the requested outputs added from their
 //            bytes, then add_change_if_needed at the change address and
 //            build_tx (Emurgo/cardano-serialization-lib at
-//            846d0f274a436403659fa7b197a09c029d7f2126,
-//            rust/src/builders/tx_builder.rs:1828-2196). The library keeps its
+//            ea489e8f1d4984daf599b66eb1b1ed759f703382,
+//            rust/src/builders/tx_builder.rs:1826-2197). The library keeps its
 //            transaction body and fee; the kit fills the witness set with
 //            synthetic witnesses in the library's own encoding.
-//   csl-ppc  the same with prefer_pure_change set (tx_builder.rs:2096-2123),
+//   csl-ppc  the same with prefer_pure_change set (tx_builder.rs:2094-2121),
 //            the sensitivity arm's change.
 //   layout   the layout-preserving change of the H-12 rule and H-9, the
 //            simulator's own policy (methods/change.mjs buildWithChange),

@@ -23,7 +23,7 @@
 //
 // Body:
 //   0   inputs: the wallet inputs and the intent's fixed inputs, sorted by
-//       transaction id then index, as a tagged set (tag 258), as CSL 13.2.1
+//       transaction id then index, as a tagged set (tag 258), as CSL 17.0.0
 //       encodes it
 //   1   outputs: the requested outputs as their own bytes (raised where the
 //       history reader raised them), then the change, each change output in

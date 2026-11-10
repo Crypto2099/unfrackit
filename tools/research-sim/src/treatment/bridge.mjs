@@ -10,8 +10,8 @@
 // missing file or unpinned treatment file refuses the load, naming the file.
 // cardano-serialization-lib is loaded only through the treatment's cslkit.mjs,
 // so the simulator, the treatment and every adapter share one CSL instance:
-// the treatment's adapters take CSL objects, and an object of a second asm.js
-// instance points into another heap. The history reader loads the same files
+// the treatment's adapters take CSL objects, and an object of a second
+// WebAssembly instance points into another instance's memory. The history reader loads the same files
 // (history/csl.mjs); Node's module cache makes them one instance.
 //
 // Protocol parameters reach the treatment as its parameters object

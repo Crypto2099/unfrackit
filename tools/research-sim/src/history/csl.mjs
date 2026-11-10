@@ -4,7 +4,7 @@
 // cardano-serialization-lib, loaded only through the treatment's cslkit.mjs,
 // so that this reader, the treatment and every adapter share one CSL instance
 // (the treatment's adapters take CSL objects, and an object of a second
-// asm.js instance points into another heap).
+// WebAssembly instance points into another instance's memory).
 //
 // The treatment files are not part of this repository; the operator gives the
 // harness directory at run time. Before anything is imported, the SHA-256 of

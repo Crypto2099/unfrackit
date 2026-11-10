@@ -170,8 +170,8 @@ export function withdrawals(tx) {
 // (libs/cardano-ledger-core/src/Cardano/Ledger/Credential.hs:98-101), then
 // the hash. The order of a transaction's withdrawals, which their redeemer
 // pointers index (history/intent.mjs redeemerTargets), and the order the CSL
-// adapter adds them in (methods/csl.mjs), so that CSL's redeemer indexes are
-// the ledger's.
+// adapter adds them in (methods/csl.mjs), which is also the order CSL keeps
+// them in and numbers their redeemers by.
 export function compareRewardAccounts(a, b) {
   const na = a[0] & 15;
   const nb = b[0] & 15;

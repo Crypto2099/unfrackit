@@ -3,15 +3,15 @@
 
 // The cardano-serialization-lib baselines: csl-lf and csl-ri, and the
 // sensitivity arm with prefer_pure_change set (csl-lf-pure, csl-ri-pure).
-// cardano-serialization-lib 13.2.1 is the treatment's instance, loaded through
+// cardano-serialization-lib 17.0.0 is the treatment's instance, loaded through
 // its cslkit.mjs; no second CSL build is installed or imported.
 //
-// The library at Emurgo/cardano-serialization-lib tag 13.2.1 (commit
-// 846d0f274a436403659fa7b197a09c029d7f2126), rust/src/builders/tx_builder.rs:
+// The library at Emurgo/cardano-serialization-lib tag 17.0.0 (commit
+// ea489e8f1d4984daf599b66eb1b1ed759f703382), rust/src/builders/tx_builder.rs:
 //
-//   add_inputs_from (:412-593). LargestFirstMultiAsset runs
+//   add_inputs_from (:424-593). LargestFirstMultiAsset runs
 //   cip2_largest_first_by once for each asset of the outputs, in policy and
-//   asset-name order, then once for ADA (:506-531). Each pass takes the UTxOs
+//   asset-name order, then once for ADA (:510-535). Each pass takes the UTxOs
 //   holding its asset, sorted ascending by that asset's quantity with Rust's
 //   stable sort_by_key and walked from the end, so among equal quantities the
 //   UTxO given later is taken first; it adds inputs until the selected quantity
@@ -21,32 +21,32 @@
 //   with swap_remove (:626), which moves the list's last index into its place,
 //   so the passes after the first see the remaining UTxOs in a permuted order.
 //   RandomImproveMultiAsset calls cip2_random_improve_by with pure_ada = false
-//   on every pass (:532-590), so its improvement phase, guarded by pure_ada
+//   on every pass (:536-590), so its improvement phase, guarded by pure_ada
 //   (:705), never runs: it draws random UTxOs holding each asset until that
 //   asset is covered, then random UTxOs, any kind, until the coin covers the
-//   outputs and the fees ("Phase 3", :563-589), from rand::thread_rng(), which
+//   outputs and the fees ("Phase 3", :567-589), from rand::thread_rng(), which
 //   a caller cannot seed. It is random selection, not CIP-0002
 //   "Random-Improve". Its draws for an asset serve the requested outputs that
 //   hold it (:659-690), so an asset that only a burn needs is covered only
 //   when the draws for other assets and for the coin happen to bring it; the
 //   largest-first passes run over the outputs' total, burns included
-//   (:506-531, :1772-1783).
+//   (:510-535, :1770-1781).
 //
-//   add_change_if_needed (:1828-1830, :1844-2209). Every leftover asset goes
+//   add_change_if_needed (:1826-1828, :1842-2210). Every leftover asset goes
 //   into change outputs packed greedily in policy and asset-name order, a new
 //   output starting only when the next asset would take the output's Value, at
-//   its minimum coin, over max_value_size (pack_nfts_for_change, :1911-2022);
+//   its minimum coin, over max_value_size (pack_nfts_for_change, :1909-2020);
 //   each output carries its minimum coin and the leftover ADA goes to the last
-//   one (:2125-2134), unless prefer_pure_change is set and the leftover after
+//   one (:2123-2132), unless prefer_pure_change is set and the leftover after
 //   one more output's fee is above the pure-ADA minimum, when it becomes a
-//   separate pure-ADA output (:2097-2123). Leftover ADA that cannot fund a
+//   separate pure-ADA output (:2095-2121). Leftover ADA that cannot fund a
 //   token change output fails with "Not enough ADA leftover to include non-ADA
-//   assets in a change address" (:2090). With no asset in the change, ADA
-//   under an output's minimum is added to the fee (burn_extra, :2151-2167).
+//   assets in a change address" (:2088). With no asset in the change, ADA
+//   under an output's minimum is added to the fee (burn_extra, :2149-2168).
 //
 //   Fees: min_fee prices the transaction as serialized with its validity flag
 //   and with fake vkey witnesses (fake_full_tx, :33-97), and with the fee
-//   field at 2^32 (:2595-2599), so CSL's fee is a few bytes above the ledger's
+//   field at 2^32 (:2596-2600), so CSL's fee is a few bytes above the ledger's
 //   minimum for its own size (the ledger's size leaves the validity flag out).
 //
 // Errors to failure classes (setting unclassified 'other' for the rest):
@@ -149,9 +149,9 @@ export function cslWithWitnesses(T, tx, k, S) {
 }
 
 // Body field 18 (reference inputs) with its elements sorted by transaction id
-// (bytes, ascending) and then index. CSL 13.2.1 collects the reference inputs
+// (bytes, ascending) and then index. CSL 17.0.0 collects the reference inputs
 // in a Rust hash set and writes them in its iteration order (tx_builder.rs:
-// 1572), which differs from one build to the next, so the same replay would
+// 1564), which differs from one build to the next, so the same replay would
 // give a different body and transaction id each time. The elements keep their
 // own encoding and the set keeps its own head (tag 258 or not, definite length
 // or not): only the span from the first element's start to the last element's
@@ -179,7 +179,7 @@ const refOf = (input) => `${Buffer.from(input.transaction_id().to_bytes()).toStr
 
 export function cslMethod(T, { strategy, preferPureChange = false }) {
   if (!CSL_STRATEGIES[strategy]) throw new Error(`csl: unknown strategy ${strategy}`);
-  if (T.cslkit.CSL_VERSION !== '13.2.1') throw new Error(`csl: the treatment loads cardano-serialization-lib ${T.cslkit.CSL_VERSION}, not 13.2.1`);
+  if (T.cslkit.CSL_VERSION !== '17.0.0') throw new Error(`csl: the treatment loads cardano-serialization-lib ${T.cslkit.CSL_VERSION}, not 17.0.0`);
   const name = `csl-${strategy}${preferPureChange ? '-pure' : ''}`;
   return {
     name,
@@ -262,16 +262,16 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 // ---- The replay path.
 //
 // Every intent the history reader writes (source 'replay') is built by CSL's
-// own builders at 13.2.1 (rust/src/builders/), its fixed parts first, as the
-// library asks (tx_builder.rs:405-411: add_inputs_from "should be called after
+// own builders at 17.0.0 (rust/src/builders/), its fixed parts first, as the
+// library asks (tx_builder.rs:417-423: add_inputs_from "should be called after
 // adding all certs/outputs/etc"):
 //   requested outputs  add_output with each output's own bytes
 //                      (TransactionOutput.from_bytes), so a datum, a script
 //                      reference and a coin raised to its minimum pass through
 //   fixed inputs       one TxInputsBuilder given by set_inputs
-//                      (tx_builder.rs:757-759), which add_inputs_from then
+//                      (tx_builder.rs:753-755), which add_inputs_from then
 //                      extends: a key or Byron input by add_regular_input
-//                      (tx_inputs_builder.rs:115-160), a native script input by
+//                      (tx_inputs_builder.rs:199-254), a native script input by
 //                      add_native_script_input, a Plutus input by
 //                      add_plutus_script_input with a PlutusWitness carrying
 //                      its script (from the witness set, or a reference
@@ -279,10 +279,10 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 //                      size), its datum when the UTxO holds a datum hash (the
 //                      witness set's datum of that hash; none for an inline
 //                      datum), and its redeemer at the observed execution
-//                      units (tx_inputs_builder.rs:74-98,
+//                      units (tx_inputs_builder.rs:147-170,
 //                      script_structs/plutus_witness.rs:13-47). CSL sets each
 //                      spend redeemer's index from the input's place among the
-//                      sorted inputs (tx_inputs_builder.rs:229-281).
+//                      sorted inputs (tx_inputs_builder.rs:323-375).
 //   mint, burn         MintBuilder.add_asset per asset with a MintWitness:
 //                      the policy's native script, or its Plutus script and
 //                      redeemer (mint_builder.rs:14-28, :96-107)
@@ -292,43 +292,48 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 //   withdrawals        WithdrawalsBuilder: add, or the script variants
 //                      (withdrawals_builder.rs:18-75), added in the ledger's
 //                      order of reward accounts (history/tx.mjs
-//                      compareRewardAccounts) so that CSL's redeemer
-//                      indexes, which follow insertion order, are the ledger's
+//                      compareRewardAccounts). CSL keeps them in that order
+//                      itself, by network, then a script credential before a
+//                      key, then the hash (withdrawals_builder.rs:7,
+//                      protocol_types/address.rs:651-656,
+//                      protocol_types/credential.rs:3-41), and numbers their
+//                      redeemers in it (withdrawals_builder.rs:97-107), so
+//                      CSL's redeemer indexes are the ledger's
 //   votes, proposals   VotingBuilder and VotingProposalBuilder, with their
 //                      script witnesses
 //   reference inputs   add_reference_input, or add_script_reference_input
 //                      with the script's size for one carrying a reference
-//                      script (tx_builder.rs:858-873); a fixed input carrying
+//                      script (tx_builder.rs:854-869); a fixed input carrying
 //                      a reference script is added the same way, with
 //                      deduplicate_explicit_ref_inputs_with_regular_inputs
 //                      set, so that CSL counts its size in the
-//                      reference-script fee (:1667-1722) without writing it as
-//                      a reference input (:1571-1616)
+//                      reference-script fee (:1659-1720) without writing it as
+//                      a reference input (:1563-1608)
 //   validity           set_ttl_bignum, set_validity_start_interval_bignum
 //   required signers   add_required_signer
 //   auxiliary data     set_auxiliary_data, CSL's encoding
 //   treasury fields    set_current_treasury_value, set_donation
-//   other datums       add_extra_witness_datum (:1507-1515)
+//   other datums       add_extra_witness_datum (:1499-1507)
 //   collateral         the UTxO the engine set aside (opts.collateral) by
-//                      set_collateral (:761-763). While CSL selects and
+//                      set_collateral (:757-759). While CSL selects and
 //                      balances, its whole value stands as the total
 //                      collateral and as the return, as CSL's own
 //                      collateral-return method sizes them
 //                      (add_inputs_from_and_change_with_collateral_return,
-//                      :1018-1064); once add_change_if_needed has set the fee,
+//                      :1010-1056); once add_change_if_needed has set the fee,
 //                      the total is set for that fee (collateralPercent of it,
 //                      rounded up, as every method's replay carries it) and
 //                      CSL derives the return (set_total_collateral_and_return,
-//                      :820-856). Both fields only shrink, so CSL's fee still
+//                      :816-852). Both fields only shrink, so CSL's fee still
 //                      covers its transaction. CSL never chooses collateral.
 //   script data hash   CSL computes it only from cost models
-//                      (calc_script_data_hash, :2220-2300), which a history
+//                      (calc_script_data_hash, :2221-2301), which a history
 //                      file does not carry, and build_tx refuses Plutus parts
-//                      without it (:2563-2577). As the kit writes body field
+//                      without it (:2564-2578). As the kit writes body field
 //                      11 for every other method (kit/replay.mjs), it is
 //                      BLAKE2b-256 over the redeemers and datums, here as CSL
 //                      serializes them: 32 placeholder bytes while CSL
-//                      selects and prices (set_script_data_hash, :2302-2306),
+//                      selects and prices (set_script_data_hash, :2303-2307),
 //                      the hash once build_tx has written the witness set.
 // CSL prices the transaction itself (min_fee, :122-157): the size of a
 // transaction with fake witnesses for the keys it counts (:11-28), plus the
@@ -349,7 +354,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
 // them in its detail (replay/engine.mjs).
 //
 // A replayed intent carries no network id (body field 15), which the transaction
-// builder never writes (:2340, network_id: None): the engine leaves it out of
+// builder never writes (:2341, network_id: None): the engine leaves it out of
 // every method's intent (kit/replay.mjs withoutLeftovers).
 //
 // Not replayable for CSL (a part it has no way to express): body field 6
@@ -476,8 +481,7 @@ function addFixedParts(T, tb, intent, S, at) {
   }
   if (f.body[8] !== undefined) {
     at('validity');
-    // Taken by value (tx_builder.rs:1192), so not freed here.
-    tb.set_validity_start_interval_bignum(C.BigNum.from_str(String(asUint(decode(field(8)), 'validity start'))));
+    tb.set_validity_start_interval_bignum(B(asUint(decode(field(8)), 'validity start')));
   }
 
   if (f.body[4] !== undefined) {
@@ -730,7 +734,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     // The parts written after CSL priced the transaction, which its fee need
     // not count: the intent's other vkey witnesses and its bootstrap witnesses
     // as observed. They are unpriced when the transaction outgrew the one CSL
-    // priced (full_size, :2355-2357: the transaction with fake witnesses for
+    // priced (full_size, :2356-2358: the transaction with fake witnesses for
     // the keys CSL counts, :11-28, :33-89), as for a Shelley stake
     // registration, whose witness CSL does not count (certificates_builder.rs:
     // 241-247).
