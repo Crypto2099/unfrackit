@@ -14,15 +14,19 @@
 // every battery's infeasible-by-balance rule. A spend that fails it is still
 // built and its outcome recorded beside the flag.
 //
-// The parent enforces each method's 60-second limit: the hooks report when a
-// method starts and finishes answering, and a method that does not finish is
-// stopped by terminating the thread. The spends of a wallet are numbered in a
-// fixed order, so that a fresh worker resumes after the one that ran out of
-// time (job.skip lists the numbers already done).
+// Every answer runs to completion. The hooks report when a method starts and
+// finishes answering, so that the parent's watchdog can stop an answer that
+// hangs by terminating the thread (replay/pool.mjs). The runs of a wallet are
+// numbered in a fixed order, so that a fresh worker resumes at the answer the
+// watchdog stopped (job.skip lists the numbers already done), and a run's
+// result does not depend on the attempt that produced it.
 //
 // job: { source, methods: [{ name, options, opts: [{ changePolicy, absorb,
 // seed }], repetitions, batteries }], batteries, pools, skip, tidySettings,
-// validity }. job.batteries ({ standard, h10 }, both when absent) names the
+// validity, recordMachineThrough }. recordMachineThrough: after a machine
+// error, the last run number (-1 for the wallet's setup) at which this
+// attempt records the machine's errors (kit/machine.mjs), or null.
+// job.batteries ({ standard, h10 }, both when absent) names the
 // batteries the wallet runs; a method's batteries (['standard', 'h10'], every
 // battery when absent) restrict where it runs. With
 // validity, each run's result carries the validity summary of kit/validity.mjs
@@ -37,6 +41,7 @@ import { makeMethod } from '../methods/registry.mjs';
 import { spendMeasures, tokenLedger } from '../replay/measure.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { newValidity, summarize } from '../kit/validity.mjs';
+import { recordMachineErrors } from '../kit/machine.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
@@ -77,9 +82,11 @@ export async function batteryWallet(T, source, job, hooks) {
   for (const s of spends) if (s.intent) suffices.set(s.n, balanceSuffices(T, s.layout === 'observed' ? observed : tidy, params, s.intent).suffices);
   const runs = batteryRuns(spends, job.methods);
   const skip = new Set(job.skip || []);
+  const through = job.recordMachineThrough ?? null;
   const methods = new Map();
   for (const r of runs) {
     if (skip.has(r.k)) continue;
+    recordMachineErrors(through !== null && r.k <= through);
     const s = spends[r.spend];
     const state = s.layout === 'observed' ? observed : tidy;
     const mk = `${r.method} ${JSON.stringify(r.options)}`;

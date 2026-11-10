@@ -10,7 +10,6 @@
 
 import { mkdirSync } from 'node:fs';
 import { runDir } from '../../src/history/paths.mjs';
-import { MAX_BUSY_THREADS } from '../../src/replay/pool.mjs';
 
 export function oracleOutDir() {
   if (process.env.RESEARCH_SIM_ORACLE_OUT) {
@@ -25,12 +24,11 @@ export function oracleOutDir() {
 export const envNumber = (name, dflt) => (process.env[name] ? Number(process.env[name]) : dflt);
 
 // The oracle checks' worker count, RESEARCH_SIM_ORACLE_WORKERS (4 by
-// default): a check run is not a study run, but it is held to the same cap
-// of busy threads (replay/pool.mjs MAX_BUSY_THREADS).
+// default). The count changes no result, since a call stops on its work
+// budget; it sets only how many calls run at once.
 export function envOracleWorkers(dflt = 4) {
   const n = envNumber('RESEARCH_SIM_ORACLE_WORKERS', dflt);
   if (!Number.isSafeInteger(n) || n < 1) throw new Error('RESEARCH_SIM_ORACLE_WORKERS: a positive whole number');
-  if (n > MAX_BUSY_THREADS) throw new Error(`RESEARCH_SIM_ORACLE_WORKERS: at most ${MAX_BUSY_THREADS} threads busy (${n} asked)`);
   return n;
 }
 

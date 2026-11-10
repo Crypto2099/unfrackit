@@ -7,10 +7,12 @@
 //
 // For each wallet: its source is read once in the parent to decide whether
 // the window holds a script interaction (which expands the collateral rules),
-// the jobs run in the pool, and each job's output becomes records. A replay
-// that times out is recorded as a time-out; an engine refusal (a wallet the
-// rules do not settle, such as one with no change address) as refused; a stop
-// point stops the run.
+// the jobs run in the pool, and each job's output becomes records. Every job
+// runs to completion: a job the pool's watchdog stops, or one a machine error
+// ends, runs again (replay/pool.mjs), and only the attempt that completes is
+// recorded; the wallet's records are written once each of its jobs has
+// completed. An engine refusal (a wallet the rules do not settle, such as one
+// with no change address) is recorded as refused; a stop point stops the run.
 //
 // H-6's rescue test: each trigger of a maintained-tidy arm under the decided or
 // an alternative threshold is followed for 30 days of block time; it rescues
@@ -60,9 +62,10 @@ export function rescueOutcomes(rule, never) {
 const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent' && e.intent.collateral.required);
 
 // wallets: [{ spec }]; plan: the window's entries; roles: role -> method name
-// (a test plan's entries name role 'test'); out: a RunOutput.
-export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false }) {
-  const totals = { wallets: 0, jobs: 0, timeouts: 0, refused: 0, triggers: 0 };
+// (a test plan's entries name role 'test'); out: a RunOutput; watchdogMs: the
+// replay watchdog (the pool's default when absent).
+export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false }) {
+  const totals = { wallets: 0, jobs: 0, refused: 0, triggers: 0 };
   const validities = [];
   for (const w of wallets) {
     const source = loadSource(T, w.spec);
@@ -87,14 +90,9 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, limitMs, 
         policyLock: j.policyLock,
         validity
       };
-      const r = await pool.replay(job, { limitMs });
+      const at = { wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
+      const r = await pool.replay(job, { watchdogMs, note: (e) => out.note({ ...e, ...at }) });
       totals.jobs++;
-      if (!r.ok && r.timedOut) {
-        totals.timeouts++;
-        put(i, 'timeout', key, { limitMs: limitMs ?? null, ms: r.ms, hypotheses: j.hypotheses });
-        out.note({ event: 'replay timed out', wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, repetition: j.repetition });
-        return;
-      }
       if (!r.ok) {
         out.note({ event: 'replay error', wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, repetition: j.repetition, error: r.error, stop: r.stop });
         if (r.stop) throw new Error(`stop point: ${r.error}`);
@@ -159,9 +157,11 @@ export function noteValidity(out, key, v) {
 }
 
 // The batteries over a set of wallets: every run's result as a 'battery'
-// record (an H-12 run also as 'h12'), a time-out as a 'battery' record with
-// class time-limit, and, when an oracle is given, its reference per wallet,
-// standard-battery spend and distinct oracle change policy, with the single
+// record (an H-12 run also as 'h12'), every answer having run to completion
+// (the pool's watchdog stops an answer that hangs, and the wallet's battery
+// resumes at it in a fresh worker; replay/pool.mjs), and, when an oracle is
+// given, its reference per wallet, standard-battery spend and distinct
+// oracle change policy, with the single
 // transaction of every run under that policy by a method the oracle's
 // incumbents rule admits as an incumbent (under the default,
 // 'seeded-methods', the seeded methods'). The passing runs of the other
@@ -181,10 +181,10 @@ export function noteValidity(out, key, v) {
 // battery/population.mjs): its job builds only those batteries, a wallet with
 // none starts no job, and a wallet of the recent random sample whose snapshot
 // state holds no native asset is counted in `tokenless` (not filtered). A
-// wallet with the standard battery also gets one 'snapshot-plan' record. The
-// totals count the references the oracle's guard stopped (`oracleGuard`).
-export async function runBatteries(T, pool, { wallets, methods, out, answerLimitMs, pools, oracle = null, tidySettings = {}, validity = false }) {
-  const totals = { wallets: 0, runs: 0, timeouts: 0, oracle: 0, tokenless: 0, population: countPopulation(wallets), ...(oracle ? { oracleGuard: 0 } : {}) };
+// wallet with the standard battery also gets one 'snapshot-plan' record.
+// watchdogMs: the answer watchdog (the pool's default when absent).
+export async function runBatteries(T, pool, { wallets, methods, out, watchdogMs, pools, oracle = null, tidySettings = {}, validity = false }) {
+  const totals = { wallets: 0, runs: 0, oracle: 0, tokenless: 0, population: countPopulation(wallets) };
   const validities = [];
   const oracleRules = oracle ? oracle.settings || ORACLE_SETTINGS : null;
   // One task per wallet: its battery job, then its oracle calls. Up to
@@ -217,7 +217,8 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
     const population = w.population || { kind: 'no-sample', batteries: { standard: true, h10: true } };
     const job = { source: w.spec, methods, batteries: population.batteries, pools, tidySettings, validity };
     const r = await pool.battery(job, {
-      answerLimitMs,
+      watchdogMs,
+      note: (e) => out.note({ ...e, wallet: source.wallet }),
       onSpend: (k, res) => {
         totals.runs++;
         byK.set(k, res);
@@ -225,7 +226,6 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
     });
     if (!r.ok) throw new Error(`battery failed for wallet ${source.wallet}: ${r.error}`);
     totals.wallets++;
-    // A time-out has only its run number; the run list gives its key.
     const runs = batteryRuns(r.result.spends.map((s) => ({ n: s.n, battery: s.battery, intent: s.unsettled ? null : { id: s.id } })), methods);
     if (population.batteries.standard) {
       // The snapshot plan of a wallet that runs the standard battery, for the
@@ -240,13 +240,6 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
     for (const run of runs) {
       const res = byK.get(run.k);
       if (!res) continue;
-      const s = spendOf.get(run.spend);
-      if (res.timeLimit) {
-        totals.timeouts++;
-        const key = { wallet: source.wallet, window: 'snapshot', arm: s.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: run.method, change: run.opts.changePolicy, collateral: 'none-needed', repetition: run.repetition };
-        emit(record('battery', key, { spend: s.id, layout: s.layout, ok: false, class: 'time-limit', detail: `no answer within ${res.limitMs} ms`, absorb: run.opts.absorb ?? null }));
-        continue;
-      }
       const { incumbent, k: _k, id, method, opts, repetition: _r, spend: _n, ...rest } = res;
       if (res.validity) {
         validities.push(res.validity);
@@ -268,7 +261,7 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
         if (!policy) continue;
         const g = `${run.spend}|${policy}`;
         if (!groups.has(g)) groups.set(g, { spend: run.spend, policy, incumbents: [], unseeded: [] });
-        if (!res || res.timeLimit || !res.ok || !res.incumbent) continue;
+        if (!res || !res.ok || !res.incumbent) continue;
         if (admitsIncumbent(oracleRules, res.method)) groups.get(g).incumbents.push({ name: res.method.name, seeded: res.method.seeded === true, ...res.incumbent });
         else groups.get(g).unseeded.push({ name: res.method.name, fee: res.incumbent.fee });
       }
@@ -278,7 +271,6 @@ export async function runBatteries(T, pool, { wallets, methods, out, answerLimit
       const refs = await Promise.all(list.map((g) => oracle.reference(built.observed, built.spends[g.spend].intent, source.params, g.policy, { incumbents: g.incumbents })));
       list.forEach((g, i) => {
         totals.oracle++;
-        if (refs[i] && refs[i].terminated === true) totals.oracleGuard++;
         emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, unseeded: unseededBeside(g.unseeded, refs[i] ? refs[i].fee : null), oracle: refs[i] }));
       });
     }

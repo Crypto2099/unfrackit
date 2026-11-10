@@ -13,8 +13,8 @@
 // method, with how many lie below the reference; the reference fee is
 // present whenever there is an incumbent, is at most every incumbent's fee,
 // and every incumbent's change equals the policy's; each reference records
-// the settings it ran under, the hook's, its stop and its work, and none was
-// stopped by the guard; tidy-layout spends and chains get none.
+// the settings it ran under, the hook's, its stop and its work, and no
+// record says anything of a watchdog; tidy-layout spends and chains get none.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
 
 import { test } from 'node:test';
@@ -48,7 +48,8 @@ test('battery --oracle: references for the study plan\'s change policies', { ski
     const methods = batteryPlan({ roles: STUDY_ROLES, reps: 2 });
     const totals = await runBatteries(T, pool, { wallets: ['S1', 'S8'].map((name) => ({ spec: { kind: 'shape', name, stream: null } })), methods, out, oracle: hook });
     assert.deepEqual(hook.settings, ORACLE_SETTINGS);
-    assert.equal(totals.oracleGuard, 0);
+    assert.equal('oracleGuard' in totals, false);
+    assert.equal('timeouts' in totals, false);
     out.close();
     const recs = readFileSync(join(out.dir, 'records.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const oracleRecs = recs.filter((r) => r.kind === 'battery' && r.method === 'oracle');
@@ -89,7 +90,7 @@ test('battery --oracle: references for the study plan\'s change policies', { ski
       cjsIncumbents += o.oracle.incumbents.filter((i) => i.name === 'cjs-rrri').length;
       const ref = o.oracle;
       assert.deepEqual(ref.settings, hook.settings, `${keyOf(o)}: settings`);
-      assert.equal(ref.terminated, false);
+      assert.equal('terminated' in ref, false);
       assert.ok(typeof ref.stop === 'string' && ref.work && Number.isInteger(ref.work.candidateSets), `${keyOf(o)}: stop and work`);
       assert.equal(ref.work.incumbentSets, passed.length, `${keyOf(o)}: incumbent sets counted apart`);
       const byName = new Map(o.unseeded.map((u) => [u.name, u]));

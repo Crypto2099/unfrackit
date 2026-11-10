@@ -1,34 +1,40 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Worker threads and the time limits. CSL's calls are synchronous, so a
-// replay or a method answer is stopped at its limit only by terminating the
-// thread it runs in; the pool then records the time-out and starts a fresh
-// worker.
+// Worker threads and the watchdogs. No time limit decides any result: every
+// replay and every method answer runs to completion, and its time is kept as
+// timing context (out/records.mjs). CSL's calls are synchronous, so work that
+// hangs can be stopped only by terminating the thread it runs in. A watchdog
+// far above any expected time does that: the work is set aside, nothing of
+// it is recorded, and it runs again at once in a fresh worker with its
+// watchdog doubled, as often as it takes to complete, so a stop changes when
+// the work ends and never what it records.
 //
-//   replay   300 seconds of wall-clock time per (wallet, arm, selector,
-//            repetition) replay; a replay that times out leaves no record but
-//            its time-out, and its wallet is excluded from the paired
-//            comparisons that need that arm
-//   battery  60 seconds per method answer for one wallet and spend, counted
-//            from the method's start to its return; a method that runs past
-//            it has returned an error with the reason "time limit", and the
-//            wallet's remaining spends continue in a fresh worker
+//   replay   24 hours per (wallet, arm, selector, repetition) replay; the
+//            replay runs again from its start
+//   battery  30 minutes per method answer for one wallet and spend, counted
+//            from the method's start to its return; the wallet's battery
+//            resumes at that answer (job.skip lists the runs already done)
+//
+// Errors the machine can cause (kit/machine.mjs), and a worker that exits or
+// errors during a job, make the job run again once in a fresh worker that
+// records machine errors: only an error that happens again there is recorded,
+// as the method's outcome where the code records one. A worker that dies
+// twice at the same point of a job, or an error that is not the machine's,
+// fails the job, and the run stops with it.
+//
 // Each worker runs one job at a time, and is replaced after maxJobs jobs:
 // CSL's WebAssembly memory only grows, to the high-water mark of the largest
-// wallet the worker has built for, and a fresh thread gives it back.
-//
-// The thread cap: a run keeps at most MAX_BUSY_THREADS threads busy, its
-// replay or battery workers and its oracle workers together, so that the
-// wall-clock limits above hold on a machine whose cores are not
-// oversubscribed. The commands refuse more (checkBusyThreads) and record the
-// counts in run.json.
+// wallet the worker has built for, and a fresh thread gives it back. The
+// worker count changes no record; the commands record it and the machine
+// beside the timings (out/host.mjs). `stats` counts what happened, for the
+// run's log and printout only: workers started and recycled, watchdog stops
+// and machine reruns.
 
 import { Worker } from 'node:worker_threads';
 
-export const REPLAY_LIMIT_MS = 300 * 1000;
-export const ANSWER_LIMIT_MS = 60 * 1000;
-export const MAX_BUSY_THREADS = 12;
+export const REPLAY_WATCHDOG_MS = 24 * 3600 * 1000;
+export const ANSWER_WATCHDOG_MS = 30 * 60 * 1000;
 
 // A worker count as a command line gives it: a positive whole number, or
 // `dflt` when absent.
@@ -39,19 +45,15 @@ export function workerCount(v, flag, dflt = 1) {
   return n;
 }
 
-// The busy threads of a run, refused above the cap: { workers,
-// oracleWorkers, busy, cap }.
-export function checkBusyThreads(workers, oracleWorkers = 0) {
-  const busy = workers + oracleWorkers;
-  if (busy > MAX_BUSY_THREADS) throw new Error(`refusing: ${oracleWorkers ? '--workers and --oracle-workers together' : '--workers'} may keep at most ${MAX_BUSY_THREADS} threads busy (${busy} asked)`);
-  return { workers, oracleWorkers, busy, cap: MAX_BUSY_THREADS };
-}
 const WORKER = new URL('./worker.mjs', import.meta.url);
 
 export class Pool {
-  constructor({ treatmentDir, pinsPath = null, size = 1, resourceLimits, maxJobs = 40 } = {}) {
+  // workerUrl: the worker script, replay/worker.mjs unless a test gives a
+  // stand-in that speaks its messages.
+  constructor({ treatmentDir, pinsPath = null, size = 1, resourceLimits, maxJobs = 40, workerUrl = WORKER } = {}) {
     if (!treatmentDir) throw new Error('the pool needs the treatment directory');
     this.workerData = { treatmentDir, pinsPath };
+    this.workerUrl = workerUrl;
     this.size = size;
     this.maxJobs = maxJobs;
     this.jobs = new WeakMap();
@@ -60,12 +62,12 @@ export class Pool {
     this.waiting = [];
     this.live = new Set();
     this.seq = 0;
-    this.stats = { started: 0, terminated: 0 };
+    this.stats = { started: 0, recycled: 0, watchdogStops: 0, machineReruns: 0 };
   }
 
   spawn() {
     return new Promise((resolve, reject) => {
-      const w = new Worker(WORKER, { workerData: this.workerData, resourceLimits: this.resourceLimits });
+      const w = new Worker(this.workerUrl, { workerData: this.workerData, resourceLimits: this.resourceLimits });
       this.stats.started++;
       this.live.add(w);
       const onMessage = (m) => {
@@ -94,11 +96,8 @@ export class Pool {
     const n = (this.jobs.get(w) || 0) + 1;
     this.jobs.set(w, n);
     if (n >= this.maxJobs) {
-      this.live.delete(w);
-      this.stats.recycled = (this.stats.recycled || 0) + 1;
-      await w.terminate();
-      const next = this.waiting.shift();
-      if (next) next(await this.spawn());
+      this.stats.recycled++;
+      await this.retire(w);
       return;
     }
     const next = this.waiting.shift();
@@ -106,95 +105,150 @@ export class Pool {
     else this.idle.push(w);
   }
 
-  async kill(w) {
+  // Terminates a worker after its job, so that a waiting job gets a fresh one.
+  async retire(w) {
     this.live.delete(w);
-    this.stats.terminated++;
     await w.terminate();
-    // A replacement, so that a waiting job is not left without a worker.
     const next = this.waiting.shift();
     if (next) next(await this.spawn());
   }
 
-  // One replay job. Resolves { ok: true, result, ms } or { ok: false,
-  // timedOut: true, ms } or { ok: false, error, stop, ms }.
-  async replay(job, { limitMs = REPLAY_LIMIT_MS } = {}) {
-    const w = await this.acquire();
+  // Terminates a worker whose job is to run again, and starts the fresh
+  // worker it runs in, in the same place in the pool.
+  async renew(w) {
+    this.live.delete(w);
+    await w.terminate();
+    return this.spawn();
+  }
+
+  // One attempt of a job on worker w. arm: the watchdog armed at the start
+  // (milliseconds), or null; on(m, watchdog) sees each other message of the
+  // job and may arm the watchdog (watchdog(ms)) or clear it (watchdog(null)).
+  // Resolves, with ms, the attempt's time:
+  //   { kind: 'done', result }
+  //   { kind: 'error', error, stop, machine }  the job threw
+  //   { kind: 'died', error }                  the worker exited or errored
+  //   { kind: 'watchdog' }                     the watchdog stopped it
+  // The caller releases, retires or renews the worker.
+  attempt(w, task, job, extra, { arm = null, on = () => {} } = {}) {
     const id = ++this.seq;
     const t0 = performance.now();
     return new Promise((resolve) => {
-      let done = false;
-      const finish = async (r, dead) => {
-        if (done) return;
-        done = true;
+      let over = false;
+      let timer = null;
+      const end = (r) => {
+        if (over) return;
+        over = true;
         clearTimeout(timer);
         w.off('message', onMessage);
         w.off('error', onError);
-        if (dead) await this.kill(w);
-        else await this.release(w);
+        w.off('exit', onExit);
         resolve({ ...r, ms: performance.now() - t0 });
       };
-      const timer = setTimeout(() => finish({ ok: false, timedOut: true }, true), limitMs);
-      const onMessage = (m) => {
-        if (m.id !== id) return;
-        if (m.event === 'done') finish({ ok: true, result: m.result }, false);
-        else if (m.event === 'error') finish({ ok: false, error: m.error, stop: m.stop }, false);
+      const watchdog = (ms) => {
+        clearTimeout(timer);
+        timer = ms === null ? null : setTimeout(() => end({ kind: 'watchdog' }), ms);
       };
-      const onError = (e) => finish({ ok: false, error: String((e && e.stack) || e), stop: false }, true);
+      const onMessage = (m) => {
+        if (!m || m.id !== id) return;
+        if (m.event === 'done') end({ kind: 'done', result: m.result });
+        else if (m.event === 'error') end({ kind: 'error', error: m.error, stop: !!m.stop, machine: !!m.machine });
+        else on(m, watchdog);
+      };
+      const onError = (e) => end({ kind: 'died', error: String((e && e.stack) || e) });
+      const onExit = (code) => end({ kind: 'died', error: `the worker exited with code ${code}` });
       w.on('message', onMessage);
       w.once('error', onError);
-      w.postMessage({ id, task: 'replay', job });
+      w.once('exit', onExit);
+      if (arm !== null) watchdog(arm);
+      w.postMessage({ id, task, job, ...extra });
     });
   }
 
+  // One replay job. Resolves { ok: true, result, ms } or { ok: false, error,
+  // stop, ms }, ms being the time of the attempt that ended it. note(entry) is
+  // told of each watchdog stop and machine rerun.
+  async replay(job, { watchdogMs = REPLAY_WATCHDOG_MS, note = () => {} } = {}) {
+    let watchdog = watchdogMs;
+    let record = false;
+    let died = false;
+    let w = await this.acquire();
+    for (;;) {
+      const r = await this.attempt(w, 'replay', job, { recordMachineErrors: record }, { arm: watchdog });
+      if (r.kind === 'done' || (r.kind === 'error' && (!r.machine || record))) {
+        if (record) await this.retire(w);
+        else await this.release(w);
+        return r.kind === 'done' ? { ok: true, result: r.result, ms: r.ms } : { ok: false, error: r.error, stop: r.stop, ms: r.ms };
+      }
+      if (r.kind === 'died' && died) {
+        this.live.delete(w);
+        await w.terminate();
+        return { ok: false, error: r.error, stop: false, ms: r.ms };
+      }
+      if (r.kind === 'watchdog') {
+        this.stats.watchdogStops++;
+        note({ event: 'watchdog stop', watchdogMs: watchdog, ms: r.ms });
+        watchdog *= 2;
+      } else {
+        this.stats.machineReruns++;
+        note({ event: 'machine rerun', cause: r.kind === 'died' ? 'worker died' : 'machine error', error: r.error });
+        if (r.kind === 'died') died = true;
+        record = true;
+      }
+      w = await this.renew(w);
+    }
+  }
+
   // One wallet's battery job. onSpend(k, result) is called for each run as it
-  // ends, with { timeLimit: true } for one that ran out of time. Resolves
-  // { ok, result, timeouts, ms } or { ok: false, error, stop }.
-  async battery(job, { answerLimitMs = ANSWER_LIMIT_MS, onSpend = () => {} } = {}) {
+  // ends, once per run. Resolves { ok: true, result, ms } or { ok: false,
+  // error, stop, ms }. A run's position is its number; the wallet's setup
+  // before its first answer is -1. A machine rerun records machine errors up
+  // to the position where the error happened (job.recordMachineThrough).
+  async battery(job, { watchdogMs = ANSWER_WATCHDOG_MS, onSpend = () => {}, note = () => {} } = {}) {
     const t0 = performance.now();
     const doneK = new Set(job.skip || []);
-    const timeouts = [];
+    const watchdogs = new Map();
+    let through = null;
+    const died = new Set();
+    let w = await this.acquire();
     for (;;) {
-      const w = await this.acquire();
-      const id = ++this.seq;
-      const r = await new Promise((resolve) => {
-        let timer = null;
-        let current = null;
-        let over = false;
-        const finish = async (x, dead) => {
-          if (over) return;
-          over = true;
-          clearTimeout(timer);
-          w.off('message', onMessage);
-          w.off('error', onError);
-          if (dead) await this.kill(w);
-          else await this.release(w);
-          resolve(x);
-        };
-        const onMessage = (m) => {
-          if (m.id !== id) return;
+      let at = -1;
+      const r = await this.attempt(w, 'battery', { ...job, skip: [...doneK], recordMachineThrough: through }, {}, {
+        on: (m, watchdog) => {
           if (m.event === 'answering') {
-            current = m.spend;
-            clearTimeout(timer);
-            timer = setTimeout(() => finish({ timedOut: current }, true), answerLimitMs);
+            at = m.spend;
+            watchdog(watchdogs.get(m.spend) ?? watchdogMs);
           } else if (m.event === 'answered') {
-            clearTimeout(timer);
-            timer = null;
+            watchdog(null);
           } else if (m.event === 'spend') {
             doneK.add(m.spend);
             onSpend(m.spend, m.result);
-          } else if (m.event === 'done') finish({ done: m.result }, false);
-          else if (m.event === 'error') finish({ error: m.error, stop: m.stop }, false);
-        };
-        const onError = (e) => finish({ error: String((e && e.stack) || e), stop: false }, true);
-        w.on('message', onMessage);
-        w.once('error', onError);
-        w.postMessage({ id, task: 'battery', job: { ...job, skip: [...doneK] } });
+          }
+        }
       });
-      if (r.done) return { ok: true, result: r.done, timeouts, ms: performance.now() - t0 };
-      if (r.error) return { ok: false, error: r.error, stop: r.stop, timeouts, ms: performance.now() - t0 };
-      timeouts.push(r.timedOut);
-      doneK.add(r.timedOut);
-      onSpend(r.timedOut, { timeLimit: true, limitMs: answerLimitMs });
+      const recorded = through !== null && at <= through;
+      if (r.kind === 'done' || (r.kind === 'error' && (!r.machine || recorded))) {
+        if (through !== null) await this.retire(w);
+        else await this.release(w);
+        return r.kind === 'done' ? { ok: true, result: r.result, ms: performance.now() - t0 } : { ok: false, error: r.error, stop: r.stop, ms: performance.now() - t0 };
+      }
+      if (r.kind === 'died' && died.has(at)) {
+        this.live.delete(w);
+        await w.terminate();
+        return { ok: false, error: r.error, stop: false, ms: performance.now() - t0 };
+      }
+      if (r.kind === 'watchdog') {
+        const ms = watchdogs.get(at) ?? watchdogMs;
+        this.stats.watchdogStops++;
+        note({ event: 'watchdog stop', run: at, watchdogMs: ms, ms: r.ms });
+        watchdogs.set(at, ms * 2);
+      } else {
+        this.stats.machineReruns++;
+        note({ event: 'machine rerun', run: at, cause: r.kind === 'died' ? 'worker died' : 'machine error', error: r.error });
+        if (r.kind === 'died') died.add(at);
+        through = through === null ? at : Math.max(through, at);
+      }
+      w = await this.renew(w);
     }
   }
 

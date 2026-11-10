@@ -70,7 +70,10 @@
 //     names "redeemers" with those parts, whatever the failure's class; when
 //     the kit's checks otherwise pass, the failure is class 'other' (check
 //     'redeemers'). A failure leaves the state as it was, and the replay
-//     continues.
+//     continues. An error the machine can cause (kit/machine.mjs), in a
+//     method or in the planner, is never a failure or a refusal on its first
+//     appearance: it fails the job, which runs again in a fresh worker
+//     (replay/pool.mjs), and is recorded only if it happens there too.
 // At the first spend of each parallel burst, a separate pass builds the
 // burst's intents in order from the state at its start without spending any
 // output created earlier in the burst (burst feasibility, H-5 and H-6's rescue
@@ -117,6 +120,7 @@ import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
 import { settle } from '../kit/heap.mjs';
 import { makeRng } from '../shapes/rng.mjs';
+import { passMachineErrors } from '../kit/machine.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 const MONTH = 30 * 86400;
@@ -333,6 +337,7 @@ export async function replay(T, params, source, job) {
     if (plansAtStart(arm)) await doPlan('start', source.windowStart);
   } catch (e) {
     if (e instanceof StopPoint) throw e;
+    passMachineErrors(e);
     out.refused = `the planner refuses the start plan: ${e.message}`;
     return out;
   }
@@ -393,6 +398,7 @@ export async function replay(T, params, source, job) {
           await doPlan(`mark ${e.n}`, e.blockTime);
         } catch (err) {
           if (err instanceof StopPoint) throw err;
+          passMachineErrors(err);
           out.plans.push({ at: `mark ${e.n}`, t: rel(e.blockTime), refused: err.message });
         }
       }
@@ -506,6 +512,7 @@ export async function replay(T, params, source, job) {
       const p = planOnly(T, state, params, own ? settings : {}, { arrival: own && needsArrival(variant) ? arrivalMap(state, arrivalTable) : null });
       conformity = { proposes: p.txs.length > 0, txs: p.txs.length, fee: sum(p.txs.map((t) => BigInt(t.fee))), ...share };
     } catch (e) {
+      passMachineErrors(e);
       conformity = { refused: e.message, ...share };
     }
   }
@@ -548,6 +555,7 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
     r = checkResult(method, await method.build(aside.pool, intent, params, aside.collateral ? { ...opts, collateral: aside.collateral } : opts));
   } catch (e) {
     if (e instanceof StopPoint) throw e;
+    passMachineErrors(e);
     r = { ok: false, class: CLASSES.other, detail: String(e && (e.message || e)) };
   }
   const ms = performance.now() - t0;

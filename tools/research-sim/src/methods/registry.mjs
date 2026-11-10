@@ -17,11 +17,11 @@
 //                       defaults
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
-//   test-stall          a method that never answers within any limit: it
-//                       blocks its thread (as a synchronous CSL call does) for
-//                       stallMs, then fails; it exists to force the time
-//                       limits. With `only` (a list of intent ids) it stalls on
-//                       those and fails at once on every other
+//   test-stall          a method that blocks its thread (as a synchronous
+//                       CSL call does) for stallMs, then fails; it exists to
+//                       force the watchdogs (replay/pool.mjs). With `only` (a
+//                       list of intent ids) it stalls on those and fails at
+//                       once on every other
 // A baseline runs at its library's defaults and the simulator's settings, so
 // it takes no options. The builder survey's other subjects (the Evolution
 // SDK's unfrack option, Mesh's selectors; survey/survey.mjs) are not

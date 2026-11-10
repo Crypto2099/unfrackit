@@ -7,9 +7,9 @@
 // program work has stop program-work and its units at or past the budget,
 // with a solve interrupted at its share; the same call twice, in two workers
 // at once and again in a worker that has run other calls, gives the same
-// record but for its times; and the
-// parent's guard terminates a worker whose call outlasts guardMs, records the
-// call undecided with stop guard, and a fresh worker serves the next call.
+// record but for its times; and a call the parent's watchdog stops runs
+// again in a fresh worker with the watchdog doubled until it returns, with
+// the record of the same call that no watchdog stopped.
 // Under limit 'wall-clock', kept for measuring what a time limit allows, a
 // call returns at its limit with its work counted, and the parent's margin
 // still terminates a worker past it. The cases are E1's fungible share (400
@@ -96,21 +96,23 @@ test('the program-work budget stops the call, each solve interrupted at its shar
   }
 });
 
-test('the guard terminates a call past guardMs: undecided, stop guard, and a fresh worker serves the next', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
+test('a call the watchdog stops runs again with the watchdog doubled until it returns, with the record of a call it never stopped', { skip, timeout: 10 * 60 * 1000 }, async (t) => {
   const { s, spend } = spendOf('E1', 'fungible-share');
-  const o = createOracle({ treatmentDir: TREATMENT_DIR, pinsText, workers: 1 });
+  const settings = oracleSettings({ maxCandidateSets: '4' });
+  const notes = [];
+  const o = createOracle({ treatmentDir: TREATMENT_DIR, pinsText, workers: 1, note: (e) => notes.push(e) });
   try {
-    const r = await o.oracle(s, spend, P, 'csl', { settings: oracleSettings({ guardMs: '3000' }) });
-    t.diagnostic(tag(r));
-    assert.deepEqual([r.status, r.stop, r.terminated, r.fee, r.tx, r.bound, r.work], ['undecided', 'guard', true, null, null, null, null]);
-    assert.ok(r.wallMs >= 3000 && r.wallMs < 10000, `terminated after ${r.wallMs} ms`);
-    assert.equal(r.settings.guardMs, 3000);
-    assert.equal(o.stats.terminated, 1);
-    const small = spendOf('S8', 'ada-payment');
-    const r2 = await o.oracle(small.s, small.spend, P, 'csl', {});
-    t.diagnostic(tag(r2));
-    assert.deepEqual([r2.status, r2.scope, r2.stop, r2.terminated], ['optimal', 'spendable', 'proven', false]);
-    assert.equal(o.stats.workersStarted, 2);
+    const plain = await o.oracle(s, spend, P, 'csl', { settings });
+    assert.equal(o.stats.watchdogStops, 0);
+    // A watchdog of 100 ms stops the call (a fresh worker loads the solver
+    // first) until it has doubled past the call's time.
+    const r = await o.oracle(s, spend, P, 'csl', { settings, watchdogMs: 100 });
+    t.diagnostic(`${tag(r)}; ${notes.length} stops`);
+    assert.ok(o.stats.watchdogStops >= 1, 'the watchdog stopped the call');
+    assert.deepEqual(notes.map((e) => e.watchdogMs), notes.map((_e, i) => 100 * 2 ** i));
+    assert.equal(o.stats.workersStarted, 1 + o.stats.watchdogStops);
+    assert.deepEqual([r.status, r.stop, r.terminated], [plain.status, plain.stop, false]);
+    assert.deepEqual(timeless(r), timeless(plain));
   } finally {
     await o.close();
   }

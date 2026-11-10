@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { oracleRecord } from '../../../src/oracle/battery-hook.mjs';
 import { record, assertClean } from '../../../src/out/records.mjs';
+import { ORACLE_SETTINGS } from '../../../src/oracle/settings.mjs';
 
 const TXID = 'ab'.repeat(32);
 
@@ -69,8 +70,10 @@ test('a result with no solution and an exhaustive path records the exhaustive se
   assert.doesNotThrow(() => assertClean(r));
 });
 
-test('a call the guard stopped records stop guard, no work and no fee', () => {
-  const r = oracleRecord({ status: 'undecided', path: null, paths: null, scope: null, candidates: null, policy: 'csl', fee: null, bound: null, tx: null, best: null, stop: 'guard', work: null, settings: { limit: 'budget' }, ms: 300001, wallMs: 300001, terminated: true });
-  assert.deepEqual([r.status, r.stop, r.work, r.fee, r.terminated], ['undecided', 'guard', null, null, true]);
+test('a record says nothing of a watchdog: no terminated flag, and its settings hold no watchdog value', () => {
+  const r = oracleRecord(result({ settings: ORACLE_SETTINGS }));
+  assert.equal('terminated' in r, false);
+  assert.equal('wallMs' in r, false);
+  assert.equal(Object.keys(r.settings).some((k) => /guard|watchdog/i.test(k)), false);
   assert.doesNotThrow(() => assertClean(r));
 });

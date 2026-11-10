@@ -7,13 +7,14 @@
 // and returns the result as a record field (oracleRecord).
 //
 //   const hook = await createBatteryOracle({ treatmentDir, pinsText, workers,
-//     settings })
+//     settings, watchdogMs, note })
 //   ... runBatteries(T, pool, { ..., oracle: hook }) ...
 //   await hook.close()
 //
 // The hook's settings are the oracle's (settings.mjs); the battery runner
 // reads their incumbents rule to choose the incumbents. The hook runs under
-// the work budget only.
+// the work budget only; every call runs to completion (oracle.mjs), and
+// watchdogMs and note pass to the oracle.
 
 import { createOracle } from './oracle.mjs';
 import { availablePolicies, policyOfMethod } from './policies.mjs';
@@ -22,11 +23,11 @@ import { OracleRefusal } from './spend.mjs';
 import { scrubText } from '../out/records.mjs';
 
 // What a record keeps of an oracle result: the status, its scope and bound,
-// the paths that ran, which of them produced the reference, which limit
-// ended the call (`stop`) and the work it used, the incumbents' outcomes, and
-// the reference transaction's size and fee parts. It keeps neither the
-// transaction's bytes nor its hash nor its input references: a record names
-// no transaction (out/records.mjs).
+// the paths that ran, which of them produced the reference, what ended the
+// call (`stop`: a limit of its budget or a proof, never a time) and the work
+// it used, the incumbents' outcomes, and the reference transaction's size and
+// fee parts. It keeps neither the transaction's bytes nor its hash nor its
+// input references: a record names no transaction (out/records.mjs).
 export function oracleRecord(r) {
   const b = r.best;
   const mip = r.detail && r.detail.mip ? r.detail.mip : r.detail;
@@ -52,7 +53,6 @@ export function oracleRecord(r) {
     stop: r.stop ?? null,
     work: r.work ?? null,
     mipBound: mip && mip.bound !== undefined ? mip.bound : null,
-    terminated: r.terminated === true,
     incumbents: (r.incumbents || []).map((i) => ({ name: i.name, fee: i.fee, inputs: i.inputs, result: i.result, oracleFee: i.oracleFee ?? null, sameChange: i.sameChange ?? null, ...(i.detail ? { detail: scrubText(i.detail) } : {}) })),
     evaluations: r.evaluations ?? null,
     settings: r.settings ?? null,
@@ -61,10 +61,10 @@ export function oracleRecord(r) {
   };
 }
 
-export async function createBatteryOracle({ treatmentDir, pinsText, workers = 1, settings = oracleSettings() } = {}) {
+export async function createBatteryOracle({ treatmentDir, pinsText, workers = 1, settings = oracleSettings(), watchdogMs, note } = {}) {
   if (settings.limit !== 'budget') throw new Error('the battery\'s oracle stops on its work budget (oracle setting limit=budget)');
   const available = new Set(await availablePolicies());
-  const o = createOracle({ treatmentDir, ...(pinsText ? { pinsText } : {}), workers });
+  const o = createOracle({ treatmentDir, ...(pinsText ? { pinsText } : {}), workers, ...(watchdogMs !== undefined ? { watchdogMs } : {}), ...(note ? { note } : {}) });
   return {
     settings,
     policyOf(methodName, changePolicy) {

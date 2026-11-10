@@ -4,8 +4,9 @@
 // The study command (src/study/study.mjs) over stand-in commands
 // (test/lib/study-stubs.mjs), with no database and no treatment: the stages
 // of each plan in order with the options each is given, the layout, a stage
-// killed half way and the run resumed, a stage that fails, and the refusals
-// (an option, an input file or the code changed on resume, the plans' own
+// killed half way and the run resumed, a stage that fails, a resume with
+// other worker counts, and the refusals (an option, an input file or the
+// code changed on resume, the plans' own
 // rules, a confirmation-split wallet without the analysis-freeze
 // transaction, a second invocation while one runs); the nested run ids, and
 // the pools handed from battery-pools to the battery.
@@ -175,7 +176,6 @@ test('a resume with an option, an input file or the code changed is refused, and
   await run(preprod('strict'));
   const calls = [];
   await assert.rejects(run(preprod('strict', { repsH1: '2' }), { calls }), /differs from its first start in --reps-h1/);
-  await assert.rejects(run(preprod('strict', { workers: '4' }), { calls }), /--workers/);
   await assert.rejects(run(preprod('strict', { validity: true }), { calls }), /--validity/);
   await assert.rejects(run(preprod('strict'), { calls }, { manifest: () => 'another manifest\n' }), /the code manifest/);
   const copy = join(root, 'wallets-copy.txt');
@@ -190,6 +190,27 @@ test('a resume with an option, an input file or the code changed is refused, and
   assert.equal(calls.length, 0);
   await run(preprod('strict'), { calls });
   assert.equal(calls.length, 0, 'the same options resume, with every stage finished');
+});
+
+test('a resume may use other worker counts: they change no record, and the log records each invocation\'s with its machine', async () => {
+  const calls = [];
+  await assert.rejects(run(synthetic('elastic', { workers: '2', oracleWorkers: '1' }), { calls, fail: 'replay-peak' }), /stand-in failure/);
+  const resumed = [];
+  await run(synthetic('elastic', { workers: '6', oracleWorkers: '3' }), { calls: resumed });
+  assert.deepEqual(resumed.map(([s]) => s), ['replay-peak', 'battery']);
+  const by = new Map(resumed);
+  assert.deepEqual([by.get('replay-peak').workers, by.get('battery').workers, by.get('battery').oracleWorkers], ['6', '6', '3']);
+  assert.equal(recordsOf('synthetic', 'elastic', 'battery').length > 0, true);
+  const log = logOf('synthetic', 'elastic');
+  const starts = log.filter((e) => e.event === 'start' || e.event === 'resume');
+  assert.deepEqual(starts.map((e) => [e.event, e.machine.workers, e.machine.oracleWorkers, e.machine.node]), [['start', 2, 1, process.version], ['resume', 6, 3, process.version]]);
+  assert.ok(starts.every((e) => Number.isSafeInteger(e.machine.logicalCores) && e.machine.totalMemoryBytes > 0));
+  // The header holds the options that decide the records, and not the
+  // worker counts.
+  const header = JSON.parse(readFileSync(join(runDir('synthetic', 'elastic'), 'study.json'), 'utf8'));
+  assert.equal('workers' in header.options, false);
+  assert.equal('oracleWorkers' in header.options, false);
+  assert.equal(header.options.repsH1, '2');
 });
 
 test('each plan refuses what it does not use, before anything is written', async () => {
@@ -215,13 +236,15 @@ test('each plan refuses what it does not use, before anything is written', async
   await refuse({ ...corpus, runId: 'r15', snapshot: '100' }, /give no --snapshot/);
   await refuse({ ...corpus, runId: 'r16', expectNetwork: 'preprod' }, /--extraction-run/);
   await refuse({ ...preprod('bad/id') }, /--run-id/);
-  // The thread cap and the work budget, before any stage.
-  await refuse(synthetic('r17', { workers: '13', oracle: undefined }), /--workers may keep at most 12 threads busy \(13 asked\)/);
-  await refuse(synthetic('r18', { workers: '8', oracleWorkers: '5' }), /--workers and --oracle-workers together may keep at most 12 threads busy \(13 asked\)/);
+  // Worker counts are positive whole numbers, with no cap; the time limits
+  // and the oracle's wall-clock limit are gone. Before any stage.
   await refuse(synthetic('r19', { workers: 'many' }), /--workers takes a positive whole number/);
+  await refuse(synthetic('r18', { oracleWorkers: '0' }), /--oracle-workers takes a positive whole number/);
   await refuse(synthetic('r20', { oracleLimitMs: '60000' }), /does not use --oracle-limit-ms/);
-  assert.equal(studyOptions(synthetic('ok12', { workers: '8', oracleWorkers: '4' })).workers, '8');
-  assert.equal(studyOptions(synthetic('ok13', { workers: '12', oracle: undefined, oracleWorkers: '4' })).workers, '12', 'without the oracle its workers start no thread');
+  await refuse(synthetic('r21', { limitMs: '300000' }), /does not use --limit-ms/);
+  await refuse(synthetic('r22', { answerLimitMs: '60000' }), /does not use --answer-limit-ms/);
+  assert.equal(studyOptions(synthetic('ok12', { workers: '48', oracleWorkers: '16' })).workers, '48');
+  assert.equal(studyOptions(synthetic('ok13', { workers: '64', oracle: undefined })).workers, '64');
   assert.equal(studyOptions({ ...corpus, runId: 'ok' }).fromStudy, 'all');
 });
 

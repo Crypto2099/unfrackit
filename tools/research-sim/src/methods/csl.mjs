@@ -64,6 +64,7 @@
 // transaction at its exact fee.
 
 import { CLASSES } from '../kit/check.mjs';
+import { passMachineErrors } from '../kit/machine.mjs';
 import { buildWithChange } from './change.mjs';
 import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 import { inspectTx, unspentOutputParts } from '../kit/inspect.mjs';
@@ -198,6 +199,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
         try {
           for (const o of intent.requested) tb.add_output(S.k(C.TransactionOutput.from_bytes(Buffer.from(o.cbor, 'hex'))));
         } catch (e) {
+          passMachineErrors(e);
           // A requested output CSL refuses (its value over the limit, its coin
           // under the minimum) is the intent's, not the selection's.
           const t = errorText(e);
@@ -208,6 +210,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
         try {
           tb.add_inputs_from(utxos, C.CoinSelectionStrategyCIP2[CSL_STRATEGIES[strategy]]);
         } catch (e) {
+          passMachineErrors(e);
           const t = errorText(e);
           return { ok: false, class: classOfCslError(t), detail: `add_inputs_from: ${t}` };
         }
@@ -219,6 +222,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
           try {
             body = S.k(tb.build());
           } catch (e) {
+            passMachineErrors(e);
             const t = errorText(e);
             return { ok: false, class: classOfCslError(t), detail: `the library's inputs: ${t}` };
           }
@@ -233,6 +237,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
         try {
           tb.add_change_if_needed(S.k(C.Address.from_bech32(state.changeAddress)));
         } catch (e) {
+          passMachineErrors(e);
           const t = errorText(e);
           return { ok: false, class: classOfCslError(t), detail: `add_change_if_needed: ${t}` };
         }
@@ -240,6 +245,7 @@ export function cslMethod(T, { strategy, preferPureChange = false }) {
         try {
           tx = S.k(tb.build_tx());
         } catch (e) {
+          passMachineErrors(e);
           const t = errorText(e);
           return { ok: false, class: classOfCslError(t), detail: `build_tx: ${t}` };
         }
@@ -651,6 +657,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
         tb.set_collateral_return(k(C.TransactionOutput.new(k(C.Address.from_bech32(state.changeAddress)), k(out.amount()))));
       }
     } catch (e) {
+      passMachineErrors(e);
       if (e instanceof Unexpressible) return notReplayable(`csl: ${part}: ${e.message}`);
       return notReplayable(`csl: ${part}: CSL refuses it: ${errorText(e)}`);
     }
@@ -662,6 +669,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     try {
       tb.add_inputs_from(utxos, C.CoinSelectionStrategyCIP2[CSL_STRATEGIES[strategy]]);
     } catch (e) {
+      passMachineErrors(e);
       const t = errorText(e);
       return { ok: false, class: classOfCslError(t), detail: `add_inputs_from: ${t}` };
     }
@@ -677,6 +685,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
       try {
         body = k(tb.build());
       } catch (e) {
+        passMachineErrors(e);
         const t = errorText(e);
         return { ok: false, class: classOfCslError(t), detail: `the library's inputs: ${t}` };
       }
@@ -688,6 +697,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
     try {
       tb.add_change_if_needed(k(C.Address.from_bech32(state.changeAddress)));
     } catch (e) {
+      passMachineErrors(e);
       const t = errorText(e);
       return { ok: false, class: classOfCslError(t), detail: `add_change_if_needed: ${t}` };
     }
@@ -698,6 +708,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
       try {
         tb.set_total_collateral_and_return(B(totalCollateralFor(params, fee)), k(C.Address.from_bech32(state.changeAddress)));
       } catch (e) {
+        passMachineErrors(e);
         return { ok: false, class: CLASSES.collateral, detail: `set_total_collateral_and_return: ${errorText(e)}` };
       }
     }
@@ -712,6 +723,7 @@ function cslReplay(T, { strategy, preferPureChange }, state, intent, params, opt
         tx = k(tb.build_tx());
       }
     } catch (e) {
+      passMachineErrors(e);
       const t = errorText(e);
       return { ok: false, class: classOfCslError(t), detail: `build_tx: ${t}` };
     }

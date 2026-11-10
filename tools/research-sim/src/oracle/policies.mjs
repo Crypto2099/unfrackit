@@ -59,6 +59,7 @@
 import { buildWithChange } from '../methods/change.mjs';
 import { assembleOnce } from '../kit/assemble.mjs';
 import { checkTx, CLASSES } from '../kit/check.mjs';
+import { passMachineErrors } from '../kit/machine.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { cmpRef } from '../state/state.mjs';
 import { parseAddress, addressBytes } from '../history/address.mjs';
@@ -240,6 +241,7 @@ export function makeEvaluator(T, { state, spend, params, policy, settings, lib =
       full = CSL.Transaction.new(body, csl.witnesses(k), undefined);
       return { ok: true, bytes: hex(full.to_bytes()), k };
     } catch (e) {
+      passMachineErrors(e);
       const text = String(e && (e.message || e));
       return { ok: false, class: classOfCslError(text), detail: `cardano-serialization-lib: ${text}` };
     } finally {
@@ -264,6 +266,7 @@ export function makeEvaluator(T, { state, spend, params, policy, settings, lib =
         implicitValue: {}
       });
     } catch (e) {
+      passMachineErrors(e);
       return { ok: false, class: L.adapter.classOfCjsError(e), detail: `roundRobinRandomImprove: ${String(e && (e.message || e))}` };
     } finally {
       constraints.free();
@@ -295,6 +298,7 @@ export function makeEvaluator(T, { state, spend, params, policy, settings, lib =
     try {
       r = await b.buildEither({ changeAddress: E.Address.fromBech32(state.changeAddress), availableUtxos: [], protocolParameters: L.adapter.evoProtocolParameters(params) });
     } catch (e) {
+      passMachineErrors(e);
       return { ok: false, class: L.adapter.classOfEvoError(e), detail: `build: ${String(e && (e.message || e))}` };
     }
     if (r._tag === 'Left') return { ok: false, class: L.adapter.classOfEvoError(r.left), detail: `build: ${String((r.left && r.left.message) || r.left).split('\n')[0]}` };

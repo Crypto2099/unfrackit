@@ -7,11 +7,11 @@
 // With the study plan at two repetitions on S1 and S8 and the real oracle
 // hook they are equal outside what no caller can reproduce: the runs of the
 // selectors that draw from a generator nobody seeds (csl-ri, csl-ri-pure),
-// and the unseeded runs kept beside each reference, and runs that reached the
-// answer limit with the references of their spend and policy. Every other
-// oracle record, at the budget or proven, is equal field for field, since
-// the oracle stops on its work budget and takes incumbents from seeded
-// methods only. A wallet's failure stops the run with its error.
+// and the unseeded runs kept beside each reference. Every answer runs to
+// completion, so no run is set apart for time, and every oracle record, at
+// the budget or proven, is equal field for field, since the oracle stops on
+// its work budget and takes incumbents from seeded methods only. A wallet's
+// failure stops the run with its error.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
 
 import { test } from 'node:test';
@@ -26,7 +26,6 @@ import { RunOutput } from '../../src/out/records.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
 import { batteryPlan, STUDY_ROLES } from '../../src/arms/plan.mjs';
 import { createBatteryOracle } from '../../src/oracle/battery-hook.mjs';
-import { policyOfMethod } from '../../src/oracle/policies.mjs';
 
 const T = await treatment();
 const pinsPath = process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS;
@@ -83,9 +82,6 @@ test('battery: a pool of 3 writes the records of a pool of 1', { skip, timeout: 
     assert.equal(b.recs.length, a.recs.length);
     assert.equal(b.totals.oracle, a.totals.oracle);
     const same = (x, y) => x.kind === y.kind && x.wallet === y.wallet && x.method === y.method && x.change === y.change && x.repetition === y.repetition && x.arm === y.arm && x.spend === y.spend;
-    // The spends and policies where a run reached the answer limit in either
-    // run, whose references then have other incumbents.
-    const limited = new Set([...a.recs, ...b.recs].filter((r) => r.kind === 'battery' && r.class === 'time-limit' && policyOfMethod(r.method, r.change)).map((r) => `${r.wallet}|${r.spend}|${policyOfMethod(r.method, r.change)}`));
     let compared = 0;
     let excluded = 0;
     let references = 0;
@@ -94,17 +90,13 @@ test('battery: a pool of 3 writes the records of a pool of 1', { skip, timeout: 
       const y = b.recs[i];
       assert.ok(same(x, y), `record ${i}: same position`);
       if (x.kind === 'battery' && x.method === 'oracle') {
-        if (limited.has(`${x.wallet}|${x.spend}|${x.change}`)) {
-          excluded++;
-          continue;
-        }
         assert.ok(x.oracle.incumbents.every((n) => !UNSEEDED.has(n.name)), `record ${i}: an unseeded incumbent`);
         assert.equal(stableOracle(y), stableOracle(x), `record ${i}: oracle`);
         references++;
         compared++;
         continue;
       }
-      if (UNSEEDED.has(x.method) || x.class === 'time-limit' || y.class === 'time-limit') {
+      if (UNSEEDED.has(x.method)) {
         excluded++;
         continue;
       }
@@ -112,7 +104,7 @@ test('battery: a pool of 3 writes the records of a pool of 1', { skip, timeout: 
       compared++;
     }
     assert.ok(compared > a.recs.length / 2, `${compared} compared, ${excluded} excluded`);
-    assert.ok(references > 0 && references >= a.totals.oracle - excluded, `${references} references compared of ${a.totals.oracle}`);
+    assert.ok(references > 0 && references === a.totals.oracle, `${references} references compared of ${a.totals.oracle}`);
   } finally {
     await hook.close();
     if (prev === undefined) delete process.env.RESEARCH_SIM_HOME;

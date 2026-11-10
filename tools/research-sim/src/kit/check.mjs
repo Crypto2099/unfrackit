@@ -64,6 +64,7 @@
 import { inspectTx } from './inspect.mjs';
 import { minFee } from './fee.mjs';
 import { valueSize, assetMap, mergeAssets } from '../history/value.mjs';
+import { passMachineErrors } from './machine.mjs';
 
 export const CLASSES = Object.freeze({
   txSize: 'tx-size',
@@ -73,7 +74,6 @@ export const CLASSES = Object.freeze({
   balance: 'balance',
   feeMinimum: 'fee-minimum',
   collateral: 'collateral',
-  timeLimit: 'time-limit',
   other: 'other'
 });
 
@@ -112,6 +112,7 @@ export function checkTx(bytes, ctx) {
   try {
     t = inspectTx(bytes);
   } catch (e) {
+    passMachineErrors(e);
     return { ok: false, failures: [{ check: 'decode', cls: CLASSES.other, detail: String(e.message || e) }], facts: null };
   }
   const p = ctx.params;

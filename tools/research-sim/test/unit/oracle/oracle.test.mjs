@@ -29,9 +29,12 @@ test('settings: the defaults are the recommended answers, other values are refus
   assert.equal(ORACLE_SETTINGS.afterExhaustive, 'mip-always');
   assert.equal(ORACLE_SETTINGS.limit, 'budget');
   assert.equal(ORACLE_SETTINGS.solverSeed, 0);
-  // The budget: 1,500 candidate sets and 1,115,069 units of program work;
-  // the guard at 410 seconds.
-  assert.deepEqual([ORACLE_SETTINGS.maxCandidateSets, ORACLE_SETTINGS.maxProgramWork, ORACLE_SETTINGS.guardMs], [1500, 1115069, 410000]);
+  // The budget: 1,500 candidate sets and 1,115,069 units of program work.
+  // The watchdog on a call is not a setting (it changes no result), and the
+  // guard that was one is refused by name.
+  assert.deepEqual([ORACLE_SETTINGS.maxCandidateSets, ORACLE_SETTINGS.maxProgramWork], [1500, 1115069]);
+  assert.equal('guardMs' in ORACLE_SETTINGS, false);
+  assert.throws(() => oracleSettings({ guardMs: '410000' }), /the oracle setting guardMs is gone/);
   // The budget's earlier parts are unknown settings now.
   for (const k of ['maxSolves', 'maxNodes', 'maxSolveNodes', 'maxLpIterations']) {
     assert.equal(k in ORACLE_SETTINGS, false, k);

@@ -37,7 +37,8 @@
 //    redacted, the run time, each step's outcome, error class and time, and
 //    three checks, each true, false or null (not reached), over the whole run:
 //    every intent parsed, every built transaction passed the ledger checks,
-//    and a replay reached the replay limit. Then what became of the
+//    and a watchdog set work aside (a replay, answer or oracle call stopped
+//    and run again to completion). Then what became of the
 //    wallet-level output: the run directory (history files, records, logs) is
 //    deleted whether the run succeeded or failed, unless --keep-for-debug is
 //    given and a step failed; a kept run is deleted later by --cleanup, which
@@ -47,7 +48,7 @@
 //
 // Nothing counted reaches the log, the progress lines or what the command
 // prints: the stages' totals are read in memory for the three checks only.
-// The repetitions are one of each (LIVE_FIRE_REPS) and the limits are the
+// The repetitions are one of each (LIVE_FIRE_REPS) and the watchdogs are the
 // study's; both are recorded in the start entry.
 
 import { existsSync, rmSync } from 'node:fs';
@@ -59,8 +60,8 @@ import { Refusal, connect } from '../history/db.mjs';
 import { IntentCheck } from '../history/rebuild.mjs';
 import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
-import { REPLAY_LIMIT_MS, ANSWER_LIMIT_MS, MAX_BUSY_THREADS } from '../replay/pool.mjs';
-import { ORACLE_SETTINGS } from '../oracle/settings.mjs';
+import { REPLAY_WATCHDOG_MS, ANSWER_WATCHDOG_MS } from '../replay/pool.mjs';
+import { ORACLE_SETTINGS, ORACLE_WATCHDOG_MS } from '../oracle/settings.mjs';
 import { STAGE_COMMAND } from './study.mjs';
 import { LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS } from '../options.mjs';
 import { readPick, readLog, appendEntry, sanitizeError, redactCommand, unclosedStarts, keptRun, isSimRunId, SIM_GATE, SIM_LIVE_FIRE_START, SIM_LIVE_FIRE, KEPT } from './checklog.mjs';
@@ -70,7 +71,6 @@ export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak',
 // study run takes runs at least once, and a run over ten mainnet wallets ends
 // in hours at most.
 export const LIVE_FIRE_REPS = Object.freeze({ repsH1: 1, repsVariants: 1, reps: 1 });
-export { MAX_BUSY_THREADS };
 
 const RUN_OPTIONS = new Set(LIVE_FIRE_RUN_OPTIONS);
 const CLEANUP_OPTIONS = new Set(LIVE_FIRE_CLEANUP_OPTIONS);
@@ -118,7 +118,6 @@ export function liveFireOptions(opts) {
   if (o.keepForDebug !== false && o.keepForDebug !== true) throw new Refusal('refusing: --keep-for-debug takes no value');
   if (!/^[a-z]+$/.test(o.expectNetwork)) throw new Refusal('refusing: --expect-network <name> names a network');
   if (isSimRunId(o.extractionRun)) throw new Refusal('refusing: --extraction-run names the extraction tool\'s run; sim- run IDs are the simulator\'s');
-  if (o.workers + o.oracleWorkers > MAX_BUSY_THREADS) throw new Refusal(`refusing: --workers and --oracle-workers together may keep at most ${MAX_BUSY_THREADS} threads busy`);
   if (opts.bytes !== undefined) {
     if (opts.bytes !== 'tx_cbor' && opts.bytes !== 'immutable') throw new Refusal('refusing: --bytes tx_cbor | immutable');
     o.bytes = opts.bytes;
@@ -128,13 +127,13 @@ export function liveFireOptions(opts) {
   return o;
 }
 
-// What the run records of its plan: the stages, the repetitions and limits,
-// the workers. No wallet, count or path.
+// What the run records of its plan: the stages, the repetitions, the
+// watchdogs, the workers. No wallet, count or path.
 export function planOf(o) {
   return {
     stages: [...LIVE_FIRE_STAGES],
     repetitions: { h1: LIVE_FIRE_REPS.repsH1, variants: LIVE_FIRE_REPS.repsVariants, battery: LIVE_FIRE_REPS.reps },
-    limits_ms: { replay: REPLAY_LIMIT_MS, answer: ANSWER_LIMIT_MS, oracle_guard: ORACLE_SETTINGS.guardMs },
+    watchdogs_ms: { replay: REPLAY_WATCHDOG_MS, answer: ANSWER_WATCHDOG_MS, oracle: ORACLE_WATCHDOG_MS },
     oracle_budget: { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, program_work: ORACLE_SETTINGS.maxProgramWork },
     oracle: true,
     validity: true,
@@ -146,7 +145,7 @@ export function planOf(o) {
 
 // The options each stage's command runs with: the study's stage layout
 // (run ID <run id>/<stage>), every picked wallet in each history stage, the
-// pick's block by hash, one repetition, the study's limits (the commands'
+// pick's block by hash, one repetition, the study's watchdogs (the commands'
 // defaults), validity checks, and the oracle in the battery.
 export function liveFireStageOptions(stage, o, pick, network) {
   const id = (s) => `${o.runId}/${s}`;
@@ -190,20 +189,25 @@ export function errorClass(e) {
 // finish. intents: every spend of every history stage read into its event,
 // and each history file completed (a history check failing makes it false).
 // transactions: every transaction the replays and the battery built passed
-// the validity checks (no validity failure). replayLimit: a replay reached
-// its limit.
+// the validity checks (no validity failure). setAside: a watchdog stopped a
+// replay, an answer or an oracle call, which then ran again to completion
+// (the pools' counts in the replay and battery printouts).
 export function checksOf(results, failure) {
   const history = ['history-recent', 'history-peak', 'history-snapshot'];
   const built = ['replay-recent', 'replay-peak', 'battery'];
-  const replays = ['replay-recent', 'replay-peak'];
-  const totals = (s) => (results[s] && results[s].print && results[s].print.totals) || null;
+  const print = (s) => (results[s] && results[s].print) || null;
+  const totals = (s) => (print(s) && print(s).totals) || null;
   let intents = history.every((s) => results[s]) ? true : null;
   if (failure && history.includes(failure.stage) && failure.error instanceof IntentCheck) intents = false;
   const validity = built.map((s) => (totals(s) && totals(s).validity) || null);
   const transactions = validity.some((v) => v && v.failed > 0) ? false : validity.every((v) => v) ? true : null;
-  const timeouts = replays.map((s) => (totals(s) && Number.isInteger(totals(s).timeouts) ? totals(s).timeouts : null));
-  const replayLimit = timeouts.some((n) => n > 0) ? true : timeouts.every((n) => n !== null) ? false : null;
-  return { every_intent_parsed: intents, every_built_transaction_passed_ledger_checks: transactions, replay_reached_limit: replayLimit };
+  const stops = built.map((s) => {
+    const p = print(s);
+    const counts = p ? [p.workers, p.oracle].filter(Boolean).map((x) => x.watchdogStops) : [];
+    return counts.length && counts.every(Number.isInteger) ? counts.reduce((a, b) => a + b, 0) : null;
+  });
+  const setAside = stops.some((n) => n > 0) ? true : stops.every((n) => n !== null) ? false : null;
+  return { every_intent_parsed: intents, every_built_transaction_passed_ledger_checks: transactions, work_set_aside: setAside };
 }
 
 const codeFacts = (manifest) => ({ manifest_sha256: sha256(manifest()), node: process.version });

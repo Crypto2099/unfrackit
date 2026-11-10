@@ -13,7 +13,8 @@
 //                   strings
 //   timings.jsonl   wall-clock times, apart from the records so that a run
 //                   repeated with the same seeds writes byte-identical records
-//   log.jsonl       the run's log: start, each job's end or time-out, end
+//   log.jsonl       the run's log: start, each watchdog stop, machine rerun
+//                   or error, end
 // Directories are created 0700 and files 0600.
 //
 // Every record carries the key of the replay or battery spend it belongs to:
@@ -36,7 +37,7 @@
 import { join } from 'node:path';
 import { runDir, ensureDir, writeJson, JsonLines } from '../history/paths.mjs';
 
-export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'battery', 'h12', 'snapshot-plan', 'timeout', 'refused']);
+export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'battery', 'h12', 'snapshot-plan', 'refused']);
 export const KEY_FIELDS = Object.freeze(['wallet', 'window', 'arm', 'variant', 'method', 'change', 'collateral', 'repetition']);
 
 const BECH32_ADDR = /(addr|addr_test|stake|stake_test)1[02-9ac-hj-np-z]{20,}/;

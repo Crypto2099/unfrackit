@@ -81,12 +81,6 @@ export const ORACLE_SETTINGS = Object.freeze({
   // brute-force check fits in it, the largest using 0.93 of it.
   maxCandidateSets: 1500,
   maxProgramWork: 1115069,
-  // The guard: the parent terminates a worker whose call has not returned
-  // this long after it started, a wall-clock backstop set well above any
-  // budgeted call. A call it stops is undecided. 410,000 is three times the
-  // slowest call of the budget's verification run (all 21 synthetic shapes,
-  // 8 workers) by the parent's clock, 135.0 s, rounded up.
-  guardMs: 410000,
   // HiGHS's random_seed, set on every solve.
   solverSeed: 0
 });
@@ -103,7 +97,7 @@ const IMPLEMENTED = {
 // The numeric settings and the least value each takes; given as a string
 // (from a command line or the environment), a value must be a whole number
 // in decimal digits.
-const NUMERIC = { maxCandidateSets: 1, maxProgramWork: 1, guardMs: 1, solverSeed: 0 };
+const NUMERIC = { maxCandidateSets: 1, maxProgramWork: 1, solverSeed: 0 };
 const INT32_MAX = 2147483647;
 
 // The exhaustive path's constants: the pure-ADA UTxOs it adds, and the
@@ -114,6 +108,16 @@ export const EXHAUSTIVE_MAX = 24;
 // margin after which the parent terminates a worker that has not returned.
 export const TIME_LIMIT_MS = 60000;
 export const TERMINATE_MARGIN_MS = 5000;
+// Under the work budget: the watchdog on one call (oracle.mjs), an hour, far
+// above any budgeted call (the slowest call of the budget's verification run,
+// all 21 synthetic shapes at 8 workers, took 135.0 s by the parent's clock).
+// A call it stops runs again with the watchdog doubled, until it returns, and
+// is never recorded as stopped. It is not a setting: it changes no result, so no
+// result records it.
+export const ORACLE_WATCHDOG_MS = 3600 * 1000;
+
+// Settings an earlier version took, refused by name.
+const RETIRED = Object.freeze({ guardMs: 'the oracle setting guardMs is gone: a call runs to completion; the watchdog that makes a hung call run again is not a setting, since it changes no result' });
 
 function numeric(k, v) {
   const n = typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v;
@@ -124,6 +128,7 @@ function numeric(k, v) {
 export function oracleSettings(overrides = {}) {
   const s = { ...ORACLE_SETTINGS };
   for (const [k, v] of Object.entries(overrides)) {
+    if (Object.hasOwn(RETIRED, k)) throw new Error(RETIRED[k]);
     if (!(k in ORACLE_SETTINGS)) throw new Error(`unknown oracle setting ${k}`);
     if (k in NUMERIC) s[k] = numeric(k, v);
     else if (!IMPLEMENTED[k].includes(v)) throw new Error(`oracle setting ${k}=${v} is not implemented (implemented: ${IMPLEMENTED[k].join(', ')})`);

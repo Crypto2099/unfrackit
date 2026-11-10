@@ -29,21 +29,22 @@
 // battery-pools reads history-recent's files; the replays read their window's
 // files; the battery reads history-snapshot's files and battery-pools' pools.
 // Repetitions (--reps-h1, --reps-variants, --reps), workers (--workers,
-// --oracle-workers), limits (--limit-ms, --answer-limit-ms), the oracle
-// (--oracle, --oracle-settings) and --validity pass through to the replay and
-// battery stages; --analysis-freeze-tx to history, replay and battery. An
-// option the plan does not use is refused, and so are worker counts that
-// would keep more than 12 threads busy (replay/pool.mjs MAX_BUSY_THREADS),
-// before any stage starts.
+// --oracle-workers), the oracle (--oracle, --oracle-settings) and --validity
+// pass through to the replay and battery stages; --analysis-freeze-tx to
+// history, replay and battery. An option the plan does not use is refused,
+// and so is a worker count that is not a positive whole number, before any
+// stage starts.
 //
 // Layout, under the private root (history/paths.mjs):
-//   <network>/<id>/study.json   the header: plan, network, stages, options,
-//                               the input files' SHA-256 (treatment pins,
-//                               wallets, extraction run), the code manifest
-//                               (`hash`) and its SHA-256, Node
+//   <network>/<id>/study.json   the header: plan, network, stages, options
+//                               but the worker counts, the input files'
+//                               SHA-256 (treatment pins, wallets, extraction
+//                               run), the code manifest (`hash`) and its
+//                               SHA-256, Node
 //   <network>/<id>/log.jsonl    the study's log, appended: each invocation's
-//                               start or resume, each stage's start and its
-//                               end (with the stage's printed totals) or
+//                               start or resume with its worker counts and
+//                               machine (out/host.mjs), each stage's start
+//                               and its end (with the stage's printout) or
 //                               error, skipped stages, the end
 //   <network>/<id>/<stage>/     the stage's own run directory, written by its
 //                               command under run id <id>/<stage>
@@ -52,12 +53,14 @@
 //
 // Resume: running the same plan and run id again resumes it. The header must
 // equal the first start's in plan, network, stages, options (paths made
-// absolute), input files and code manifest, or the run is refused. A stage
+// absolute), input files and code manifest, or the run is refused. The worker
+// counts (--workers, --oracle-workers) are not compared: they change no
+// record, so a resume may use others, on this machine or another. A stage
 // whose end entry is in the log is skipped. Any other stage is rerun from its
 // start: its directory is removed first, so it is written as by an
 // uninterrupted run (the stages' records are deterministic but for the
-// unseeded selectors and the wall-clock limits). A live lock refuses a second
-// invocation; a lock whose process is gone (a kill) is replaced.
+// unseeded selectors). A live lock refuses a second invocation; a lock whose
+// process is gone (a kill) is replaced.
 //
 // A stage that throws stops the run, with its error in the log. A stage that
 // finishes with a failed check (a validity failure) has its end entry, marked
@@ -72,8 +75,9 @@ import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
-import { STUDY_PLAN_OPTIONS } from '../options.mjs';
-import { workerCount, checkBusyThreads } from '../replay/pool.mjs';
+import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS } from '../options.mjs';
+import { workerCount } from '../replay/pool.mjs';
+import { machineRecord } from '../out/host.mjs';
 
 const DB_STAGES = Object.freeze(['history-recent', 'history-peak', 'history-snapshot', 'census', 'near-cap', 'collateral']);
 const OFFLINE_STAGES = Object.freeze(['fidelity', 'battery-pools', 'replay-recent', 'replay-peak', 'battery']);
@@ -118,12 +122,11 @@ export function studyOptions(opts) {
   const unused = Object.keys(o).filter((k) => !ALLOWED[plan].has(k));
   if (unused.length) throw new Refusal(`refusing: the ${plan} plan does not use ${unused.map(flag).join(', ')}`);
   if (!o.treatment || o.treatment === true) throw new Refusal('refusing: --treatment <dir> names the treatment directory');
-  // The battery stage keeps the most threads busy: its workers and, with the
-  // oracle, the oracle's.
   try {
-    checkBusyThreads(workerCount(o.workers, '--workers'), o.oracle ? workerCount(o.oracleWorkers, '--oracle-workers') : 0);
+    workerCount(o.workers, '--workers');
+    workerCount(o.oracleWorkers, '--oracle-workers');
   } catch (e) {
-    throw new Refusal(e.message.startsWith('refusing: ') ? e.message : `refusing: ${e.message}`);
+    throw new Refusal(`refusing: ${e.message}`);
   }
   for (const k of PATHS) {
     if (o[k] === undefined) continue;
@@ -164,18 +167,23 @@ function inputDigests(o) {
   return d;
 }
 
+const withoutMachine = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !MACHINE_OPTIONS.includes(k)));
+
 export function studyHeader(o, { manifest = formatHashList } = {}) {
   const network = o.plan === 'synthetic' ? 'synthetic' : o.expectNetwork;
   const m = manifest();
-  return { command: 'study', plan: o.plan, network, runId: o.runId, stages: [...PLANS[o.plan]], options: o, inputs: inputDigests(o), manifestSha256: sha256(m), node: process.version, manifest: m };
+  return { command: 'study', plan: o.plan, network, runId: o.runId, stages: [...PLANS[o.plan]], options: withoutMachine(o), inputs: inputDigests(o), manifestSha256: sha256(m), node: process.version, manifest: m };
 }
 
-// What differs between a recorded header and this invocation's, by name.
+// What differs between a recorded header and this invocation's, by name; the
+// worker counts are not compared.
 export function headerDifferences(was, now) {
   const out = [];
   for (const k of ['plan', 'network', 'stages']) if (canonical(was[k]) !== canonical(now[k])) out.push(k);
-  const keys = [...new Set([...Object.keys(was.options || {}), ...Object.keys(now.options || {})])].sort();
-  for (const k of keys) if (canonical((was.options || {})[k]) !== canonical(now.options[k])) out.push(flag(k));
+  const wasOptions = withoutMachine(was.options);
+  const nowOptions = withoutMachine(now.options);
+  const keys = [...new Set([...Object.keys(wasOptions), ...Object.keys(nowOptions)])].sort();
+  for (const k of keys) if (canonical(wasOptions[k]) !== canonical(nowOptions[k])) out.push(flag(k));
   for (const k of [...new Set([...Object.keys(was.inputs || {}), ...Object.keys(now.inputs)])].sort()) if ((was.inputs || {})[k] !== now.inputs[k]) out.push(`the ${k} file`);
   if (was.manifestSha256 !== now.manifestSha256) out.push('the code manifest');
   return out;
@@ -302,8 +310,8 @@ export function stageOptions(stage, o, network) {
   const db = pick(o, ['expectNetwork', 'snapshot', 'extractionRun', 'bytes', 'immutableDir', 'immutableHost']);
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
-  const replayOpts = pick(o, ['repsH1', 'repsVariants', 'workers', 'limitMs', 'validity']);
-  const batteryOpts = pick(o, ['reps', 'workers', 'answerLimitMs', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity']);
+  const replayOpts = pick(o, ['repsH1', 'repsVariants', 'workers', 'validity']);
+  const batteryOpts = pick(o, ['reps', 'workers', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity']);
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':
@@ -358,7 +366,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     const done = new Map();
     for (const e of StudyLog.entries(logPath)) if (e.event === 'stage-end') done.set(e.stage, e);
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256 });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: o.oracle ? workerCount(o.oracleWorkers, '--oracle-workers') : 0 }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {

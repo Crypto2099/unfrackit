@@ -24,6 +24,7 @@
 
 import { negativeControls, EXPECTED } from './controls.mjs';
 import { inspectTx } from './inspect.mjs';
+import { passMachineErrors } from './machine.mjs';
 
 const MAX_DETAILS = 20;
 const CONTROLS = Object.freeze(['fee', 'size', 'value', 'witnesses']);
@@ -57,6 +58,7 @@ export function checkValidity(v, at, index, state, params, bytes, ctx) {
   try {
     c = negativeControls(state, params, bytes, ctx);
   } catch (e) {
+    passMachineErrors(e);
     fail(v, at, index, 'controls', `a control could not be built: ${String(e && e.message || e)}`);
   }
   if (c) for (const k of ['base', ...CONTROLS]) {
@@ -70,6 +72,7 @@ export function checkValidity(v, at, index, state, params, bytes, ctx) {
     again = inspectTx(Buffer.from(t.to_bytes()).toString('hex'));
     t.free();
   } catch (e) {
+    passMachineErrors(e);
     fail(v, at, index, 'csl read', String(e && e.message || e));
     return;
   }

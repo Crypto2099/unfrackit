@@ -26,7 +26,7 @@ function sample(key, command) {
   if (key === 'methods') return 'test';
   if (key === 'bytes') return 'tx_cbor';
   if (key === 'window') return 'blocks:10-20';
-  if (['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants', 'testReps', 'limitMs', 'answerLimitMs', 'days', 'batch'].includes(key)) return '3';
+  if (['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants', 'testReps', 'days', 'batch'].includes(key)) return '3';
   return 'x';
 }
 const argvOf = (key, command, spec) => (spec.flags.includes(key) ? [flagOf(key)] : [flagOf(key), sample(key, command)]);
@@ -151,7 +151,7 @@ test('closed values: methods, bytes, plan and window', () => {
 });
 
 test('whole-number options: positive whole numbers only', () => {
-  const byCommand = { replay: ['workers', 'testReps', 'repsH1', 'repsVariants', 'limitMs'], battery: ['workers', 'oracleWorkers', 'reps', 'answerLimitMs'], collateral: ['days', 'batch'], study: ['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants', 'limitMs', 'answerLimitMs'], 'live-fire': ['workers', 'oracleWorkers'] };
+  const byCommand = { replay: ['workers', 'testReps', 'repsH1', 'repsVariants'], battery: ['workers', 'oracleWorkers', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants'], 'live-fire': ['workers', 'oracleWorkers'] };
   for (const [command, keys] of Object.entries(byCommand)) {
     for (const k of keys) {
       assert.equal(parseArgs([flagOf(k), '12'], command)[k], '12');
@@ -166,6 +166,11 @@ test('a value never begins with --', () => {
 
 test('an option an earlier version took is refused with the reason, wherever it appears', () => {
   for (const c of ['battery', 'study', 'replay']) refused(['--oracle-limit-ms', '5000'], c, /--oracle-limit-ms is gone: the oracle stops on its work budget/);
+  // The time limits: no time limit decides a result.
+  for (const c of ['replay', 'study', 'battery', 'live-fire']) {
+    refused(['--limit-ms', '300000'], c, /--limit-ms is gone: no time limit decides a result/);
+    refused(['--answer-limit-ms', '60000'], c, /--answer-limit-ms is gone: no time limit decides a result/);
+  }
 });
 
 test('the study and live-fire sets come from the lists their modules read', () => {

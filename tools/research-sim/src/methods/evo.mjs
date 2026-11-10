@@ -163,6 +163,7 @@ import * as E from '@evolution-sdk/evolution';
 import { makeTxBuilder, voterToKey } from '@evolution-sdk/evolution/sdk/builders/TransactionBuilder';
 import * as CostModel from '@evolution-sdk/evolution/CostModel';
 import { CLASSES } from '../kit/check.mjs';
+import { passMachineErrors } from '../kit/machine.mjs';
 import { unspentOutputParts, inspectTx } from '../kit/inspect.mjs';
 import { replayRefusal, emptyAuxiliaryData, listItems, requiredSigners, replayWitnessKeys, redeemerKey, targetKey, intentScripts } from '../kit/replay.mjs';
 import { blake2b256 } from '../history/blake2b.mjs';
@@ -613,6 +614,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
       options.protocolParameters = evoProtocolParameters(params);
     }
   } catch (e) {
+    passMachineErrors(e);
     return { ok: false, class: CLASSES.other, detail: `replay parts: ${errorText(e)}` };
   }
   if (unfrack) options.unfrack = unfrack;
@@ -620,6 +622,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   try {
     r = await b.buildEither(options);
   } catch (e) {
+    passMachineErrors(e);
     return { ok: false, class: classOfEvoError(e), detail: `build: ${errorText(e)}` };
   }
   if (r._tag === 'Left') {

@@ -8,7 +8,9 @@
 // (the spend-plus-tidy cost of H-12).
 //
 // A method's exception is a build failure of class 'other' with its text; a
-// StopPoint (the treatment and the kit disagree) stops the run. The CSL heap
+// StopPoint (the treatment and the kit disagree) stops the run, and an error
+// the machine can cause is thrown on unless this attempt records them
+// (kit/machine.mjs). The CSL heap
 // is settled before each spend (kit/heap.mjs), and the method's time is
 // measured after it.
 
@@ -17,6 +19,7 @@ import { planState, StopPoint } from '../treatment/run.mjs';
 import { checkResult, checkOptions } from '../methods/contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { settle } from '../kit/heap.mjs';
+import { passMachineErrors } from '../kit/machine.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
@@ -33,6 +36,7 @@ export async function runSpend(T, { state, params, intent, method, opts, tidySet
     r = checkResult(method, await method.build(state, intent, params, opts));
   } catch (e) {
     if (e instanceof StopPoint) throw e;
+    passMachineErrors(e);
     r = { ok: false, class: CLASSES.other, detail: String(e && (e.message || e)) };
   }
   const ms = performance.now() - t0;

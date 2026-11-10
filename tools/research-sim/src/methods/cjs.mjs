@@ -137,6 +137,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { roundRobinRandomImprove, InputSelectionError, InputSelectionFailure } from '@cardano-sdk/input-selection';
 import { CLASSES } from '../kit/check.mjs';
+import { passMachineErrors } from '../kit/machine.mjs';
 import { assembleOnce, assembleAtMinimumFee, outputBytes } from '../kit/assemble.mjs';
 import { assembleReplayOnce, assembleReplayAtMinimumFee, setAsideCollateralFor, replayRefusal, NotReplayable } from '../kit/replay.mjs';
 import { addressTextOf } from '../state/utxo.mjs';
@@ -343,6 +344,7 @@ export function cjsMethod(T, { bundleCoin = SIM_SETTINGS.cjsBundleCoin } = {}) {
           implicitValue: replay ? cjsImplicitValue(intent.implicit) : {}
         });
       } catch (e) {
+        passMachineErrors(e);
         if (e instanceof NotReplayable) return { ok: false, class: NOT_REPLAYABLE, detail: e.message };
         return { ok: false, class: classOfCjsError(e), detail: `roundRobinRandomImprove: ${errorText(e)}` };
       } finally {

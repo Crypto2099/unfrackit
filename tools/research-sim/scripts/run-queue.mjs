@@ -6,7 +6,7 @@
 // its own process group with a wall-clock limit, and records what happened in
 // a state file so that a stopped queue resumes where it left off. It runs
 // commands and nothing else: it knows nothing of the simulator, whose own
-// commands enforce their thread caps and limits. Node built-ins only. See the
+// commands check their options. Node built-ins only. See the
 // README section "Running jobs unattended".
 //
 //   node scripts/run-queue.mjs run <queue.json> [--continue-on-failure] [--rerun-interrupted] [--detach]

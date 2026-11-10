@@ -7,27 +7,31 @@
 //           (--history <file or directory>... | --shapes <names|all>)
 //           --plan recent | peak | test [--reps-h1 <n>] [--reps-variants <n>]
 //           [--test-reps <n>] [--run-id <id>] [--workers <n>]
-//           [--limit-ms <ms>] [--analysis-freeze-tx <hash>] [--validity]
+//           [--analysis-freeze-tx <hash>] [--validity]
 //   battery --treatment <dir> [--treatment-pins <file>]
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
-//           [--run-id <id>] [--workers <n>] [--answer-limit-ms <ms>] [--validity]
+//           [--run-id <id>] [--workers <n>] [--validity]
 //           [--oracle [--oracle-workers <n>]
 //           [--oracle-settings <name>=<value>,...]]
 //
 // A history directory is read for its *.jsonl files. A test plan runs the
 // test method only and is never a study run. Results go to the private run
-// directory (out/records.mjs); the command prints counts only. A run keeps at
-// most MAX_BUSY_THREADS (12) threads busy: replay refuses more --workers,
-// battery more --workers and --oracle-workers together (pool.mjs), and
-// run.json records the counts and the cap. The battery's oracle stops on its
-// work budget; --oracle-limit-ms and the wall-clock limit (oracle setting
-// limit=wall-clock, kept for the oracle's checks) are refused.
+// directory (out/records.mjs); the command prints counts only. No time limit
+// decides a result: every replay, answer and oracle call runs to completion,
+// under watchdogs that only make hung work run again (pool.mjs,
+// oracle/oracle.mjs). The worker counts change no record; run.json records
+// them with the machine (`machine`, out/host.mjs) apart from the options, and
+// the printout gives the pools' counts of watchdog stops and machine reruns
+// beside the totals. The battery's oracle stops on its work budget; the
+// wall-clock limit (oracle setting limit=wall-clock, kept for the oracle's
+// checks) is refused, and --limit-ms, --answer-limit-ms and --oracle-limit-ms
+// are gone (options.mjs).
 
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadTreatment, DEFAULT_PINS } from '../treatment/bridge.mjs';
-import { Pool, REPLAY_LIMIT_MS, ANSWER_LIMIT_MS, workerCount, checkBusyThreads } from './pool.mjs';
+import { Pool, workerCount } from './pool.mjs';
 import { runReplays, runBatteries } from './run.mjs';
 import { windowPlan, testPlan, STUDY_ROLES, TEST_ROLES, batteryPlan } from '../arms/plan.mjs';
 import { RunOutput } from '../out/records.mjs';
@@ -38,7 +42,8 @@ import { loadSource } from './source.mjs';
 import { assignPopulation, countPopulation } from '../battery/population.mjs';
 import { createBatteryOracle } from '../oracle/battery-hook.mjs';
 import { oracleSettings } from '../oracle/settings.mjs';
-import { ORACLE_LIMIT_MS_GONE } from '../options.mjs';
+import { ORACLE_LIMIT_MS_GONE, MACHINE_OPTIONS } from '../options.mjs';
+import { machineRecord } from '../out/host.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 
@@ -93,18 +98,17 @@ export function poolsOf(p) {
   return { t1: t1.map(BigInt), t5: t5.map((x) => x.map(BigInt)) };
 }
 
-// The run's busy threads, checked against the cap before anything starts:
-// the replay or battery workers, and the battery's oracle workers when it
-// runs the oracle.
-export function threadsOf(opts, command) {
+// The run's workers, checked before anything starts: the replay or battery
+// workers, and the battery's oracle workers when it runs the oracle.
+export function workersOf(opts, command) {
   const workers = workerCount(opts.workers, '--workers');
   const oracleWorkers = command === 'battery' && opts.oracle ? workerCount(opts.oracleWorkers, '--oracle-workers') : 0;
-  return checkBusyThreads(workers, oracleWorkers);
+  return { workers, oracleWorkers };
 }
 
 async function setup(opts, command) {
   if (!opts.treatment) throw new Error('--treatment <dir> names the treatment directory');
-  const threads = threadsOf(opts, command);
+  const threads = workersOf(opts, command);
   const pinsPath = pinsPathOf(opts);
   const T = await loadTreatment(opts.treatment, readFileSync(pinsPath, 'utf8'));
   const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: threads.workers });
@@ -122,15 +126,18 @@ export function batteryOracleSettings(opts) {
   return s;
 }
 
-function header(command, opts, T, extra) {
+// run.json: what the run ran under, and apart from it (`machine`) the worker
+// counts and the machine, which change no record.
+function header(command, opts, T, threads, extra) {
   return {
     command,
-    options: Object.fromEntries(Object.entries(opts).filter(([k]) => k !== '_')),
+    options: Object.fromEntries(Object.entries(opts).filter(([k]) => k !== '_' && !MACHINE_OPTIONS.includes(k))),
     settings: SIM_SETTINGS,
     treatmentPins: Object.fromEntries(T.pins),
     node: process.version,
     manifest: formatHashList(),
-    ...extra
+    ...extra,
+    machine: machineRecord(threads)
   };
 }
 
@@ -142,10 +149,10 @@ export async function cmdReplay(opts) {
   const first = loadSource(T, wallets[0].spec);
   const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, { reps: { h1: opts.repsH1 ? Number(opts.repsH1) : undefined, variants: opts.repsVariants ? Number(opts.repsVariants) : undefined } });
   const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
-  const out = new RunOutput(first.network, runId, header('replay', opts, T, { plan, entries, threads }));
+  const out = new RunOutput(first.network, runId, header('replay', opts, T, threads, { plan, entries }));
   out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
   try {
-    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, limitMs: Number(opts.limitMs || REPLAY_LIMIT_MS), validity: !!opts.validity });
+    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats });
     return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
@@ -170,12 +177,12 @@ export async function cmdBattery(opts) {
   const pools = opts.pools ? poolsOf(JSON.parse(readFileSync(opts.pools, 'utf8'))) : undefined;
   // The oracle is off unless asked for: it takes up to about a minute per
   // spend and change policy.
-  const out = new RunOutput(first.network, runId, header('battery', opts, T, { methods, threads, population: countPopulation(wallets), ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
+  const out = new RunOutput(first.network, runId, header('battery', opts, T, threads, { methods, population: countPopulation(wallets), ...(oracleSettingsUsed ? { oracle: { settings: oracleSettingsUsed } } : {}) }));
   out.note({ event: 'start', wallets: wallets.length });
   let oracle = null;
   try {
-    if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: threads.oracleWorkers, settings: oracleSettingsUsed });
-    const totals = await runBatteries(T, pool, { wallets, methods, out, answerLimitMs: Number(opts.answerLimitMs || ANSWER_LIMIT_MS), pools, oracle, validity: !!opts.validity });
+    if (oracleSettingsUsed) oracle = await createBatteryOracle({ treatmentDir: resolve(opts.treatment), pinsText: readFileSync(pinsPathOf(opts), 'utf8'), workers: threads.oracleWorkers, settings: oracleSettingsUsed, note: (e) => out.note({ ...e, oracle: true }) });
+    const totals = await runBatteries(T, pool, { wallets, methods, out, pools, oracle, validity: !!opts.validity });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) });
     return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats, ...(oracle ? { oracle: oracle.stats } : {}) }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
