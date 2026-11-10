@@ -48,7 +48,7 @@ function setup(jobs, extra = {}) {
   };
   const file = join(dir, 'queue.json');
   writeFileSync(file, JSON.stringify(q));
-  const env = { ...process.env, QUEUE_TEST_LOG: join(dir, 'order.log'), QUEUE_TEST_PIDS: join(dir, 'pids'), QUEUE_TEST_ENV_OUT: join(dir, 'env.out') };
+  const env = { ...process.env, QUEUE_TEST_LOG: join(dir, 'order.log'), QUEUE_TEST_PIDS: join(dir, 'pids'), QUEUE_TEST_ENV_OUT: join(dir, 'env.out'), QUEUE_TEST_READY: join(dir, 'ready'), QUEUE_TEST_TERM: join(dir, 'term') };
   return { dir, file, env, out: join(dir, 'out'), q };
 }
 const rewrite = (s, q) => writeFileSync(s.file, JSON.stringify(q));
@@ -111,16 +111,36 @@ test('a timeout ends the job and the grandchild it started', () => {
   assert.ok(!alive(gc));
 });
 
+// The first time in a file of times, one per line, or null.
+const firstTime = (path) => (existsSync(path) ? Number(readFileSync(path, 'utf8').split('\n')[0]) : null);
+
 test('a group that ignores SIGTERM gets SIGKILL after the grace period', () => {
-  const s = setup([{ id: 'stubborn', cwd: '.', argv: [process.execPath, JOB, 's', 'ignore-term', 'grandchild:ignore-term', 'sleep:60000'], timeoutMinutes: 0.02 }]);
-  const t0 = Date.now();
-  const r = spawnSync(process.execPath, [RUNNER, 'run', s.file], { env: { ...s.env, RUN_QUEUE_KILL_GRACE_MS: '700' }, encoding: 'utf8' });
-  assert.equal(r.status, 1);
-  assert.ok(Date.now() - t0 >= 1800, 'waited for the grace period');
-  assert.equal(st(s, 'stubborn').status, 'timeout');
-  const [pid, gc] = readFileSync(join(s.dir, 'pids'), 'utf8').trim().split(' ').map(Number);
-  assert.ok(!groupAlive(pid));
-  assert.ok(!alive(gc));
+  // The grace is measured from the SIGTERM the job's handler saw to the
+  // runner's exit, which comes only after the group is gone. A SIGTERM that
+  // reaches the job before its handlers and its grandchild's are in place
+  // (Node starting slowly on a loaded machine) tests nothing, so that attempt
+  // is run again with twice the job's limit.
+  const GRACE = 1000;
+  for (let attempt = 1, minutes = 0.02; ; attempt++, minutes *= 2) {
+    const s = setup([{ id: 'stubborn', cwd: '.', argv: [process.execPath, JOB, 's', 'ignore-term', 'grandchild:ignore-term', 'ready', 'sleep:60000'], timeoutMinutes: minutes }]);
+    const r = spawnSync(process.execPath, [RUNNER, 'run', s.file], { env: { ...s.env, RUN_QUEUE_KILL_GRACE_MS: String(GRACE) }, encoding: 'utf8' });
+    const ended = Date.now();
+    assert.equal(r.status, 1);
+    assert.equal(st(s, 'stubborn').status, 'timeout');
+    const ready = firstTime(join(s.dir, 'ready'));
+    const term = firstTime(join(s.dir, 'term'));
+    if (ready === null || term === null || term < ready) {
+      assert.ok(attempt < 5, `the job was not ready before its limit in ${attempt} attempts`);
+      continue;
+    }
+    // The signal's delivery to the handler can lag the runner's SIGTERM; 200
+    // ms of a 1-second grace is allowed for it.
+    assert.ok(ended - term >= GRACE - 200, `SIGKILL came ${ended - term} ms after the SIGTERM, before the ${GRACE} ms grace`);
+    const [pid, gc] = readFileSync(join(s.dir, 'pids'), 'utf8').trim().split(' ').map(Number);
+    assert.ok(!groupAlive(pid));
+    assert.ok(!alive(gc));
+    return;
+  }
 });
 
 test('before failing skips the job and after still runs', () => {
