@@ -8,7 +8,7 @@
 // are created 0700 and files 0600. RESEARCH_SIM_HOME overrides the root
 // (tests use a temporary one).
 
-import { mkdirSync, writeFileSync, chmodSync, openSync, writeSync, closeSync } from 'node:fs';
+import { mkdirSync, writeFileSync, chmodSync, openSync, writeSync, readSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -57,7 +57,28 @@ export class JsonLines {
     chmodSync(path, 0o600);
   }
   write(obj) {
-    writeSync(this.fd, toJson(obj) + '\n');
+    this.line(toJson(obj));
+  }
+  // One line given as its JSON text.
+  line(text) {
+    writeSync(this.fd, text + '\n');
+  }
+  // Another file's bytes, appended as they are. Returns the number of lines
+  // appended (newlines copied).
+  append(path) {
+    const fd = openSync(path, 'r');
+    const buf = Buffer.allocUnsafe(1 << 20);
+    let lines = 0;
+    try {
+      for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) {
+        const chunk = buf.subarray(0, n);
+        for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, i + 1)) lines++;
+        for (let off = 0; off < n;) off += writeSync(this.fd, chunk, off, n - off);
+      }
+    } finally {
+      closeSync(fd);
+    }
+    return lines;
   }
   close() {
     closeSync(this.fd);

@@ -15,6 +15,10 @@
 //                   repeated with the same seeds writes byte-identical records
 //   log.jsonl       the run's log: start, each watchdog stop, machine rerun
 //                   or error, end
+//   spool/          while a replay run runs: each job's records, written by
+//                   the worker that ran it (out/spool.mjs), and the wallet's
+//                   segment they are committed to in job order; removed when
+//                   the run ends
 // Directories are created 0700 and files 0600.
 //
 // Every record carries the key of the replay or battery spend it belongs to:
@@ -35,7 +39,8 @@
 // stream.
 
 import { join } from 'node:path';
-import { runDir, ensureDir, writeJson, JsonLines } from '../history/paths.mjs';
+import { openSync, readSync, closeSync, unlinkSync } from 'node:fs';
+import { runDir, ensureDir, writeJson, JsonLines, toJson } from '../history/paths.mjs';
 
 export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'battery', 'h12', 'snapshot-plan', 'refused']);
 export const KEY_FIELDS = Object.freeze(['wallet', 'window', 'arm', 'variant', 'method', 'change', 'collateral', 'repetition']);
@@ -101,45 +106,144 @@ export function record(kind, key, fields) {
   return assertClean({ kind, ...recordKey(key), ...scrub(fields, null) });
 }
 
-// A run's directory and its files.
-export class RunOutput {
-  constructor(network, runId, header) {
-    this.dir = ensureDir(runDir(network, runId));
-    writeJson(join(this.dir, 'run.json'), { ...header, network, runId });
-    this.records = new JsonLines(join(this.dir, 'records.jsonl'));
-    this.timings = new JsonLines(join(this.dir, 'timings.jsonl'));
-    this.log = new JsonLines(join(this.dir, 'log.jsonl'));
+// A record as RunOutput writes it: its line of records.jsonl (the JSON text,
+// without the newline) and its wall-clock fields (ms, at any depth) by path,
+// for timings.jsonl. Pure, so that a worker can prepare the lines a run
+// writes.
+export function prepare(rec) {
+  assertClean(rec);
+  const times = {};
+  const strip = (v, p) => {
+    if (Array.isArray(v)) return v.map((x, i) => strip(x, `${p}[${i}]`));
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const [k, x] of Object.entries(v)) {
+        if (k === 'ms' && typeof x === 'number') times[p ? `${p}.ms` : 'ms'] = x;
+        else o[k] = strip(x, p ? `${p}.${k}` : k);
+      }
+      return o;
+    }
+    return v;
+  };
+  return { line: toJson(strip(rec, '')), times };
+}
+
+// A line of timings.jsonl: the times of record number n, under the record's
+// kind and key.
+export const timingLine = (n, rec, times) => toJson({ n, kind: rec.kind, ...recordKey(rec), times });
+
+const addCounts = (to, from) => {
+  for (const [k, c] of Object.entries(from)) to[k] = (to[k] || 0) + c;
+};
+
+// Calls fn with each line of a file, without its newline, reading a mebibyte
+// at a time. A file that does not end with a newline is refused.
+function eachLine(path, fn) {
+  const fd = openSync(path, 'r');
+  const buf = Buffer.allocUnsafe(1 << 20);
+  let carry = Buffer.alloc(0);
+  try {
+    for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) {
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
+      let start = 0;
+      for (let i = chunk.indexOf(10); i !== -1; start = i + 1, i = chunk.indexOf(10, start)) fn(chunk.toString('utf8', start, i));
+      carry = Buffer.from(chunk.subarray(start));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  if (carry.length) throw new Error(`${path} ends inside a line`);
+}
+
+// Records and their times, numbered on from n: written one at a time, or
+// committed from a replay job's spool (out/spool.mjs).
+class RecordLines {
+  constructor(recordsPath, timingsPath, n = 0) {
+    this.records = new JsonLines(recordsPath);
+    this.timings = new JsonLines(timingsPath);
+    this.n = n;
     this.counts = {};
   }
   // A record; its wall-clock fields (ms, at any depth) go to timings.jsonl
   // under the record's key and number.
   write(rec) {
-    assertClean(rec);
-    const n = (this.n = (this.n || 0) + 1);
-    const times = {};
-    const strip = (v, p) => {
-      if (Array.isArray(v)) return v.map((x, i) => strip(x, `${p}[${i}]`));
-      if (v && typeof v === 'object') {
-        const o = {};
-        for (const [k, x] of Object.entries(v)) {
-          if (k === 'ms' && typeof x === 'number') times[p ? `${p}.ms` : 'ms'] = x;
-          else o[k] = strip(x, p ? `${p}.${k}` : k);
-        }
-        return o;
-      }
-      return v;
-    };
-    const clean = strip(rec, '');
-    this.records.write(clean);
-    if (Object.keys(times).length) this.timings.write({ n, kind: rec.kind, ...recordKey(rec), times });
+    const { line, times } = prepare(rec);
+    const n = ++this.n;
+    this.records.line(line);
+    if (Object.keys(times).length) this.timings.line(timingLine(n, rec, times));
     this.counts[rec.kind] = (this.counts[rec.kind] || 0) + 1;
+  }
+  // A job's spooled records after those written so far: its record lines as
+  // the worker wrote them, its timing rows renumbered to follow on, then its
+  // held row (spool.mjs); the job's spool files are removed. The lines are
+  // the ones write() would have written for the same records.
+  commit(s) {
+    const base = this.n;
+    const lines = this.records.append(s.records);
+    if (lines !== s.count) throw new Error(`${s.records} holds ${lines} records, not the ${s.count} its job wrote`);
+    eachLine(s.timings, (line) => {
+      const m = /^\{"n":([1-9]\d*),/.exec(line);
+      if (!m || Number(m[1]) > s.count) throw new Error(`${s.timings}: not a timing row of its job`);
+      this.timings.line(`{"n":${base + Number(m[1])},${line.slice(m[0].length)}`);
+    });
+    if (s.held) this.timings.line(timingLine(base + s.held.n, { kind: s.held.kind, ...s.held.key }, s.held.times));
+    this.n = base + s.count;
+    addCounts(this.counts, s.counts);
+    unlinkSync(s.records);
+    unlinkSync(s.timings);
+  }
+  close() {
+    this.records.close();
+    this.timings.close();
+  }
+}
+
+// A run's directory and its files.
+export class RunOutput extends RecordLines {
+  constructor(network, runId, header) {
+    const dir = ensureDir(runDir(network, runId));
+    writeJson(join(dir, 'run.json'), { ...header, network, runId });
+    super(join(dir, 'records.jsonl'), join(dir, 'timings.jsonl'));
+    this.dir = dir;
+    this.log = new JsonLines(join(dir, 'log.jsonl'));
+  }
+  // A wallet's segment in directory dir: its records, numbered on from those
+  // written so far, kept apart until adopt() appends them whole.
+  segment(dir) {
+    return new Segment(dir, this.n);
+  }
+  // A segment's records and times appended after those written so far, and
+  // its files removed. The segment must have been opened after the last
+  // record written, so the numbers follow on.
+  adopt(seg) {
+    if (seg.base !== this.n) throw new Error(`a segment opened after record ${seg.base} cannot follow record ${this.n}`);
+    seg.close();
+    this.records.append(seg.records.path);
+    this.timings.append(seg.timings.path);
+    this.n = seg.n;
+    addCounts(this.counts, seg.counts);
+    seg.remove();
   }
   note(entry) {
     this.log.write({ at: new Date().toISOString(), ...entry });
   }
   close() {
-    this.records.close();
-    this.timings.close();
+    super.close();
     this.log.close();
+  }
+}
+
+// One wallet's records in a replay run: its jobs' spools committed in job
+// order, then its trigger records, appended to the run's when complete
+// (RunOutput.adopt).
+export class Segment extends RecordLines {
+  constructor(dir, base) {
+    ensureDir(dir);
+    super(join(dir, 'records.jsonl'), join(dir, 'timings.jsonl'), base);
+    this.base = base;
+  }
+  remove() {
+    unlinkSync(this.records.path);
+    unlinkSync(this.timings.path);
   }
 }
