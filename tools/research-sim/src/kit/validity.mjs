@@ -94,6 +94,15 @@ export function summarize(v) {
   return { txs: v.txs, cslRead: v.cslRead, cslOutputBytes: v.cslOutputBytes, cslReencoded: v.cslReencoded, controls: { ...v.controls }, notApplicable: { ...v.notApplicable }, failed: v.failed, ...(v.details.length ? { failures: v.details } : {}) };
 }
 
+// Adds the counts and failures of accumulator b, made apart from a, to a, as
+// if a had checked b's transactions after its own.
+export function mergeValidity(a, b) {
+  for (const k of ['txs', 'cslRead', 'cslOutputBytes', 'cslReencoded', 'failed']) a[k] += b[k];
+  for (const k of CONTROLS) a.controls[k] += b.controls[k];
+  for (const k of ['fee', 'value']) a.notApplicable[k] += b.notApplicable[k];
+  for (const d of b.details) if (a.details.length < MAX_DETAILS) a.details.push(d);
+}
+
 // The sum of summaries.
 export function sumValidity(list) {
   const t = { txs: 0, cslRead: 0, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 0, size: 0, value: 0, witnesses: 0 }, notApplicable: { fee: 0, value: 0 }, failed: 0 };

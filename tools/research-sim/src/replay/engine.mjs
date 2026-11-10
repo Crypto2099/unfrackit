@@ -103,7 +103,7 @@
 import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap, heldOutputRefs, heldInputsFromState } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
-import { newValidity, summarize } from '../kit/validity.mjs';
+import { newValidity, mergeValidity, summarize } from '../kit/validity.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
@@ -121,6 +121,30 @@ import { decode, raw } from '../history/cbor.mjs';
 import { settle } from '../kit/heap.mjs';
 import { makeRng } from '../shapes/rng.mjs';
 import { passMachineErrors } from '../kit/machine.mjs';
+
+// The start plan is a function of the wallet's source, the planner settings
+// the arm and variant give (the repetition enters them only as a seed, for
+// random-tidy and H-2's random grouping), the arrival table, the change
+// address, the protocol parameters and the validity mode; it does not depend on the method. A worker
+// keeps the plans it has made for a source, with the validity counts they
+// added, and every later job of that wallet with the same settings takes them
+// instead of planning again. A plan is only read after it is made: its states
+// and transactions are frozen records.
+const START_PLANS = new WeakMap();
+
+function startPlan(T, source, state, params, settings, { validity, arrival }) {
+  const key = JSON.stringify([settings, arrival !== null, validity !== null, state.changeAddress], (_k, v) => (typeof v === 'bigint' ? `${v}n` : v));
+  let bySource = START_PLANS.get(source);
+  if (!bySource || bySource.params !== params) START_PLANS.set(source, (bySource = { params, plans: new Map() }));
+  let hit = bySource.plans.get(key);
+  if (!hit) {
+    const local = validity ? newValidity(T.CSL) : null;
+    hit = { plan: planState(T, state, params, settings, { arrival, validity: local ? { acc: local, at: 'plan start' } : null }), local };
+    bySource.plans.set(key, hit);
+  }
+  if (validity && hit.local) mergeValidity(validity, hit.local);
+  return hit.plan;
+}
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 const MONTH = 30 * 86400;
@@ -315,7 +339,9 @@ export async function replay(T, params, source, job) {
       return;
     }
     const arrival = needsArrival(variant) ? arrivalMap(state, arrivalTable) : null;
-    const p = planState(T, state, params, settings, { arrival, validity: vcheck(`plan ${at}`) });
+    const p = at === 'start'
+      ? startPlan(T, source, state, params, settings, { validity, arrival })
+      : planState(T, state, params, settings, { arrival, validity: vcheck(`plan ${at}`) });
     let trigger = null;
     if (arm === 'maintained-tidy' && (settings.pureAdaOnly || 'rules') === 'rules' && p.plan.txs.length) {
       const never = planOnly(T, state, params, { ...settings, pureAdaOnly: 'never' }, { arrival });
