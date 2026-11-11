@@ -5,17 +5,17 @@
 // tip with the dev db-sync instance stopped; h is the epoch nonce that the
 // draw key's epoch rule names for the block of S1's seeding transaction, read
 // from the database and from Koios; guard 1,000 so the guard path runs; the
-// real targets (2,400, 1,000, 600 and 1,200), which preprod does not meet. The
-// flow table adds up stage by stage; the funder and S1 stay in the
-// frames like any wallet, and own-drawn counts them in the drawn samples
-// without writing anything; S1 is never token-holding;
-// S3 and M2 are token-holding, M2 with at least 100 assets, and both are in
-// the sample (the strata of their policies); S3 has one spend event (the
-// sweep), M2 and S1 none; no franken flags on the shapes; the profile
-// features agree with the frame; the scam screen keeps a test list's
-// policies out of every part, and the later list flags the M2 stratum; the
-// fungible floor, part 4
-// and the split follow their rules; the run repeated gives identical tables.
+// real sample size (1,000) and quotas, which preprod does not fill within the
+// guard. The flow table adds up stage by stage; the funder and S1 stay in the
+// frames like any wallet, and own-drawn counts them in the frames' samples
+// without writing anything; S1 is never token-holding; S3 and M2 are
+// token-holding, M2 with at least 100 assets; S3 has one spend event (the
+// sweep), M2 and S1 none, so none of the three is a candidate of the draw.
+// The sample, its size groups, the drawn and taken counts per group and the
+// cap fields agree with the rule computed here from the frame and the life
+// table; every sample row carries its frame's fragmentation flag; the franken
+// step covers the sampled wallets; the profile features agree with the frame;
+// the split follows its rule; the run repeated gives identical tables.
 // T12. The first run captures EXPLAIN (ANALYZE, BUFFERS), wall time and rows
 // of every step into its run directory.
 
@@ -30,26 +30,7 @@ import { encode } from '../../src/bech32.mjs';
 import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
 import { Runner } from '../../src/runner.mjs';
-import { fixtureRepo } from '../lib/gitfixture.mjs';
-import { captureScamList } from '../../src/scam-list.mjs';
-import { scamRecheck } from '../../src/pipeline.mjs';
-import { runDir, writePrivate } from '../../src/paths.mjs';
-
-// A test scam list in the registry's format, of preprod assets: sUSDr (whose
-// policy also holds USDr, a part 2 candidate unlisted here), RIGEL, one asset
-// of an NFT policy that ranks on preprod, the first CIP-14 test vector (not
-// on preprod), and the registry's own template placeholder. A later commit
-// adds an asset of the M2 policy, a named stratum, for the sensitivity
-// analysis.
-const SCAM_FIRST = {
-  'src/entries/test-stable.json': JSON.stringify({ domains: ['scam.example'], associated_addresses: [], related_assets: ['asset1vmllsc8gkach2vqh8tqlyj7sl4rk788htll9pq', 'asset1ln7lh783tvvsnutlf9ef5hempnqqkwrv3dpurk'], description: 'preprod test entry' }, null, 2) + '\n',
-  'src/entries/test-nft.json': JSON.stringify({ domains: [], associated_addresses: [], related_assets: ['asset1pt3jxy75eu9j2exeqstjka8yqxc2fla2hkkua8', 'asset1rjklcrnsdzqp65wjgrg55sy9723kw09mlgvlc3'], description: 'preprod test entry' }, null, 2) + '\n',
-  'src/entries/emptyjsonformat.abc.json': JSON.stringify({ domains: ['domain.extension'], associated_addresses: ['addr...'], related_assets: ['asset1....'], description: 'A description of the scam method (not required)' }, null, 2) + '\n'
-};
-const SCAM_LATER = { ...SCAM_FIRST, 'src/entries/test-m2.json': JSON.stringify({ related_assets: ['asset1d4468uzf2w63xumfwdlxjgkrew2fpkcwaw24dl'] }) + '\n' };
-const SCREENED = ['0684f582b8abeb4236b20688744eca788a61cd9881422a7113637f6b', '59e35b701247154f645388c5e17a098fced0e5098543dd58a797c04a', '7e8bdaf2b2b919a3a4b94002cafb50086c0c845fe535d07a77ab7f77'];
-
-const STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
+import { FIXED } from '../../src/params.mjs';
 
 async function fingerprint(c) {
   const tables = (await c.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'study' AND tablename NOT IN ('run', 'param', 'step') ORDER BY 1`)).rows.map((r) => r.tablename);
@@ -87,19 +68,12 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     // vector's stake key is not a safe choice: it is in use on preprod.)
     const absent = encode('stake_test', Buffer.concat([Buffer.from([0xe0]), createHash('sha256').update(`absent ${TAG}`).digest().subarray(0, 28)]));
     assert.equal(await saIdOf(c, absent), null, 'the absent key is not on preprod');
-    const scamRepo = fixtureRepo();
-    const scamFirst = scamRepo.commit(SCAM_FIRST, 'test list');
-    const scamRecord = join(runDir('preprod', TAG), 'scam-list-first.json');
-    writePrivate(scamRecord, JSON.stringify(captureScamList({ clone: scamRepo.dir, rev: scamFirst }).record));
     const common = {
       expectNetwork: 'preprod',
       snapshot: 'tip',
       standInTx: S1_SEEDING_TX,
-      strataList: STRATA,
       hmacKey: process.env.RESEARCH_CORPUS_TEST_HMAC_KEY,
       set: ['guard=1000'],
-      scamList: scamRecord,
-      scamClone: scamRepo.dir,
       log: (s) => process.stderr.write(`  ${s}\n`)
     };
     const t0 = performance.now();
@@ -149,17 +123,17 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
         assert.ok(!text.includes(views.funder) && !text.includes(views.S1), `${f} names no listed wallet`);
       }
     }
-    // own-drawn: the listed wallets' places in the drawn samples, counted
+    // own-drawn: the listed wallets' places in the frames' samples, counted
     // from the sample table, and nothing written to the run directory.
     const filesBefore = readdirSync(b.dir).sort();
     const own = await ownDrawn(c, RUN_B, [views.funder, views.S1, absent]);
     const ids = [await saIdOf(c, views.funder), await saIdOf(c, views.S1)];
-    const direct = (await c.query('SELECT frame, kind, stratum, count(*) AS n FROM study.sample WHERE sa_id = ANY($1) GROUP BY 1, 2, 3', [ids])).rows;
+    const direct = (await c.query('SELECT frame, kind, count(*) AS n FROM study.sample WHERE sa_id = ANY($1) GROUP BY 1, 2', [ids])).rows;
     assert.equal(own.by_sample.reduce((x, r) => x + r.drawn, 0), direct.reduce((x, r) => x + Number(r.n), 0));
     assert.equal(own.listed, 3);
     assert.deepEqual(readdirSync(b.dir).sort(), filesBefore);
     // The raw list carries no published identifier.
-    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,reconstruction_agree,franken_any,fragmented');
+    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented');
 
     // h is the epoch nonce of the stand-in's epoch rule, read twice.
     const dk = b.report.freeze.draw;
@@ -168,36 +142,65 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(dk.readings.db, dk.readings.koios);
     assert.equal(b.report.freeze.h, dk.nonce);
 
-    // The fungible floor: named candidates skipped, the floor, ten taken in
-    // rank order, and the strata of part 2 exactly the candidates taken.
-    for (const r of b.report.ft_floor) {
-      assert.equal(r.screened, SCREENED.includes(r.policy), `${r.stratum}: screened`);
-      assert.equal(r.qualifies, !r.named && !r.screened && r.n_holders >= 1000, `${r.stratum}: floor`);
-      assert.equal(r.taken, r.qualifies && b.report.ft_floor.filter((x) => x.qualifies && x.rank <= r.rank).length <= 10, `${r.stratum}: taken`);
-    }
-    assert.ok(b.report.ft_floor.find((r) => r.stratum === 'NIGHT preprod again').named);
-    assert.deepEqual(b.report.strata.filter((s) => s.part === 'coingecko').map((s) => s.stratum), b.report.ft_floor.filter((r) => r.taken).map((r) => r.stratum));
-    // Part 4: every listed coin at or above the floor, one stratum each, in
-    // rank order after part 3.
-    assert.equal(b.report.sc_floor.length, 2);
-    for (const r of b.report.sc_floor) assert.equal(r.taken, r.n_holders >= 1000, `${r.stratum}: part 4 floor`);
-    const part4 = b.report.strata.filter((s) => s.part === 'stable-commodity');
-    assert.deepEqual(part4.map((s) => s.stratum), b.report.sc_floor.filter((r) => r.taken).map((r) => r.stratum));
-    const lastPart3 = Math.max(...b.report.strata.filter((s) => s.part === 'nft-top').map((s) => s.ord));
-    assert.ok(part4.every((s) => s.ord > lastPart3), 'part 4 is filled after part 3');
-
     // The split: one label per credential, the first fifth of all sampled
     // credentials by split key.
     const labels = (await c.query(`SELECT sa_id, count(DISTINCT split) AS n FROM study.sample GROUP BY sa_id HAVING count(DISTINCT split) > 1`)).rows;
     assert.equal(labels.length, 0, 'no credential has two labels');
     assert.equal(b.report.split_overall.n_exploration, Math.floor(b.report.split_overall.n_credentials / 5));
 
-    // The guard path ran in both frames, and the real targets were not met.
+    // The guard path ran in both frames, and the sample did not fill.
     for (const d of b.report.draw) {
       assert.equal(d.guard_reached, true, `${d.frame}: guard reached`);
       assert.equal(d.k_stop, 1000);
-      assert.equal(d.k_all, null);
+      assert.equal(d.k_full, null);
+      assert.ok(d.n_sample < 1000);
     }
+    assert.deepEqual(b.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true });
+
+    // The draw against the rule, computed here from the frame and the life
+    // table: within the guard, the token-holding wallets with at least 5 spends
+    // in draw order; U the larger of the UTxO count at the window's start and
+    // at the reference block, held UTxOs counted; T the distinct window
+    // transactions creating or consuming the wallet's outputs; the group the
+    // highest edge either reaches; each group taken until its quota is full.
+    for (const frame of ['recent', 'peak']) {
+      const w = b.report.windows[frame];
+      const cands = (await c.query(
+        `SELECT d.k, d.sa_id, f.n_utxo AS ref,
+                (SELECT count(*) FROM study.txo t WHERE t.sa_id = d.sa_id AND t.created_tx <= $2
+                    AND (t.consumed_tx IS NULL OR t.consumed_tx > $2)) AS start,
+                (SELECT array_agg(e.tx ORDER BY e.tx) FROM (
+                   SELECT t.created_tx AS tx FROM study.txo t WHERE t.sa_id = d.sa_id AND t.created_tx BETWEEN $3 AND $4
+                   UNION
+                   SELECT t.consumed_tx FROM study.txo t WHERE t.sa_id = d.sa_id AND t.consumed_tx BETWEEN $3 AND $4) e) AS txs
+           FROM study.draw_order d JOIN study.frame f ON f.frame = d.frame AND f.sa_id = d.sa_id
+          WHERE d.frame = $1 AND d.k <= 1000 AND f.tok AND f.n_spends >= 5
+          ORDER BY d.k`,
+        [frame, w.t_start, w.lo, w.hi])).rows;
+      const quota = { B0: Infinity, B1: FIXED.quota_b1, B2: FIXED.quota_b2, B3: FIXED.quota_b3 };
+      const taken = { B0: 0, B1: 0, B2: 0, B3: 0 };
+      const drawn = { B0: 0, B1: 0, B2: 0, B3: 0 };
+      const want = [];
+      for (const r of cands) {
+        const txs = (r.txs || []).map(Number);
+        const u = Math.max(Number(r.start), Number(r.ref));
+        const t = txs.length;
+        const reaches = (e) => u >= e || t >= e;
+        const g = reaches(4000) ? 'B3' : reaches(1000) ? 'B2' : reaches(250) ? 'B1' : 'B0';
+        drawn[g]++;
+        if (taken[g] >= quota[g]) continue;
+        taken[g]++;
+        want.push([Number(r.sa_id), Number(r.k), g, Number(r.start), Number(r.ref), t, t > 1000, t > 1000 ? txs[999] : Number(w.hi)]);
+        if (want.length === 1000) break;
+      }
+      const got = (await c.query(`SELECT sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 ORDER BY draw_rank`, [frame])).rows
+        .map((r) => [Number(r.sa_id), Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)]);
+      assert.deepEqual(got, want, `${frame}: the sample`);
+      const groups = b.report.draw_groups.filter((x) => x.frame === frame);
+      assert.deepEqual(groups.map((x) => [x.size_group, x.n_drawn, x.n_taken]), ['B0', 'B1', 'B2', 'B3'].map((g) => [g, drawn[g], taken[g]]), `${frame}: D_k and A_k`);
+      assert.deepEqual(groups.map((x) => x.quota), [null, FIXED.quota_b1, FIXED.quota_b2, FIXED.quota_b3]);
+    }
+    assert.deepEqual(b.manifest.draw_groups, b.report.draw_groups);
 
     // The shapes.
     const sa = {};
@@ -209,7 +212,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(Number(s1.n_spends_any), 0);
     assert.equal(s1.eligible, true, 'S1 is eligible like any wallet');
     const s1Samples = (await c.query('SELECT frame, kind FROM study.sample WHERE sa_id = $1', [sa.S1])).rows;
-    const s1Rank = (await c.query(`SELECT k, n_ada FROM study.draw_order WHERE frame = 'recent' AND sa_id = $1`, [sa.S1])).rows[0];
+    const s1Rank = (await c.query(`SELECT k, candidate FROM study.draw_order WHERE frame = 'recent' AND sa_id = $1`, [sa.S1])).rows[0];
     assert.ok(s1Rank, 'S1 is in the draw order');
     assert.equal(await row('peak', sa.S1), undefined, 'S1 has no spend, so it is not in the peak frame');
     const s3 = await row('recent', sa.S3);
@@ -221,24 +224,26 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(Number(s3.n_spends_key), 1, 'S3 has one spend event, the sweep');
     assert.equal(Number(m2.n_spends_key), 0);
     assert.equal(Number(m2.n_spends_any), 0);
-    for (const k of ['S3', 'M2']) {
+    // Fewer than 5 spends: S1, S3 and M2 are never candidates, so never in
+    // the sample.
+    assert.equal(s1Rank.candidate, false);
+    for (const k of ['S1', 'S3', 'M2']) {
       const n = Number((await c.query('SELECT count(*) AS n FROM study.sample WHERE sa_id = $1', [sa[k]])).rows[0].n);
-      assert.ok(n >= 1, `${k} is in the sample`);
+      assert.equal(n, 0, `${k} is not in the sample`);
     }
-    // Requirement (d): S3 and M2 hold NFTs one unit to a UTxO, so neither is
-    // fragmented; every sample row carries its frame's flag.
+    // S3 and M2 hold NFTs one unit to a UTxO, so neither is fragmented; every
+    // sample row carries its frame's flag.
     assert.equal(s3.frag, false);
     assert.equal(m2.frag, false);
     const flagMismatch = (await c.query(`SELECT count(*) AS n FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id WHERE s.fragmented IS DISTINCT FROM f.frag`)).rows[0];
     assert.equal(Number(flagMismatch.n), 0);
-    for (const d of b.report.draw) assert.ok(d.n_d !== undefined && d.n_d <= d.n_a, `${d.frame}: (d) counts token-holding wallets`);
     const s3peak = await row('peak', sa.S3);
+    // The franken step covers the sampled wallets and nothing else.
+    const frankenWallets = (await c.query('SELECT DISTINCT sa_id FROM study.franken ORDER BY 1')).rows.map((r) => String(r.sa_id));
+    const sampledWallets = (await c.query('SELECT DISTINCT sa_id FROM study.sample ORDER BY 1')).rows.map((r) => String(r.sa_id));
+    assert.ok(frankenWallets.every((x) => sampledWallets.includes(x)));
     const franken = (await c.query('SELECT sa_id, bool_or(flagged) AS f, max(n_creds) AS n FROM study.franken WHERE sa_id = ANY($1) GROUP BY sa_id', [[sa.S1, sa.S3, sa.M2]])).rows;
-    // The franken step covers sampled wallets only: S3 and M2 are sampled, and
-    // S1, never token-holding, only if the ADA-only draw took it.
-    const sampled = (await c.query('SELECT DISTINCT sa_id FROM study.sample WHERE sa_id = ANY($1)', [[sa.S1, sa.S3, sa.M2]])).rows.map((r) => String(r.sa_id)).sort();
-    assert.deepEqual(franken.map((f) => String(f.sa_id)).sort(), sampled);
-    for (const f of franken) assert.equal(f.f, false, `no franken flag on ${f.sa_id}`);
+    assert.deepEqual(franken, [], 'the shapes are not sampled');
 
     // The reconstruction check ran with the direct read, for the sample.
     assert.equal(b.report.reconstruction_check.direct_valid, true);
@@ -248,41 +253,17 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     // subset of the window's receipts, and f8 is the frame's UTxO count at
     // the window's end.
     assert.deepEqual([b.report.profile_check.spend_count_mismatch, b.report.profile_check.receipt_count_mismatch, b.report.profile_check.utxo_count_mismatch], [0, 0, 0]);
-    const m2prof = (await c.query(`SELECT n_receipts_no_input, n_utxo_end FROM study.profile WHERE frame = 'recent' AND sa_id = $1`, [sa.M2])).rows[0];
-    assert.ok(m2prof, 'M2 has a profile row');
-    assert.equal(Number(m2prof.n_utxo_end), Number(m2.n_utxo), 'f8 of M2 is its UTxO count at the snapshot');
 
     // T12: every step of run A has a wall time and rows; explainable
     // statements carry their plan.
     const steps = a.timings.filter((t) => t.kind === 'step');
-    assert.ok(steps.length >= 25);
+    assert.ok(steps.length >= 20);
     let plans = 0;
     for (const s of steps) {
       assert.ok(s.ms > 0 && s.rows !== null, `${s.name}: time and rows`);
       plans += s.statements.filter((x) => x.plan).length;
     }
     assert.ok(plans > 30, 'plans captured');
-
-    // The scam screen: four fingerprints, three resolved to three policies,
-    // each recomputed; no stratum of any part under a screened policy; USDr,
-    // unlisted, makes its policy one of those reported with unlisted assets.
-    const sc = b.report.scam_screen;
-    assert.deepEqual([sc.applied, sc.n_fingerprints, sc.n_resolved, sc.n_unresolved, sc.n_policies, sc.fingerprints_agree], [true, 4, 3, 1, 3, true]);
-    assert.ok(!b.report.strata.some((x) => SCREENED.includes(x.policy)), 'no stratum under a screened policy');
-    assert.ok(b.report.ft_floor.filter((r) => r.screened).length >= 3, 'USDr, sUSDr and RIGEL screened');
-    const withUnlisted = sc.policies_with_unlisted_assets.map((x) => x.policy);
-    assert.ok(withUnlisted.includes(SCREENED[0]), 'the USDr policy holds an unlisted asset');
-    assert.equal(b.manifest.scam_screen.policies_with_unlisted_assets, undefined, 'the descriptive list stays in report.json');
-    // The sensitivity analysis on the finished run: the later list flags the
-    // M2 policy's named stratum and nothing else that is a stratum.
-    const scamLater = scamRepo.commit(SCAM_LATER, 'later list');
-    const laterRecord = join(runDir('preprod', TAG), 'scam-list-later.json');
-    writePrivate(laterRecord, JSON.stringify(captureScamList({ clone: scamRepo.dir, rev: scamLater }).record));
-    const recheck = await scamRecheck({ client: c, runId: RUN_B, recordPath: laterRecord, clone: scamRepo.dir, network: 'preprod' });
-    assert.deepEqual(recheck.strata_flagged, ['M2 policy']);
-    assert.equal(recheck.later_descends_from_frozen, true);
-    assert.equal(recheck.strata_kept.length, new Set(b.report.strata.map((x) => x.stratum)).size - 1);
-    rmSync(scamRepo.dir, { recursive: true, force: true });
 
     record('T10', {
       run_a: { dir: a.dir, ms: msA },
@@ -293,11 +274,8 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       flow: b.report.flow,
       frame_report: b.report.frame_report,
       draw: b.report.draw,
-      strata: b.report.strata,
-      ft_floor: b.report.ft_floor,
-      sc_floor: b.report.sc_floor,
-      scam_screen: b.report.scam_screen,
-      scam_recheck: recheck,
+      draw_groups: b.report.draw_groups,
+      draw_check: b.report.draw_check,
       split: b.report.split,
       split_overall: b.report.split_overall,
       sample_bounds: b.report.sample_bounds,
@@ -310,7 +288,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       reconstruction_check: b.report.reconstruction_check,
       profiles: b.report.profiles,
       shapes: {
-        S1: { recent: { tok: s1.tok, eligible: s1.eligible, draw_rank: Number(s1Rank.k), n_tx: Number(s1.n_tx), n_spends_any: Number(s1.n_spends_any), samples: s1Samples } },
+        S1: { recent: { tok: s1.tok, eligible: s1.eligible, draw_rank: Number(s1Rank.k), candidate: s1Rank.candidate, n_tx: Number(s1.n_tx), n_spends_any: Number(s1.n_spends_any), samples: s1Samples } },
         S3: { recent: { tok: s3.tok, n_assets: Number(s3.n_assets_a), n_spends_key: Number(s3.n_spends_key) }, peak: s3peak ? { tok: s3peak.tok, n_spends_key: Number(s3peak.n_spends_key) } : null },
         M2: { recent: { tok: m2.tok, ge100: m2.ge100, n_assets: Number(m2.n_assets_a), n_spends_key: Number(m2.n_spends_key) } },
         franken

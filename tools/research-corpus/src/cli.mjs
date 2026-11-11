@@ -2,16 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-import { readFileSync, writeFileSync, realpathSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, realpathSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { initSecret } from './hmac.mjs';
-import { runPipeline, cleanupRun, ownDrawn, scamRecheck, DEFAULT_STRATA, DEFAULT_RULINGS, DEFAULT_SCAM_LIST } from './pipeline.mjs';
-import { captureScamList } from './scam-list.mjs';
+import { runPipeline, cleanupRun, ownDrawn } from './pipeline.mjs';
 import { explainCommand } from './explain.mjs';
 import { readStakeList } from './guards.mjs';
-import { formatHashList, hashList, codeVersion, TOOL_DIR } from './hash.mjs';
+import { formatHashList, hashList, codeVersion } from './hash.mjs';
 import { loadAll } from './sqlfile.mjs';
 import { connect, dbMeta, q } from './db.mjs';
 import { sourceCheck } from './source-check.mjs';
@@ -23,12 +22,11 @@ import { codeManifestErrors, NODE_MAJOR, studyKeyFor } from './guards.mjs';
 import { appendEntry, verifyLog, sanitizeError, refuse, loggedQuery, checkLogPath, redactCommand, closeStart, refuseSimRunId } from './checklog.mjs';
 import { sha256hex } from './freeze.mjs';
 import { Koios } from './koios.mjs';
-import { captureStrata } from './strata-capture.mjs';
 
 export const USAGE = `research-corpus: draw the research corpus from a cardano-db-sync database.
 
   init-secret                     make secret/hmac.key (32 random bytes) once; prints its path, never the key
-  run [options]                   frames, draw, samples, split, flags, the reconstruction check and the manifest
+  run [options]                   frames, draw, sample, split, flags, the reconstruction check and the manifest
       --run-id <id>               required; a rerun with the same id resumes; an id beginning with sim-
                                   is the simulator's and refused
       --snapshot tip|rule|<hash> the snapshot block: on the final freeze always the rule (the last block of
@@ -52,10 +50,6 @@ export const USAGE = `research-corpus: draw the research corpus from a cardano-d
       --sim-wallets               live-fire: pick the simulator's live-fire wallets (at most ten, by the run's
                                   test h) and keep them in sim/wallets.json until cleanup; once on mainnet
       --explain                   plan every statement with plain EXPLAIN before running it; numbers stripped
-      --strata <file>             the strata list (default data/strata-mainnet.json; mainnet: that file only)
-      --scam-clone <dir>          a git clone of the scam list's repository, holding the record's commit;
-                                  required on mainnet, and on a test network the screen applies only with it
-      --scam-list <file>          the scam-list record (default data/scam-list.json; mainnet: that file only)
       --hmac-key <file>           test networks only: an HMAC key other than secret/hmac.key
       --set name=value            override a setting (refused on mainnet unless equal to the default)
       --redo <step>|all           recompute a step and everything after it
@@ -74,24 +68,12 @@ export const USAGE = `research-corpus: draw the research corpus from a cardano-d
                                   close the start entry a killed command left, by its sequence number; that
                                   start only, never a run's tables, kept output or other starts
   own-drawn --list <file> --run <id>
-                                  print, privately, how many listed stake addresses fell in each drawn sample of
-                                  a run; writes nothing to the run directory, the manifest or the check log
+                                  print, privately, how many listed stake addresses fell in each frame's
+                                  sample of a run; writes nothing to the run directory, the manifest or the
+                                  check log
   check-log verify --network <n>  check the log's sequence and digest chain; list kept outputs not cleaned up
   check-log fix --network <n> --finding <text> --commit <sha> [--entry <seq>]
                                   log a fix made after a live-fire finding
-  capture-strata [--out <file>] [--named-from <file>] [--rulings <file>] [--own-sources <file>]
-                 [--max-candidates 40] [--spacing-ms 15000]
-                                  read CoinGecko's Cardano Ecosystem ranking (every coin's detail) and the token
-                                  registry; write the strata file's part 2 and part 4 lists (default:
-                                  data/strata-mainnet.json)
-  capture-scam-list --clone <dir> [--commit <rev>] [--out <file>] [--extract-out <file>]
-                                  record the scam list at a commit of a clone of its repository (default HEAD):
-                                  the commit, the SHA-256 of the fixed extract, the counts and any license file
-                                  (default: data/scam-list.json); --extract-out writes the extract, outside this
-                                  tool's folder
-  scam-recheck --run <id> --scam-list <file> --scam-clone <dir>
-                                  on a finished run, the strata a later version of the scam list flags, for the
-                                  sensitivity analysis; writes scam-recheck-<commit>.json to the run directory
   confirm-snapshot --run-id <id>  the snapshot is still on chain, ${FIXED.security_k} or more blocks deep in the database and
                                   in Koios; for a snapshot by rule, the rule still names it, with the first block
                                   of epoch N that deep
@@ -115,7 +97,14 @@ from the file PGPASSFILE names. Outputs: \${XDG_DATA_HOME:-$HOME/.local/share}/u
 
 // Options an earlier version took. They are refused by name, with the reason,
 // wherever they appear.
-const REMOVED = new Set(['case', 'cases']);
+const NO_STRATA = 'the study draws no purposive strata, and the scam screen kept scam policies out of the strata only';
+const REMOVED = new Map([
+  ['case', 'the per-wallet steps run for the drawn wallets only'],
+  ['cases', 'the per-wallet steps run for the drawn wallets only'],
+  ['strata', NO_STRATA],
+  ['scam-list', NO_STRATA],
+  ['scam-clone', NO_STRATA]
+]);
 const FLAGS = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain', 'sim-wallets']);
 // Options that may be given more than once; every other option once only.
 const REPEATABLE = new Set(['set', 'redo', 'stake', 'node-stake']);
@@ -131,15 +120,12 @@ export const COMMAND_OPTIONS = {
   run: [
     ...CONNECTION, ...SESSION, ...FREEZE,
     'run-id', 'snapshot', 'stand-in-tx', 'live-fire', 'test-h', 'purpose', 'keep-for-debug', 'sim-wallets', 'explain',
-    'strata', 'scam-clone', 'scam-list', 'hmac-key', 'set', 'redo', 'capture', 'expect-network'
+    'hmac-key', 'set', 'redo', 'capture', 'expect-network'
   ],
   'verify-freeze': [...CONNECTION, ...FREEZE],
   cleanup: [...CONNECTION, 'run-id', 'start-seq', 'network'],
   'own-drawn': [...CONNECTION, 'list', 'run'],
   'check-log': ['network', 'finding', 'commit', 'entry'],
-  'capture-strata': ['out', 'named-from', 'rulings', 'own-sources', 'max-candidates', 'spacing-ms'],
-  'capture-scam-list': ['clone', 'commit', 'out', 'extract-out'],
-  'scam-recheck': [...CONNECTION, 'run', 'scam-list', 'scam-clone'],
   'confirm-snapshot': [...CONNECTION, 'run-id'],
   'source-check': [
     ...CONNECTION, ...FREEZE,
@@ -200,7 +186,7 @@ export function parseArgs(argv, command) {
       continue;
     }
     const k = a.slice(2);
-    if (REMOVED.has(k)) throw new Error(`${a} is not an option: the per-wallet steps run for the drawn wallets only`);
+    if (REMOVED.has(k)) throw new Error(`${a} is not an option: ${REMOVED.get(k)}`);
     if (!known.has(k)) {
       const near = closest(k.split('=')[0], known);
       const eq = k.includes('=') ? '; write the option and its value as two words' : '';
@@ -418,10 +404,6 @@ export function runOptions(a, command) {
     liveFire: a.liveFire ? { testH: lower(a.testH), purpose: a.purpose, keep: !!a.keepForDebug, simWallets: !!a.simWallets } : null,
     simWallets: !!a.simWallets,
     explain: !!a.explain,
-    strataList: a.strata || DEFAULT_STRATA,
-    strataGiven: !!a.strata,
-    scamList: a.scamList,
-    scamClone: a.scamClone,
     hmacKey: a.hmacKey,
     set: a.set,
     redo: a.redo,
@@ -503,53 +485,6 @@ async function main() {
         if (!a.finding || !/^[0-9a-f]{7,40}$/.test(a.commit || '')) throw new Error('fix needs --finding <text> and --commit <sha>');
         console.log(JSON.stringify(appendEntry(a.network, 'fix', { finding: a.finding, commit: a.commit, entry: a.entry ? Number(a.entry) : null, command }), null, 2));
       } else throw new Error('check-log verify|fix');
-      return;
-    }
-    case 'capture-strata': {
-      const out = a.out || DEFAULT_STRATA;
-      const named = JSON.parse(readFileSync(a.namedFrom || DEFAULT_STRATA, 'utf8')).named;
-      const doc = await captureStrata({
-        named,
-        rulings: JSON.parse(readFileSync(a.rulings || DEFAULT_RULINGS, 'utf8')),
-        ownSources: a.ownSources ? JSON.parse(readFileSync(a.ownSources, 'utf8')) : {},
-        maxCandidates: Number(a.maxCandidates || 40),
-        spacingMs: Number(a.spacingMs || 15000),
-        tool: codeVersion().git_commit,
-        log: (s) => process.stderr.write(s + '\n')
-      });
-      writeFileSync(out, JSON.stringify(doc, null, 2) + '\n');
-      console.log(`${out}: ${doc.candidates.length} part 2 candidates, ${doc.part4.length} part 4 coins, ${doc.excluded.length} excluded, ${doc.unsettled.length} unsettled`);
-      if (doc.unsettled.length) process.stderr.write(`unsettled, and refused by run until decided: ${doc.unsettled.map((u) => `${u.coingecko_id} (${u.question})`).join('; ')}\n`);
-      return;
-    }
-    case 'capture-scam-list': {
-      if (!a.clone) throw new Error('capture-scam-list --clone <dir> [--commit <rev>] [--out <file>] [--extract-out <file>]');
-      const out = a.out || DEFAULT_SCAM_LIST;
-      const { record, extract } = captureScamList({ clone: a.clone, rev: a.commit || 'HEAD', tool: codeVersion().git_commit });
-      if (a.extractOut) {
-        // The extract is the list's content; it never lands in this tool's
-        // folder, so it cannot be committed with the code by mistake.
-        const rel = relative(TOOL_DIR, resolve(a.extractOut));
-        if (!rel.startsWith('..') && !isAbsolute(rel)) throw new Error('--extract-out must be outside the tool\'s folder');
-        writePrivate(resolve(a.extractOut), extract.text);
-      }
-      writeFileSync(out, JSON.stringify(record, null, 2) + '\n');
-      for (const x of extract.invalid) process.stderr.write(`not a fingerprint, left out: ${x.path}: ${JSON.stringify(x.value)} (${x.reason})\n`);
-      console.log(`${out}: commit ${record.source.commit}, ${record.extract.n_fingerprints} fingerprints, extract SHA-256 ${record.extract.sha256}, license file ${record.license.present ? record.license.files.map((f) => f.path).join(', ') : 'none'}`);
-      return;
-    }
-    case 'scam-recheck': {
-      if (!a.run || !a.scamList || !a.scamClone) throw new Error('scam-recheck --run <id> --scam-list <file> --scam-clone <dir>');
-      refuseSimRunId(a.run);
-      const c = await connect(dbOpts(a));
-      try {
-        const meta = await dbMeta(c, loadAll());
-        await loggedQuery(meta.network, 'scam-recheck', { run_id: a.run, command, code: codeFacts() }, async () => {
-          console.log(JSON.stringify(await scamRecheck({ client: c, runId: a.run, recordPath: a.scamList, clone: a.scamClone, network: meta.network }), null, 2));
-        });
-      } finally {
-        await c.end();
-      }
       return;
     }
     case 'confirm-snapshot': {

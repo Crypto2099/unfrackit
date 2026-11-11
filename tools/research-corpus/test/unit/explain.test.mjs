@@ -159,5 +159,5 @@ test('explain: with an empty study schema, the real SQL plans only statements ov
     }
   }
   for (const name of ['txo#2', 'label_309_from', 'order_check', 'cred#2', 'script_tx#2', 'unfrackit_tx#2']) assert.ok(planned.includes(name), name);
-  for (const name of ['scam_policy#3', 'activity#2', 'txo#3']) assert.ok(!planned.includes(name), name);
+  for (const name of ['draw#7', 'activity#2', 'txo#3']) assert.ok(!planned.includes(name), name);
 });

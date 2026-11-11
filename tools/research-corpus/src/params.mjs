@@ -13,19 +13,18 @@ export const FIXED = {
   peak_from_protocol_major: 4, // the peak search begins at the Mary hard fork, the first epoch with protocol_major >= 4
   recent_days: 365, // the recent window: the 365 days up to the snapshot
   guard: 200000, // the draw's guard per frame; it counts eligible keys taken in draw order
-  target_a: 2400, // the random sample's requirement (a): token-holding wallets
-  target_b: 1000, // requirement (b): token-holding wallets with at least spends_b_min spend events
-  target_c: 600, // requirement (c): token-holding wallets holding assets_c_min or more distinct assets
-  target_d: 600, // the random sample's requirement (d): fragmented wallets
-  frag_min_utxos: 10, // requirement (d): a fungible asset on 10 or more of the wallet's UTxOs makes it fragmented
-  spends_b_min: 5, // requirement (b): at least 5 spends in the window
-  assets_c_min: 100, // requirement (c): 100 or more tokens
-  ada_only_n: 1200, // the ADA-only sample's size
-  strata_n: 50, // wallets per stratum
-  nft_top_n: 10, // part 3 of the strata rule: the ten NFT policies
-  ft_n: 10, // part 2 of the strata rule: ten CoinGecko tokens that pass the floor
-  ft_floor: 1000, // part 2: a candidate held by fewer stake credentials of the recent frame at the snapshot is skipped
-  sc_floor: 1000, // part 4: a stablecoin or tokenized commodity held by fewer, counted as in part 2, gives no stratum
+  sample_n: 1000, // the sample per frame: active token-holding wallets taken in draw order
+  spends_min: 5, // active: at least 5 spends in the window
+  group_edge_b1: 250, // size groups: B1 from 250 UTxOs or window transactions,
+  group_edge_b2: 1000, // B2 from 1,000,
+  group_edge_b3: 4000, // B3 from 4,000; B0 below 250 on both
+  quota_b1: 100, // quotas inside the sample at scale 1: B1 100, B2 10, B3 2; B0 takes the rest
+  quota_b2: 10,
+  quota_b3: 2,
+  quota_scale: '1', // s: each quota is its value above times s, rounded to a whole number
+  history_cap: 1000, // a taken wallet's history is its window's first 1,000 transactions
+  assets_min: 100, // descriptive: 100 or more tokens (the frame report; the simulator's live-fire condition 3)
+  frag_min_utxos: 10, // descriptive: a fungible asset on 10 or more of the wallet's UTxOs makes it fragmented
   utxo_cap: 20000, // exclusion: more than 20,000 UTxOs is excluded
   pay_cred_cap: 200, // exclusion: more than 200 distinct payment credentials
   script_share: '0.5', // exclusion: more than half of the value
@@ -50,11 +49,8 @@ export const READINGS = {
   x2_any: { value: false, note: 'a wallet input consumes a wallet output at a key payment credential; true counts any wallet output' },
   x3_after_first: { value: false, note: 'the state at a window start is as of the last block before its first block; true uses the state after the first block' },
   x5_reward29: { value: false, note: 'draw and split hash "draw"/"split" || h || 28-byte credential; true uses the 29-byte reward address' },
-  x7_prefix: { value: true, note: 'every token-holding wallet up to the stopping point joins (a prefix); false admits only wallets meeting (b) or (c) after (a)' },
-  x8_measure: { value: 'distinct', note: '"100 or more tokens" counts distinct assets; alternatives units, nft' },
+  x8_measure: { value: 'distinct', note: '"100 or more tokens" (descriptive) counts distinct assets; alternatives units, nft' },
   x9_count_held: { value: true, note: 'held UTxOs count toward token-holding, asset counts, UTxO counts and lovelace' },
-  x10_skip_random_only: { value: false, note: 'strata skip wallets in the random, ADA-only and earlier strata samples; true skips only the random sample' },
-  x10_spacebudz_one: { value: false, note: 'the two SpaceBudz policies are two strata; true merges them into one' },
   x12_history: { value: true, note: 'payment credentials counted over history up to the reference block; false counts those present at it' },
   x13_all: { value: false, note: 'franken flags over key payment credentials only; true includes script credentials' },
   x14_search_bytes: { value: true, note: 'key-674 rows db-sync could not decode are searched in their bytes and counted separately' },
@@ -113,7 +109,7 @@ export function sqlParams(run) {
   for (const [k, v] of Object.entries(run.settings)) {
     if (typeof v === 'boolean') p[k] = T.bool(v);
     else if (typeof v === 'number') p[k] = T.int(v);
-    else if (k === 'script_share') p[k] = T.num(v);
+    else if (k === 'script_share' || k === 'quota_scale') p[k] = T.num(v);
     else p[k] = T.text(v);
   }
   p.peak_epochs_less_one = T.int(run.settings.peak_epochs - 1);
@@ -166,6 +162,7 @@ export function applyOverrides(settings, overrides) {
     } else {
       if (k === 'x8_measure' && !['distinct', 'units', 'nft'].includes(raw)) throw new Error('x8_measure takes distinct, units or nft');
       if (k === 'script_share' && !/^0?\.\d+$/.test(raw)) throw new Error('script_share takes a decimal below 1');
+      if (k === 'quota_scale' && !/^\d+(\.\d+)?$/.test(raw)) throw new Error('quota_scale takes a decimal of zero or more');
       out[k] = raw;
     }
   }

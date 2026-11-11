@@ -2,8 +2,8 @@
 // Copyright 2026 Adam K. Dean
 
 // The files whose SHA-256 joins the freeze record's hashed items, typed
-// Software: the extraction and sampling code (src/, sql/), its data (data/),
-// and package.json with the lockfile. The code draws the sample after the
+// Software: the extraction and sampling code (src/, sql/) and package.json
+// with the lockfile. The code draws the sample after the
 // freeze, so it is fixed on chain before any study query runs. Each file is
 // hashed byte for byte as it is stored: UTF-8, LF line endings, no byte-order
 // mark, the form every digest of the study is taken over; a file that is not
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 export const TOOL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
-const HASHED_DIRS = ['src', 'sql', 'data'];
+const HASHED_DIRS = ['src', 'sql'];
 const HASHED_FILES = ['package.json', 'package-lock.json'];
 
 function walk(dir) {

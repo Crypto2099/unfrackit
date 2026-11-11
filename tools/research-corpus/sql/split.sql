@@ -6,11 +6,11 @@
 -- Wallets are split 20% exploration and 80% confirmation by the "split" order
 -- (split_key in study.frame, frames.sql), before any outcome is computed. One
 -- label per stake credential (decided on 2026-10-21): every credential sampled
--- in any frame and sample is ranked once by its split key, and the first
+-- in either frame is ranked once by its split key, and the first
 -- floor(N / 5) of the N distinct credentials (split_den) are exploration, the
 -- rest confirmation. The split key depends only on h and the credential, so a
 -- wallet drawn in both frames has the same key and the same label in both; each
--- sample is then about, not exactly, 20% exploration.
+-- frame's sample is then about, not exactly, 20% exploration.
 --
 -- study.sample_wallet lists every sampled credential once, for the per-wallet
 -- steps that follow (the reconstruction check, prior-treated flags, franken
@@ -27,8 +27,8 @@ UPDATE study.sample x
           FROM (SELECT DISTINCT s.sa_id, f.split_key
                   FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id) u) r
  WHERE x.sa_id = r.sa_id;
--- Every sampled wallet carries the fragmentation flag of requirement (d) in
--- its frame, strata included, so outcomes can be reported by it.
+-- Every sampled wallet carries its frame's fragmentation flag (frames.sql),
+-- a descriptive field, so outcomes can be reported by it.
 UPDATE study.sample x
    SET fragmented = f.frag
   FROM study.frame f
@@ -52,14 +52,16 @@ ALTER TABLE study.sample_frame ADD PRIMARY KEY (frame, sa_id);
 ANALYZE study.sample_wallet;
 ANALYZE study.sample_frame;
 
+-- Per frame and size group.
 -- @query split_counts
-SELECT frame, kind, stratum, count(*) AS n,
+SELECT frame, kind, size_group, count(*) AS n,
        count(*) FILTER (WHERE split = 'exploration') AS n_exploration,
        count(*) FILTER (WHERE split = 'confirmation') AS n_confirmation,
        count(*) FILTER (WHERE split IS NULL) AS n_unassigned,
        count(*) FILTER (WHERE reconstruction_excluded) AS n_reconstruction_excluded,
-       count(*) FILTER (WHERE fragmented) AS n_fragmented
-  FROM study.sample GROUP BY frame, kind, stratum ORDER BY frame DESC, kind, stratum;
+       count(*) FILTER (WHERE fragmented) AS n_fragmented,
+       count(*) FILTER (WHERE capped) AS n_capped
+  FROM study.sample GROUP BY frame, kind, size_group ORDER BY frame DESC, kind, size_group;
 
 -- The split over all sampled credentials, each counted once.
 -- @query split_overall

@@ -3,17 +3,22 @@
 
 // The draw and split digests computed by the frame step's SQL against Node's
 // crypto for fixed inputs (both readings of x5_reward29) and against a
-// published test vector; the frame stages, the draw (the guard path and the
-// path where all four targets are reached, requirement (d) last), the
-// fragmentation flag on every sample row, the x7_prefix alternative, the
-// state step's fragmentation measure, and the split on a fixture small
+// published test vector; the frame stages and the flow table; the draw and
+// its sample against an independent statement of the rule in this file (size
+// groups by the UTxO count at the window's start or the reference block and
+// the window's transactions, quotas filled in draw order with later wallets
+// of a full group skipped and counted, the stop at the full sample, the
+// guard, the frame's end, the quota scale, held UTxOs, the history cap and
+// where each history ends); the fragmentation flag on every sample row; the
+// state step's fragmentation measure; and the split on a fixture small
 // enough to check by hand.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { freshDb, bool, int, num, text, bytea } from '../lib/pglite.mjs';
-import { defaultSettings, sqlParams } from '../../src/params.mjs';
+import { defaultSettings, sqlParams, applyOverrides } from '../../src/params.mjs';
+import { fill } from '../../src/sqlfile.mjs';
 
 const H = 'a5'.repeat(16) + '5a'.repeat(16);
 const sha = (...parts) => createHash('sha256').update(Buffer.concat(parts)).digest('hex');
@@ -93,7 +98,7 @@ test('x5_reward29 hashes the 29-byte reward address', async () => {
 test('stages, flow, draw order, samples and split on the fixture', async () => {
   const { db, runBlock, rows } = await freshDb();
   await fixture(db, 12);
-  const p = params({ guard: 6, target_a: 2, target_b: 1, target_c: 1, target_d: 1, ada_only_n: 2 });
+  const p = params({ guard: 7, sample_n: 2 });
   await runBlock('frame', p);
   await runBlock('txo', p);
   await runBlock('flow', p);
@@ -113,25 +118,24 @@ test('stages, flow, draw order, samples and split on the fixture', async () => {
   assert.equal(Number(peakFlow[0].n_removed), 0, 'stage 3 applies to the recent frame only');
 
   await runBlock('draw', p);
-  const order = await rows(`SELECT sa_id, k, tok, ge5, ge100, frag FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
+  const order = await rows(`SELECT sa_id, k, tok, ge5, candidate, taken FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
   const keys = await rows(`SELECT sa_id, draw_key FROM study.frame WHERE frame = 'recent' AND eligible ORDER BY draw_key`);
   assert.deepEqual(order.map((r) => r.sa_id), keys.map((r) => r.sa_id));
-  // Expected stopping point from the running counts, computed here.
-  let na = 0, nb = 0, nc = 0, nd = 0, kAll = null, kA = null;
-  for (const r of order) {
-    if (r.tok) na++;
-    if (r.tok && r.ge5) nb++;
-    if (r.tok && r.ge100) nc++;
-    if (r.tok && r.frag) nd++;
-    if (kA === null && na >= 2) kA = Number(r.k);
-    if (kAll === null && na >= 2 && nb >= 1 && nc >= 1 && nd >= 1) kAll = Number(r.k);
+  // The candidates are the token-holding wallets with at least 5 spends within
+  // the guard; the sample, the first two of them in draw order.
+  const cands = order.filter((r) => r.tok && r.ge5 && Number(r.k) <= 7);
+  assert.deepEqual(order.filter((r) => r.candidate).map((r) => Number(r.sa_id)), cands.map((r) => Number(r.sa_id)));
+  assert.deepEqual(cands.map((r) => Number(r.sa_id)).sort((a, b) => a - b), [8, 10, 12], 'token-holding with 5 or more spends: 8, 10 and 12');
+  const random = await rows(`SELECT sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = 'recent' AND kind = 'random' ORDER BY draw_rank`);
+  assert.deepEqual(random.map((r) => Number(r.draw_rank)), cands.slice(0, 2).map((r) => Number(r.k)));
+  for (const r of random) {
+    // One output each at transaction 1, after the window's start (0); i
+    // transactions in the window; two UTxOs at the snapshot.
+    assert.deepEqual([r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)], ['B0', 0, 2, Number(r.sa_id), false, 1]);
   }
-  const kStop = kAll ?? Math.min(6, order.length);
-  const random = await rows(`SELECT sa_id, draw_rank, prevalence_member FROM study.sample WHERE frame = 'recent' AND kind = 'random' ORDER BY draw_rank`);
-  assert.deepEqual(random.map((r) => Number(r.draw_rank)), order.filter((r) => r.tok && Number(r.k) <= kStop).map((r) => Number(r.k)));
-  for (const r of random) assert.equal(r.prevalence_member, Number(r.draw_rank) <= (kA ?? kStop));
-  const ada = await rows(`SELECT draw_rank FROM study.sample WHERE frame = 'recent' AND kind = 'ada_only' ORDER BY draw_rank`);
-  assert.deepEqual(ada.map((r) => Number(r.draw_rank)), order.filter((r) => !r.tok).slice(0, 2).map((r) => Number(r.k)));
+  assert.equal((await rows(`SELECT count(*) AS n FROM study.sample WHERE kind <> 'random'`))[0].n, 0);
+  const sum = (await rows(`SELECT k_full, k_stop, guard_reached, n_taken FROM study.draw_summary WHERE frame = 'recent'`))[0];
+  assert.deepEqual([Number(sum.k_full), Number(sum.k_stop), sum.guard_reached, Number(sum.n_taken)], [Number(cands[1].k), Number(cands[1].k), false, 2]);
 
   await db.exec(`CREATE TABLE study.sample_frame_dummy (x int)`);
   await runBlock('split', p);
@@ -167,53 +171,252 @@ test('the draw and split keys reproduce the published test vector', async () => 
   assert.deepEqual(r, { d: VECTOR.draw, s: VECTOR.split });
 });
 
-test('all four targets reached: the sample is the prefix up to k_all, prevalence up to k_a', async () => {
-  const { db, runBlock, rows } = await freshDb();
-  await fixture(db, 40);
-  // Even credentials hold a token, 10 holds 150 assets, every fourth is
-  // fragmented; spends = id. Targets the fixture reaches well before its end:
-  // (a) 4 token-holding, (b) 3 with 5 or more spends, (c) 1 with 100 or more
-  // assets, (d) 3 fragmented.
-  const p = params({ guard: 1000, target_a: 4, target_b: 3, target_c: 1, target_d: 3, ada_only_n: 3 });
-  await runBlock('frame', p);
-  await runBlock('draw', p);
-  const order = await rows(`SELECT sa_id, k, tok, ge5, ge100, frag FROM study.draw_order WHERE frame = 'recent' ORDER BY k`);
-  let na = 0, nb = 0, nc = 0, nd = 0, kAll = null, kA = null, kAbc = null;
-  for (const r of order) {
-    if (r.tok) na++;
-    if (r.tok && r.ge5) nb++;
-    if (r.tok && r.ge100) nc++;
-    if (r.tok && r.frag) nd++;
-    if (kA === null && na >= 4) kA = Number(r.k);
-    if (kAbc === null && na >= 4 && nb >= 3 && nc >= 1) kAbc = Number(r.k);
-    if (kAll === null && na >= 4 && nb >= 3 && nc >= 1 && nd >= 3) kAll = Number(r.k);
+// The draw rule stated here, independently of draw.sql. Per frame: the
+// eligible keys in draw order; within the guard, every token-holding wallet
+// with at least 5 spends is a candidate; U is the larger of its UTxO count at
+// the window's start, counted here from the life table's rows, and at the
+// reference block; T is the number of distinct window transactions that
+// create or consume one of its outputs; the group is the highest edge U or T
+// reaches; a candidate is taken while its group has room, and the draw stops
+// at the candidate that fills the sample. A capped wallet's history ends at
+// its history_cap-th window transaction, any other's at the window's end.
+const W = {
+  recent: { lo: 101, hi: 200, t_start: 100, first_epoch: 2, last_epoch: 3 },
+  peak: { lo: 11, hi: 60, t_start: 10, first_epoch: 1, last_epoch: 1 }
+};
+const GROUPS = ['B0', 'B1', 'B2', 'B3'];
+
+// Each quota is its value times s rounded to a whole number, halves up,
+// computed exactly from s's decimal digits.
+function quotaAt(base, s) {
+  const [whole, frac = ''] = s.split('.');
+  const den = 10n ** BigInt(frac.length);
+  return Number((2n * BigInt(base) * BigInt(whole + frac) + den) / (2n * den));
+}
+
+function rule({ wallets, txo }, settings, windows = W) {
+  const out = {};
+  for (const frame of ['recent', 'peak']) {
+    const w = windows[frame];
+    const elig = wallets.filter((x) => x.frames[frame] && x.frames[frame].eligible).sort((a, b) => Buffer.compare(a.frames[frame].key, b.frames[frame].key));
+    const quota = { B0: null, B1: quotaAt(settings.quota_b1, settings.quota_scale), B2: quotaAt(settings.quota_b2, settings.quota_scale), B3: quotaAt(settings.quota_b3, settings.quota_scale) };
+    const groups = Object.fromEntries(GROUPS.map((g) => [g, { quota: quota[g], drawn: 0, taken: 0 }]));
+    const sample = [];
+    let kFull = null;
+    for (let k = 1; k <= Math.min(elig.length, settings.guard); k++) {
+      const x = elig[k - 1];
+      const f = x.frames[frame];
+      if (!(f.tok && f.ge5)) continue;
+      const rows = txo.filter((t) => t.sa === x.sa);
+      const start = rows.filter((t) => t.created <= w.t_start && (t.consumed === null || t.consumed > w.t_start) && (settings.x9_count_held || !t.held)).length;
+      const txs = [...new Set(rows.flatMap((t) => [t.created, t.consumed]).filter((v) => v !== null && v >= w.lo && v <= w.hi))].sort((a, b) => a - b);
+      const u = Math.max(start, f.nUtxo);
+      const t = txs.length;
+      const reaches = (e) => u >= e || t >= e;
+      const g = reaches(settings.group_edge_b3) ? 'B3' : reaches(settings.group_edge_b2) ? 'B2' : reaches(settings.group_edge_b1) ? 'B1' : 'B0';
+      groups[g].drawn++;
+      if (quota[g] !== null && groups[g].taken >= quota[g]) continue;
+      groups[g].taken++;
+      const capped = t > settings.history_cap;
+      sample.push({ sa: x.sa, k, g, start, ref: f.nUtxo, t, capped, hi: capped ? txs[settings.history_cap - 1] : w.hi });
+      if (sample.length === settings.sample_n) {
+        kFull = k;
+        break;
+      }
+    }
+    out[frame] = { sample, groups, kFull, kStop: kFull ?? Math.min(settings.guard, elig.length), guardReached: kFull === null && elig.length >= settings.guard, nEligible: elig.length };
   }
-  assert.ok(kAll !== null && kAll < order.length, 'the fixture reaches every target before its end');
-  assert.ok(kAll > kAbc, 'requirement (d) is the last to be met here, so it moves the stopping point');
-  const s = (await rows(`SELECT k_all, k_a, k_stop, k_prevalence, guard_reached, n_a, n_b, n_c, n_d FROM study.draw_summary WHERE frame = 'recent'`))[0];
-  assert.equal(Number(s.k_all), kAll);
-  assert.equal(Number(s.k_stop), kAll);
-  assert.equal(Number(s.k_prevalence), kA);
-  assert.equal(s.guard_reached, false);
-  assert.ok(Number(s.n_a) >= 4 && Number(s.n_b) >= 3 && Number(s.n_c) >= 1 && Number(s.n_d) === 3);
-  const random = await rows(`SELECT draw_rank, prevalence_member FROM study.sample WHERE frame = 'recent' AND kind = 'random' ORDER BY draw_rank`);
-  assert.deepEqual(random.map((r) => Number(r.draw_rank)), order.filter((r) => r.tok && Number(r.k) <= kAll).map((r) => Number(r.k)));
-  for (const r of random) assert.equal(r.prevalence_member, Number(r.draw_rank) <= kA);
-  assert.equal(random.filter((r) => r.prevalence_member).length, 4, 'prevalence members are the first four token-holding wallets');
-  assert.equal(random.length > 4, kAll > kA);
-  // Fragmented at the peak window's start or end: 28 only at its end.
-  const f28 = Object.fromEntries((await rows(`SELECT frame, frag FROM study.frame WHERE sa_id = 28`)).map((r) => [r.frame, r.frag]));
-  assert.deepEqual(f28, { recent: false, peak: true });
-  // Every sample row carries its frame's flag.
-  await runBlock('split', p);
-  const flags = await rows(`SELECT s.fragmented, f.frag FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id`);
+  return out;
+}
+
+function lcg(seed) {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 2 ** 32;
+  };
+}
+
+// A world of wallets in both frames: eligible or not, token-holding or not,
+// active or not; UTxOs held before both windows' starts (some spent before or
+// inside a window, some held); window transactions, some of them both
+// creating and consuming the wallet's outputs; a reference UTxO count. The
+// counts are skewed so that every group occurs at small edges.
+function world(seed, n) {
+  const rnd = lcg(seed);
+  const int = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+  const skew = () => {
+    const r = rnd();
+    return r < 0.7 ? int(0, 4) : r < 0.85 ? int(5, 9) : r < 0.95 ? int(10, 19) : int(20, 30);
+  };
+  const wallets = [];
+  const txo = [];
+  let id = 0;
+  for (let sa = 1; sa <= n; sa++) {
+    const frames = {};
+    for (const frame of ['recent', 'peak']) {
+      if (frame === 'peak' && sa % 3 === 0) continue;
+      frames[frame] = { eligible: sa % 11 !== 0, tok: rnd() < 0.85, ge5: rnd() < 0.8, frag: rnd() < 0.2, nUtxo: skew(), key: createHash('sha256').update(`${frame} ${seed} ${sa}`).digest(), split: createHash('sha256').update(`split ${seed} ${sa}`).digest() };
+    }
+    for (let i = skew(); i > 0; i--) txo.push({ id: ++id, sa, created: int(1, 9), consumed: rnd() < 0.3 ? int(5, 150) : null, held: rnd() < 0.15 });
+    for (const [lo, hi] of [[W.recent.lo, W.recent.hi], [W.peak.lo, W.peak.hi]]) {
+      const txs = new Set();
+      for (let i = skew(); i > 0; i--) txs.add(int(lo, hi));
+      const list = [...txs].sort((a, b) => a - b);
+      list.forEach((tx, i) => {
+        const later = list.slice(i + 1);
+        txo.push({ id: ++id, sa, created: tx, consumed: later.length && rnd() < 0.3 ? later[int(0, later.length - 1)] : null, held: false });
+      });
+    }
+    wallets.push({ sa, frames });
+  }
+  return { wallets, txo };
+}
+
+async function loadWorld(db, { wallets, txo }) {
+  await db.exec(`
+    CREATE TABLE study.frame (frame text, sa_id bigint, eligible boolean, tok boolean, ge5 boolean, frag boolean, n_utxo bigint, draw_key bytea, split_key bytea);
+    CREATE TABLE study.txo (tx_out_id bigint PRIMARY KEY, created_tx bigint, consumed_tx bigint, sa_id bigint, out_index int, value numeric,
+                            payment_cred bytea, script_pay boolean, has_datum boolean, has_ref_script boolean, via_payment boolean);
+  `);
+  const frames = wallets.flatMap((x) => Object.entries(x.frames).map(([frame, f]) => ({ frame, sa: x.sa, eligible: f.eligible, tok: f.tok, ge5: f.ge5, frag: f.frag, n: f.nUtxo, key: f.key.toString('hex'), split: f.split.toString('hex') })));
+  await db.query(`INSERT INTO study.frame SELECT x.frame, x.sa, x.eligible, x.tok, x.ge5, x.frag, x.n, decode(x.key, 'hex'), decode(x.split, 'hex')
+                    FROM json_to_recordset($1::json) AS x(frame text, sa bigint, eligible boolean, tok boolean, ge5 boolean, frag boolean, n bigint, key text, split text)`, [JSON.stringify(frames)]);
+  await db.query(`INSERT INTO study.txo SELECT x.id, x.created, x.consumed, x.sa, 0, 1000000, NULL, false, x.held, false, false
+                    FROM json_to_recordset($1::json) AS x(id bigint, created bigint, consumed bigint, sa bigint, held boolean)`, [JSON.stringify(txo)]);
+}
+
+const SMALL = { sample_n: 15, group_edge_b1: 5, group_edge_b2: 10, group_edge_b3: 20, quota_b1: 3, quota_b2: 2, quota_b3: 1, history_cap: 8, guard: 1000 };
+
+// Runs the activity and draw steps (and the split) on a loaded world, and
+// compares every sample row, group and frame summary with the rule above.
+async function drawAgainstRule(h, w, over, windows = W) {
+  const settings = applyOverrides(defaultSettings(), Object.entries(over).map(([k, v]) => `${k}=${v}`));
+  const p = sqlParams({ network: 'preprod', settings, snapshot: { id: 1, t: 200 }, h: H, windows });
+  await h.runBlock('activity', p);
+  await h.runBlock('draw', p);
+  await h.runBlock('split', p);
+  const want = rule(w, settings, windows);
+  for (const frame of ['recent', 'peak']) {
+    const m = want[frame];
+    const got = await h.rows(`SELECT sa_id, kind, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 ORDER BY draw_rank`, [frame]);
+    assert.deepEqual(
+      got.map((r) => [Number(r.sa_id), r.kind, Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)]),
+      m.sample.map((x) => [x.sa, 'random', x.k, x.g, x.start, x.ref, x.t, x.capped, x.hi]),
+      `${frame}: the sample`
+    );
+    const groups = await h.rows(`SELECT size_group, quota, n_drawn, n_taken, n_skipped FROM study.draw_group WHERE frame = $1 ORDER BY size_group`, [frame]);
+    assert.deepEqual(
+      groups.map((r) => [r.size_group, r.quota === null ? null : Number(r.quota), Number(r.n_drawn), Number(r.n_taken), Number(r.n_skipped)]),
+      GROUPS.map((g) => [g, m.groups[g].quota, m.groups[g].drawn, m.groups[g].taken, m.groups[g].drawn - m.groups[g].taken]),
+      `${frame}: D_k and A_k`
+    );
+    const sum = (await h.rows(`SELECT k_full, k_stop, n_eligible, guard_reached, n_drawn, n_taken, sample_n, quota_scale::text AS s, history_cap FROM study.draw_summary WHERE frame = $1`, [frame]))[0];
+    assert.deepEqual(
+      [sum.k_full === null ? null : Number(sum.k_full), Number(sum.k_stop), Number(sum.n_eligible), sum.guard_reached, Number(sum.n_drawn), Number(sum.n_taken), Number(sum.sample_n), sum.s, Number(sum.history_cap)],
+      [m.kFull, m.kStop, m.nEligible, m.guardReached, GROUPS.reduce((a, g) => a + m.groups[g].drawn, 0), m.sample.length, settings.sample_n, settings.quota_scale, settings.history_cap],
+      `${frame}: the summary`
+    );
+  }
+  const check = (await h.db.query(fill(h.blocks.get('draw_check').statements[0], p))).rows[0];
+  assert.deepEqual(check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true });
+  // Every sample row carries its frame's fragmentation flag.
+  const flags = await h.rows(`SELECT s.fragmented, f.frag FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id`);
   assert.ok(flags.length > 0 && flags.every((r) => r.fragmented === r.frag));
-  // With x7_prefix false, after (a) only wallets meeting (b), (c) or (d) join.
-  const p7 = params({ guard: 1000, target_a: 4, target_b: 3, target_c: 1, target_d: 3, ada_only_n: 3, x7_prefix: false });
-  await runBlock('draw', p7);
-  const r7 = await rows(`SELECT d.k, d.ge5, d.ge100, d.frag FROM study.sample s JOIN study.draw_order d ON d.frame = s.frame AND d.sa_id = s.sa_id WHERE s.frame = 'recent' AND s.kind = 'random' ORDER BY d.k`);
-  assert.ok(r7.every((r) => Number(r.k) <= kA || r.ge5 || r.ge100 || r.frag));
-  assert.ok(r7.some((r) => Number(r.k) > kA && r.frag && !r.ge5 && !r.ge100) || !order.some((r) => Number(r.k) > kA && Number(r.k) <= kAll && r.tok && r.frag && !r.ge5 && !r.ge100), 'a wallet taken after (a) for (d) alone joins');
+  return want;
+}
+
+test('the draw: groups, quotas filled in draw order, skipped wallets counted, the stop at a full sample, the cap', async () => {
+  const w = world(7, 150);
+  const h = await freshDb();
+  await loadWorld(h.db, w);
+  const want = await drawAgainstRule(h, w, SMALL);
+  for (const frame of ['recent', 'peak']) {
+    const m = want[frame];
+    // What this world exercises, so a change to it cannot hollow the test.
+    assert.equal(m.sample.length, 15, `${frame}: the sample fills`);
+    assert.ok(m.kFull < m.nEligible, `${frame}: the draw stops before the frame's end`);
+    for (const g of ['B1', 'B2', 'B3']) assert.ok(m.groups[g].drawn > m.groups[g].taken && m.groups[g].taken === m.groups[g].quota, `${frame}: ${g} fills and skips`);
+    assert.ok(m.groups.B0.taken === 15 - 6 && m.groups.B0.drawn === m.groups.B0.taken, `${frame}: B0 takes the rest and skips none`);
+    assert.ok(m.sample.some((x) => x.capped) && m.sample.some((x) => !x.capped), `${frame}: capped and uncapped wallets`);
+    assert.ok(m.sample.some((x) => x.start > x.ref) && m.sample.some((x) => x.ref > x.start), `${frame}: U from the window's start and from the reference block`);
+  }
+  // One label per credential across both frames.
+  const labels = await h.rows(`SELECT sa_id FROM study.sample GROUP BY sa_id HAVING count(DISTINCT split) > 1`);
+  assert.deepEqual(labels, []);
+});
+
+test('the draw: the guard, the frame\'s end, the quota scale and held UTxOs', async () => {
+  const w = world(11, 150);
+  // The guard reached before the sample fills.
+  let h = await freshDb();
+  await loadWorld(h.db, w);
+  let m = await drawAgainstRule(h, w, { ...SMALL, guard: 20 });
+  for (const frame of ['recent', 'peak']) {
+    assert.equal(m[frame].guardReached, true, `${frame}: guard reached`);
+    assert.equal(m[frame].kStop, 20);
+    assert.ok(m[frame].sample.length < 15);
+  }
+  // A sample larger than the frame: the draw runs to the frame's last key.
+  h = await freshDb();
+  await loadWorld(h.db, w);
+  m = await drawAgainstRule(h, w, { ...SMALL, sample_n: 1000 });
+  for (const frame of ['recent', 'peak']) {
+    assert.deepEqual([m[frame].guardReached, m[frame].kFull, m[frame].kStop], [false, null, m[frame].nEligible], frame);
+  }
+  // The quota scale: halves round up, and a quota of 0 skips every wallet of
+  // its group.
+  for (const [s, quotas] of [['0.5', [2, 1, 1]], ['0.25', [1, 1, 0]], ['2.5', [8, 5, 3]], ['1.45', [4, 3, 1]]]) {
+    assert.deepEqual([3, 2, 1].map((b) => quotaAt(b, s)), quotas, `quotas at s = ${s}`);
+    h = await freshDb();
+    await loadWorld(h.db, w);
+    m = await drawAgainstRule(h, w, { ...SMALL, quota_scale: s });
+    if (s === '0.25') for (const frame of ['recent', 'peak']) assert.ok(m[frame].groups.B3.drawn > 0 && m[frame].groups.B3.taken === 0, `${frame}: B3 at quota 0`);
+  }
+  // Held UTxOs left out of U (x9_count_held false) change the groups.
+  h = await freshDb();
+  await loadWorld(h.db, w);
+  const held = await drawAgainstRule(h, w, { ...SMALL, x9_count_held: false });
+  const counted = rule(w, applyOverrides(defaultSettings(), Object.entries(SMALL).map(([k, v]) => `${k}=${v}`)));
+  assert.notDeepEqual(held.recent.sample, counted.recent.sample, 'held UTxOs matter in this world');
+});
+
+test('the draw at the study\'s edges: 250, 1,000 and 4,000 on either count, and the 1,000-transaction cap', async () => {
+  // Recent window [1001, 6000] after a start at 1000; the peak frame is empty.
+  const windows = { recent: { lo: 1001, hi: 6000, t_start: 1000, first_epoch: 2, last_epoch: 3 }, peak: { lo: 11, hi: 60, t_start: 10, first_epoch: 1, last_epoch: 1 } };
+  // sa: [UTxOs at the reference block, UTxOs at the window's start, window transactions]
+  const spec = {
+    1: [249, 0, 249], 2: [250, 0, 0], 3: [0, 250, 0], 4: [0, 0, 250],
+    5: [999, 999, 999], 6: [1000, 0, 0], 7: [0, 1000, 0], 8: [0, 0, 1000],
+    9: [3999, 0, 1001], 10: [4000, 0, 0], 11: [0, 0, 4000], 12: [0, 4000, 1]
+  };
+  const wallets = [];
+  const txo = [];
+  let id = 0;
+  for (const [k, [ref, start, ntx]] of Object.entries(spec)) {
+    const sa = Number(k);
+    wallets.push({ sa, frames: { recent: { eligible: true, tok: true, ge5: true, frag: false, nUtxo: ref, key: createHash('sha256').update(`edge ${sa}`).digest(), split: createHash('sha256').update(`edge split ${sa}`).digest() } } });
+    for (let i = 0; i < start; i++) txo.push({ id: ++id, sa, created: 1 + (i % 999), consumed: null, held: false });
+    // One output created at each window transaction, every other one spent
+    // two transactions later, so a transaction both creates and consumes.
+    for (let i = 0; i < ntx; i++) txo.push({ id: ++id, sa, created: 1001 + i, consumed: i % 2 === 0 && i + 2 < ntx ? 1001 + i + 2 : null, held: false });
+  }
+  const w = { wallets, txo };
+  const h = await freshDb();
+  await loadWorld(h.db, w);
+  const m = await drawAgainstRule(h, w, {}, windows);
+  // Every wallet's group, taken or skipped.
+  const groups = Object.fromEntries((await h.rows(`SELECT sa_id, size_group FROM study.draw_order WHERE frame = 'recent'`)).map((r) => [Number(r.sa_id), r.size_group]));
+  assert.deepEqual(groups, { 1: 'B0', 2: 'B1', 3: 'B1', 4: 'B1', 5: 'B1', 6: 'B2', 7: 'B2', 8: 'B2', 9: 'B2', 10: 'B3', 11: 'B3', 12: 'B3' });
+  // B3's quota of 2 at s = 1 skips one of its three wallets.
+  assert.deepEqual([m.recent.groups.B3.quota, m.recent.groups.B3.drawn, m.recent.groups.B3.taken], [2, 3, 2]);
+  assert.equal(m.recent.sample.length, 11);
+  // T = 1,000 is not capped; T = 1,001 and T = 4,000 are, and their histories
+  // end at their 1,000th window transaction, 2,000.
+  const caps = Object.fromEntries(m.recent.sample.map((x) => [x.sa, [x.t, x.capped, x.hi]]));
+  assert.deepEqual(caps[8], [1000, false, 6000]);
+  assert.deepEqual(caps[9], [1001, true, 2000]);
+  if (caps[11]) assert.deepEqual(caps[11], [4000, true, 2000]);
 });
 
 test('flow stage 1 counts only credentials with an output at or before the snapshot', async () => {

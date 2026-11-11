@@ -316,14 +316,14 @@ test("the two tools' runs are kept apart: neither settles the other's, and a run
     `line ${bad3.seq}: a source-check-live-fire-start entry with a simulator run ID`
   ]);
   // This tool refuses a simulator run ID before it writes any entry: run (any
-  // mode), source-check, scam-recheck and confirm-snapshot.
+  // mode), source-check and confirm-snapshot.
   const before = readFileSync(checkLogPath('mainnet'), 'utf8');
   const simId = /run IDs beginning with sim- are the simulator's/;
   await assert.rejects(runPipeline({ runId: 'sim-r', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), liveFire: { testH: 'ab'.repeat(32), purpose: 'p' } }), simId);
   await assert.rejects(runPipeline({ runId: 'sim-r', log: () => {} }), simId);
   await assert.rejects(sourceCheckCommand({ runId: 'sim-r', liveFire: true, purpose: 'p', expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), stake: [], nodeStake: [] }, 'source-check'), simId);
   const cli = fileURLToPath(new URL('../../src/cli.mjs', import.meta.url));
-  for (const args of [['scam-recheck', '--run', 'sim-r', '--scam-list', 'x.json', '--scam-clone', home], ['confirm-snapshot', '--run-id', 'sim-r']]) {
+  for (const args of [['confirm-snapshot', '--run-id', 'sim-r']]) {
     const r = spawnSync(process.execPath, [cli, ...args], { env: { ...process.env, RESEARCH_CORPUS_HOME: home, PGHOST: '127.0.0.1', PGPORT: '1' }, encoding: 'utf8' });
     assert.equal(r.status, 1, args[0]);
     assert.match(r.stderr, simId, args[0]);

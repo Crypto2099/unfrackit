@@ -120,7 +120,7 @@ test('--sim-wallets: only in a live-fire run, once on mainnet, kept until cleanu
   const end = appendEntry('mainnet', 'live-fire', { run_id: 'lf-sim', start_seq: start.seq, outcome: 'succeeded', wallet_level_output: 'deleted 2026-10-25T00:00:00Z', sim_wallets: SIM_KEPT });
   writeJson(join(runDir('mainnet', 'lf-sim'), 'sim', 'wallets.json'), { wallets: [] });
   await assert.rejects(
-    runPipeline({ client, runId: 'lf-sim-2', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), scamClone: home, liveFire: { testH: 'ab'.repeat(32), purpose: 'p', simWallets: true } }),
+    runPipeline({ client, runId: 'lf-sim-2', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), liveFire: { testH: 'ab'.repeat(32), purpose: 'p', simWallets: true } }),
     new RegExp(`picked by run lf-sim \\(check-log entry ${end.seq}\\)`)
   );
   const entries = readFileSync(checkLogPath('mainnet'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -150,7 +150,7 @@ test("the simulator's runs: this tool's cleanup refuses one and deletes nothing,
   // refused as a second one: the run passes that refusal and stops at its
   // first chain query.
   await assert.rejects(
-    runPipeline({ client, runId: 'lf-pick', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), scamClone: home, liveFire: { testH: 'ab'.repeat(32), purpose: 'p', simWallets: true } }),
+    runPipeline({ client, runId: 'lf-pick', log: () => {}, expectNetwork: 'mainnet', hypothesesTx: 'bb'.repeat(32), liveFire: { testH: 'ab'.repeat(32), purpose: 'p', simWallets: true } }),
     (e) => /a chain query was reached/.test(e.message) && !/picked by run/.test(e.message)
   );
 }));

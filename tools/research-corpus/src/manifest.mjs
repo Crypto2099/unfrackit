@@ -2,12 +2,12 @@
 // Copyright 2026 Adam K. Dean
 
 // The corpus manifest: the snapshot block (height, hash, time), the published
-// identifiers per frame and sample with their split, the flow tables and the
-// code version. It names no stake address, address or
-// policy of a wallet's holdings; the only transaction hashes it names are the
-// freeze records' carriers: the final freeze, the hypotheses record's first
-// carrier and the carrier the final document cites, usually the same
-// transaction as the first. The raw lists, which name stake addresses, stay
+// identifiers per frame with their split, the flow tables, the draw with its
+// size groups' quotas and drawn and taken counts, and the code version. It
+// names no stake address, address or policy of a wallet's holdings; the only
+// transaction hashes it names are the freeze records' carriers: the final
+// freeze, the hypotheses record's first carrier and the carrier the final
+// document cites, usually the same transaction as the first. The raw lists, which name stake addresses, stay
 // in the run directory under raw/ (mode 0600) and are never deposited; they
 // carry no published identifier, so once the HMAC key is destroyed nothing
 // links an identifier back to an address.
@@ -22,24 +22,25 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
   const key = loadKey(hmacKeyPath || undefined);
   const rows = (
     await client.query(`
-      SELECT s.frame, s.kind, s.stratum, s.sa_id, s.draw_rank, s.prevalence_member, s.split, coalesce(s.fragmented, false) AS fragmented,
+      SELECT s.frame, s.kind, s.sa_id, s.draw_rank, s.size_group, s.n_utxo_start, s.n_utxo_ref, s.n_window_tx, s.capped, s.history_hi,
+             s.split, coalesce(s.fragmented, false) AS fragmented,
              c.hash_raw, c.view, coalesce(k.agree, false) AS reconstruction_agree,
              coalesce(fr.any_flag, false) AS franken_any
         FROM study.sample s
         JOIN study.cred c ON c.sa_id = s.sa_id
         LEFT JOIN study.reconstruction_check k ON k.sa_id = s.sa_id
         LEFT JOIN (SELECT sa_id, bool_or(flagged) AS any_flag FROM study.franken GROUP BY sa_id) fr ON fr.sa_id = s.sa_id
-       ORDER BY s.frame DESC, s.kind, s.stratum, s.draw_rank`)
+       ORDER BY s.frame DESC, s.kind, s.draw_rank`)
   ).rows;
   const byInput = (r) => (run.settings.x15_bech32 ? r.view : r.hash_raw);
   const samples = new Map();
-  const raw = ['frame,kind,stratum,sa_id,stake_address,draw_rank,prevalence_member,split,reconstruction_agree,franken_any,fragmented'];
+  const raw = ['frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented'];
   for (const r of rows) {
     const id = identifier(key, byInput(r));
-    const k = `${r.frame}|${r.kind}|${r.stratum}`;
-    if (!samples.has(k)) samples.set(k, { frame: r.frame, kind: r.kind, stratum: r.stratum, ids: [] });
-    samples.get(k).ids.push({ id, split: r.split, reconstruction_excluded: !r.reconstruction_agree, prevalence_member: r.prevalence_member });
-    raw.push([r.frame, r.kind, JSON.stringify(r.stratum), r.sa_id, r.view, r.draw_rank, r.prevalence_member, r.split, r.reconstruction_agree, r.franken_any, r.fragmented].join(','));
+    const k = `${r.frame}|${r.kind}`;
+    if (!samples.has(k)) samples.set(k, { frame: r.frame, kind: r.kind, ids: [] });
+    samples.get(k).ids.push({ id, split: r.split, reconstruction_excluded: !r.reconstruction_agree });
+    raw.push([r.frame, r.kind, r.sa_id, r.view, r.draw_rank, r.size_group, r.n_utxo_start, r.n_utxo_ref, r.n_window_tx, r.capped, r.history_hi, r.split, r.reconstruction_agree, r.franken_any, r.fragmented].join(','));
   }
   writePrivate(join(dir, 'raw', 'sample.csv'), raw.join('\n') + '\n');
   const list = [...samples.values()].map((s) => {
@@ -47,7 +48,6 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     return {
       frame: s.frame,
       kind: s.kind,
-      stratum: s.stratum,
       n: s.ids.length,
       n_exploration: s.ids.filter((x) => x.split === 'exploration').length,
       n_confirmation: s.ids.filter((x) => x.split === 'confirmation').length,
@@ -69,17 +69,10 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     flow: report.flow,
     frame_report: report.frame_report,
     draw: report.draw,
-    strata: report.strata.map((s) => ({ ord: s.ord, stratum: s.stratum, part: s.part, class: s.class, policy: s.policy, asset_name: s.asset_name, n_recent: s.n_recent, n_peak: s.n_peak })),
-    // Holder counts are published for candidates at or above the floor only;
-    // the rule needs no more, and a thin candidate's count can be a handful.
-    strata_fungible_floor: report.ft_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.ft_floor ? r.n_holders : null, below_floor: !r.named && r.n_holders < run.settings.ft_floor })),
-    // Part 4 the same way: holder counts at or above its floor only.
-    strata_stable_commodity_floor: report.sc_floor.map((r) => ({ ...r, n_holders: r.n_holders >= run.settings.sc_floor ? r.n_holders : null, below_floor: r.n_holders < run.settings.sc_floor })),
-    // The scam screen as applied: the list's commit and extract digest, the
-    // counts and the strata rows it kept out. The excluded policies that also
-    // hold unlisted assets, a descriptive check of the list, stay in
-    // report.json.
-    scam_screen: (({ policies_with_unlisted_assets, ...rest }) => rest)(report.scam_screen || { applied: false }),
+    // Per frame and size group: the quota, the wallets drawn (D_k) and taken
+    // (A_k), sample sizes anyone can reproduce from the chain at the
+    // snapshot. No identifier carries its group.
+    draw_groups: report.draw_groups,
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
     reconstruction_check: report.reconstruction_check || {},

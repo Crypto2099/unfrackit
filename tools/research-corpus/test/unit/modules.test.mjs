@@ -14,14 +14,13 @@ test('every module loads', async () => {
   for (const f of readdirSync(SRC).filter((x) => x.endsWith('.mjs') && x !== 'cli.mjs')) await import(join(SRC, f));
 });
 
-test('the hash list covers src, sql, data and the package files, each UTF-8 with LF', () => {
+test('the hash list covers src, sql and the package files, each UTF-8 with LF', () => {
   const list = hashList();
   const paths = list.map((x) => x.path);
   assert.ok(paths.includes('package-lock.json'));
   assert.ok(paths.includes('package.json'));
   assert.ok(paths.some((p) => p.startsWith('sql/')));
   assert.ok(paths.some((p) => p.startsWith('src/')));
-  assert.ok(paths.some((p) => p.startsWith('data/')));
   assert.ok(!paths.some((p) => p.startsWith('test/') || p === 'README.md'));
   for (const x of list) assert.match(x.sha256, /^[0-9a-f]{64}$/);
   const text = formatHashList();

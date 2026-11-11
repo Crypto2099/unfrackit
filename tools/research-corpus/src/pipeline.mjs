@@ -22,63 +22,19 @@ import { performance } from 'node:perf_hooks';
 import { readFileSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadAll } from './sqlfile.mjs';
-import { connect, applySession, dbMeta, checkHistoryIntact, q, qBound } from './db.mjs';
+import { connect, applySession, dbMeta, checkHistoryIntact, q } from './db.mjs';
 import { Runner, dropRunTables, mark } from './runner.mjs';
 import { sqlParams, defaultSettings, applyOverrides, FROZEN_PEAK } from './params.mjs';
 import { runDir, writeJson, writePrivate } from './paths.mjs';
-import { codeVersion, hashList, TOOL_DIR } from './hash.mjs';
+import { codeVersion, hashList } from './hash.mjs';
 import { buildManifest } from './manifest.mjs';
 import { reconstructionCheck } from './reconstruction-check.mjs';
 import { verifyFinalFreeze, drawKey, readTx, signedBy, sha256hex, ruleSnapshot } from './freeze.mjs';
 import { mainnetOptionErrors, codeManifestErrors, studyKeyFor } from './guards.mjs';
 import { appendEntry, sanitizeError, refuse, checkLogPath, verifyLog, SIM_KEPT, isSimRunId, refuseSimRunId } from './checklog.mjs';
 import { Koios } from './koios.mjs';
-import { loadScamList, descendsFrom, fingerprintMismatches } from './scam-list.mjs';
 
 const HEX32 = /^[0-9a-f]{64}$/;
-export const DEFAULT_STRATA = join(TOOL_DIR, 'data', 'strata-mainnet.json');
-export const DEFAULT_RULINGS = join(TOOL_DIR, 'data', 'strata-rulings.json');
-export const DEFAULT_SCAM_LIST = join(TOOL_DIR, 'data', 'scam-list.json');
-const STRATA_FORMAT = 'research-corpus-strata-v3';
-
-// The strata file: the named rows of part 1, the CoinGecko candidates of part
-// 2 and the stablecoins and tokenized commodities of part 4, each in rank
-// order (see sql/strata.sql). A file that lists a coin no decided rule
-// settles (its `unsettled` list) is refused until the case is decided.
-export function loadStrataList(path, settings) {
-  const doc = JSON.parse(readFileSync(path, 'utf8'));
-  if (doc.format !== STRATA_FORMAT) throw new Error(`${path}: expected format ${STRATA_FORMAT}`);
-  if (!Array.isArray(doc.named) || !Array.isArray(doc.candidates) || !Array.isArray(doc.part4)) throw new Error(`${path}: expected named, candidates and part4 arrays`);
-  if (doc.unsettled !== undefined && !Array.isArray(doc.unsettled)) throw new Error(`${path}: unsettled must be an array`);
-  if (doc.unsettled && doc.unsettled.length) {
-    throw refuse(`refusing: ${path} lists ${doc.unsettled.length === 1 ? 'a coin' : 'coins'} no decided rule settles (${doc.unsettled.map((u) => u.coingecko_id).join(', ')}); decide each case and capture the strata again`);
-  }
-  const named = doc.named.map((r, i) => {
-    if (!/^[0-9a-f]{56}$/.test(r.policy)) throw new Error(`${path} named row ${i + 1}: policy must be 56 hex characters`);
-    if (r.class !== 'NFT' && r.class !== 'FT') throw new Error(`${path} named row ${i + 1}: class must be NFT or FT`);
-    if (r.class === 'FT' && !/^([0-9a-f]{2}){0,32}$/.test(r.asset_name ?? '')) throw new Error(`${path} named row ${i + 1}: FT rows need asset_name hex`);
-    let stratum = r.stratum || r.project;
-    if (settings.x10_spacebudz_one && r.group) stratum = r.group;
-    return { ord: i + 1, stratum, project: r.project, class: r.class, policy: r.policy, asset_name: r.class === 'FT' ? r.asset_name : null, nft_top_exclude: !!r.nft_top_exclude };
-  });
-  const ranked = (rows, what) =>
-    rows.map((r, i) => {
-      if (r.rank !== i + 1) throw new Error(`${path} ${what} ${i + 1}: ranks must run 1, 2, 3 in file order`);
-      if (!/^[0-9a-f]{56}$/.test(r.policy) || !/^([0-9a-f]{2}){0,32}$/.test(r.asset_name ?? '')) throw new Error(`${path} ${what} ${i + 1}: policy and asset_name hex`);
-      return { rank: r.rank, stratum: r.stratum || r.project, project: r.project, policy: r.policy, asset_name: r.asset_name };
-    });
-  const candidates = ranked(doc.candidates, 'candidate');
-  const part4 = ranked(doc.part4, 'part 4 row').map((r, i) => {
-    const kind = doc.part4[i].kind;
-    if (kind !== 'stablecoin' && kind !== 'tokenized commodity') throw new Error(`${path} part 4 row ${i + 1}: kind must be stablecoin or tokenized commodity`);
-    return { ...r, kind };
-  });
-  if (named.length >= 100) throw new Error(`${path}: too many named rows`);
-  const strata = [...named.map((r) => r.stratum), ...candidates.map((r) => r.stratum), ...part4.map((r) => r.stratum)];
-  const dup = strata.find((x, i) => strata.indexOf(x) !== i && !named.some((r) => r.stratum === x && settings.x10_spacebudz_one));
-  if (dup !== undefined) throw new Error(`${path}: stratum name ${JSON.stringify(dup)} is used twice`);
-  return { provenance: doc.provenance || null, named, candidates, part4 };
-}
 
 async function storeParam(client, runId, key, value) {
   await client.query(
@@ -120,10 +76,7 @@ function functionalChecks(report) {
   if (report.cred_checks) c.credential_checks = true;
   if (report.peak_vs_frozen) c.peak_rule_reproduces_frozen = report.peak_vs_frozen.agrees;
   if (report.reconstruction_check) c.reconstruction_check_all_agree = report.reconstruction_check.n_excluded === 0;
-  if (report.scam_screen) {
-    c.scam_screen_applied = report.scam_screen.applied;
-    if (report.scam_screen.fingerprints_agree !== undefined) c.scam_fingerprints_agree = report.scam_screen.fingerprints_agree;
-  }
+  if (report.draw_check) for (const [k, v] of Object.entries(report.draw_check)) c[`draw_${k}`] = v;
   if (report.profile_check) {
     c.profile_spends_match_frame = report.profile_check.spend_count_mismatch === 0;
     c.profile_receipts_within_frame = report.profile_check.receipt_count_mismatch === 0;
@@ -136,7 +89,7 @@ function functionalChecks(report) {
 // population one query away. The wallet-level tables stay for debugging the
 // failing step; their outputs, steps and anything after them are recomputed
 // on a resumed run.
-const LIVE_FIRE_AGGREGATES = ['study.flow', 'study.draw_summary', 'study.ft_floor', 'study.sc_floor', 'study.nft_top', 'study.unfrackit_tx'];
+const LIVE_FIRE_AGGREGATES = ['study.flow', 'study.draw_summary', 'study.draw_group', 'study.unfrackit_tx'];
 
 // A session-level advisory lock held by a run or a cleanup for its whole
 // connection: steps drop and rebuild shared study tables, so two runs at once
@@ -152,7 +105,6 @@ export async function runPipeline(opts) {
   // A run ID of the simulator's is refused before anything is logged.
   refuseSimRunId(opts.runId);
   if (!live && opts.simWallets) throw refuse('refusing: --sim-wallets is for a live-fire run');
-  if (opts.scamList && !opts.scamClone) throw refuse('refusing: --scam-list needs --scam-clone, the clone its extract is read from');
   const t0 = performance.now();
   const say = opts.log || ((s) => process.stderr.write(s + '\n'));
   // A live-fire run prints only step names, outcomes and times.
@@ -200,9 +152,7 @@ export async function runPipeline(opts) {
 
     // Options.
     if (mainnet) {
-      // opts.scamListPin lets the unit tests stand a record of their own
-      // clone in for the hashed one; runOptions (src/cli.mjs) never passes it.
-      const errors = mainnetOptionErrors({ set: opts.set || [], strataPath: opts.strataGiven ? opts.strataList : null, defaultStrataPath: DEFAULT_STRATA, scamPath: opts.scamList || null, defaultScamPath: opts.scamListPin || DEFAULT_SCAM_LIST, scamClone: opts.scamClone || null, snapshot: opts.snapshot, live: !!live });
+      const errors = mainnetOptionErrors({ set: opts.set || [], snapshot: opts.snapshot, live: !!live });
       if (opts.capture) errors.push('no plan capture under EXPLAIN ANALYZE on mainnet');
       if (opts.hmacKey) errors.push('mainnet runs use the study key in secret/hmac.key');
       if (opts.standInTx) errors.push('a stand-in for h is for test networks only');
@@ -248,7 +198,7 @@ export async function runPipeline(opts) {
 
     await takeLock(client);
     const session = await applySession(client, opts.session || {});
-    for (const lib of ['schema', 'cip67', 'strata_fn']) {
+    for (const lib of ['schema', 'cip67']) {
       await new Runner({ client, blocks, runId: '-', params: {}, log: () => {} }).run(lib);
     }
 
@@ -359,17 +309,6 @@ export async function runPipeline(opts) {
     report.snapshot = snapshot;
     if (!live && !(snapshot.block_no >= freeze.block_no)) throw refuse(`refusing: snapshot block ${snapshot.block_no} is before the freeze block ${freeze.block_no}`);
 
-    // The run's input files, read before any step: a strata file that lists
-    // an unsettled coin, or a scam list whose extract differs from its
-    // record, is refused here, not after the heavy steps. On a test network
-    // the scam screen applies only when a clone is given.
-    const strata = loadStrataList(opts.strataList || DEFAULT_STRATA, settings);
-    const scam = opts.scamClone ? loadScamList(opts.scamList || (mainnet && opts.scamListPin) || DEFAULT_SCAM_LIST, opts.scamClone) : null;
-    const scamId = scam ? { repository: scam.record.source.repository, commit: scam.record.source.commit, commit_time: scam.record.source.commit_time, extract_sha256: scam.sha256, n_fingerprints: scam.fingerprints.length, license: scam.record.license } : null;
-    if (stored.scam_list !== undefined && JSON.stringify(stored.scam_list) !== JSON.stringify(scamId)) throw refuse(`refusing: run ${runId} was started with another scam list; use a new run id`);
-    await storeParam(client, runId, 'scam_list', scamId);
-    report.scam_screen = { applied: !!scam, ...(scamId || {}) };
-
     const run = { network, runId, settings, snapshot, h, windows: stored.windows || null };
     runner = new Runner({ client, blocks, runId, params: sqlParams(run), capture: !!opts.capture && !mainnet && !live, explain: !!opts.explain, quiet: !!live, log: live ? (s) => say(s.replace(/, \d+ rows$/, '')) : log, redo: new Set(opts.redo || []) });
     const setParams = () => {
@@ -463,35 +402,13 @@ export async function runPipeline(opts) {
     report.flow = (await q(client, blocks, 'flow_rows')).map((r) => ({ ...r, n_in: num(r.n_in), n_removed: num(r.n_removed), n_out: num(r.n_out) }));
     report.frame_report = (await q(client, blocks, 'frame_report', runner.params)).map((r) => numRow(r, ['frame']));
 
-    // The draw and the samples.
+    // The draw and the sample.
     await runner.run('draw');
-    report.draw = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'guard_reached']));
-    await runner.run('strata_list_table', {}, async (c) => {
-      await qBound(c, blocks, 'strata_list_load', [JSON.stringify(strata.named)]);
-      await qBound(c, blocks, 'strata_candidate_load', [JSON.stringify(strata.candidates)]);
-      await qBound(c, blocks, 'strata_sc_load', [JSON.stringify(strata.part4)]);
-    });
-    if (!live) await storeParam(client, runId, 'strata_list', strata);
-    // The scam screen: listed fingerprints to policies through db-sync's
-    // multi_asset.fingerprint, each resolved asset's fingerprint recomputed
-    // here from its policy and name.
-    await runner.run('scam_list_table', {}, (c) => qBound(c, blocks, 'scam_fp_load', [JSON.stringify(scam ? scam.fingerprints : [])]));
-    await runner.run('scam_policy');
-    const scamRows = await q(client, blocks, 'scam_asset_rows');
-    const scamBad = fingerprintMismatches(scamRows);
-    report.scam_screen.fingerprints_agree = scamBad.length === 0;
-    if (scamBad.length) throw refuse(`refusing: db-sync's multi_asset.fingerprint differs from the CIP-14 fingerprint of policy and name for ${scamBad.length === 1 ? 'a listed asset' : 'listed assets'}`);
-    Object.assign(report.scam_screen, numRow((await q(client, blocks, 'scam_counts'))[0]));
-    await runner.run('ft_floor');
-    await runner.run('sc_floor');
-    await runner.run('nft_top');
-    await runner.run('strata');
-    report.ft_floor = (await q(client, blocks, 'ft_floor_report')).map((r) => ({ ...r, rank: num(r.rank), n_holders: num(r.n_holders) }));
-    report.sc_floor = (await q(client, blocks, 'sc_floor_report')).map((r) => ({ ...r, rank: num(r.rank), n_holders: num(r.n_holders) }));
-    report.scam_screen.screened = (await q(client, blocks, 'scam_screened_rows')).map((r) => ({ ...r, rank: num(r.rank) }));
-    // Descriptive only: excluded policies that also hold unlisted assets.
-    report.scam_screen.policies_with_unlisted_assets = (await q(client, blocks, 'scam_policy_report', runner.params)).map((r) => numRow(r, ['policy']));
-    report.strata = (await q(client, blocks, 'strata_report')).map((r) => ({ ...r, ord: num(r.ord), nft_top_holders: num(r.nft_top_holders), n_recent: num(r.n_recent), n_peak: num(r.n_peak) }));
+    report.draw = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'guard_reached', 'quota_scale']));
+    report.draw_groups = (await q(client, blocks, 'draw_group_rows')).map((r) => numRow(r, ['frame', 'size_group']));
+    report.draw_check = (await q(client, blocks, 'draw_check', runner.params))[0];
+    const badDraw = Object.entries(report.draw_check).filter(([, v]) => v !== true).map(([k]) => k);
+    if (badDraw.length) throw new Error(`draw checks failed: ${badDraw.join(', ')}`);
     await runner.run('split');
     await runner.run('sample_wallets');
 
@@ -501,7 +418,7 @@ export async function runPipeline(opts) {
       await q(c, blocks, 'reconstruction_check_mark');
     });
     report.reconstruction_check = numRow((await q(client, blocks, 'reconstruction_check_counts'))[0], ['direct_valid']);
-    report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'stratum']));
+    report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'size_group']));
     report.split_overall = numRow((await q(client, blocks, 'split_overall'))[0]);
     report.sample_bounds = (await q(client, blocks, 'sample_bounds')).map((r) => ({ ...r, n: num(r.n) }));
     report.pointer_wallets = numRow((await q(client, blocks, 'pointer_wallets'))[0]);
@@ -702,46 +619,15 @@ export async function ownDrawn(client, runId, views) {
   if (owner !== mark(runId)) throw refuse(`refusing: study.sample does not belong to run ${runId}`);
   const rows = (
     await client.query(
-      `SELECT s.frame, s.kind, s.stratum, count(*) AS drawn
+      `SELECT s.frame, s.kind, count(*) AS drawn
          FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id
         WHERE c.view = ANY ($1::text[])
-        GROUP BY s.frame, s.kind, s.stratum ORDER BY s.frame DESC, s.kind, s.stratum`,
+        GROUP BY s.frame, s.kind ORDER BY s.frame DESC, s.kind`,
       [views]
     )
   ).rows;
   const wallets = (await client.query(`SELECT count(DISTINCT s.sa_id) AS n FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id WHERE c.view = ANY ($1::text[])`, [views])).rows[0].n;
-  return { run_id: runId, listed: views.length, drawn_wallets: Number(wallets), by_sample: rows.map((r) => ({ frame: r.frame, kind: r.kind, stratum: r.stratum, drawn: Number(r.drawn) })) };
-}
-
-// The sensitivity analysis for a later version of the scam list: on a
-// finished run, every stratum whose policies a later list flags, so that
-// every result that uses the strata can also be reported without them. The
-// run's strata and samples are not changed. Returns the result and writes it
-// to the run directory.
-export async function scamRecheck({ client, runId, recordPath, clone, network }) {
-  const blocks = loadAll();
-  const p = await loadParams(client, runId);
-  const study = p.mode === 'study' && p.freeze && p.freeze.role === 'final-freeze';
-  if (!(study || p.mode === 'test')) throw refuse(`refusing: run ${runId} is ${p.mode ? `a ${p.mode} run` : 'not recorded'}; scam-recheck reads only the study run of a final freeze (or a test run on a test network)`);
-  if (!p.finished) throw refuse(`refusing: run ${runId} has not finished`);
-  const owner = (await client.query('SELECT obj_description(to_regclass($1), $2) AS c', ['study.strata_all', 'pg_class'])).rows[0].c;
-  if (owner !== mark(runId)) throw refuse(`refusing: study.strata_all does not belong to run ${runId}`);
-  const later = loadScamList(recordPath, clone);
-  const policies = new Set((await qBound(client, blocks, 'scam_recheck_policies', [later.fingerprints])).rows.map((r) => r.policy));
-  const strata = (await q(client, blocks, 'scam_recheck_strata')).map((r) => ({ stratum: r.stratum, part: r.part, flagged: r.policies.some((x) => policies.has(x)) }));
-  const frozen = p.scam_list || null;
-  const result = {
-    run_id: runId,
-    frozen,
-    later: { repository: later.record.source.repository, commit: later.record.source.commit, commit_time: later.record.source.commit_time, extract_sha256: later.sha256, n_fingerprints: later.fingerprints.length },
-    later_descends_from_frozen: frozen ? descendsFrom(clone, later.record.source.commit, frozen.commit) : null,
-    strata,
-    strata_flagged: strata.filter((x) => x.flagged).map((x) => x.stratum),
-    strata_kept: strata.filter((x) => !x.flagged).map((x) => x.stratum),
-    checked_at: new Date().toISOString()
-  };
-  writeJson(join(runDir(network, runId), `scam-recheck-${later.record.source.commit}.json`), result);
-  return result;
+  return { run_id: runId, listed: views.length, drawn_wallets: Number(wallets), by_sample: rows.map((r) => ({ frame: r.frame, kind: r.kind, drawn: Number(r.drawn) })) };
 }
 
 export const resolvePath = (p) => (p ? resolve(p) : p);

@@ -17,7 +17,6 @@ import { db, blocks, record, S1_SEEDING_TX, TAG, SHAPES, FUNDER, seederAddress, 
 import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
 
-const STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 const RUN_C = `${TAG}-c`;
 
 test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 * 1000 }, async () => {
@@ -31,7 +30,6 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
       runId: RUN_C,
       snapshot: 'rule',
       standInTx: S1_SEEDING_TX,
-      strataList: STRATA,
       hmacKey: process.env.RESEARCH_CORPUS_TEST_HMAC_KEY,
       set: ['guard=1000'],
       log: (s) => process.stderr.write(`  ${s}\n`)
@@ -51,6 +49,7 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
     assert.equal(r.report.reconstruction_check.direct_valid, false);
     assert.equal(r.report.reconstruction_check.n_excluded, 0);
     assert.ok(!('n_case_wallets' in r.report.reconstruction_check) && !('n_case_disagree' in r.report.reconstruction_check));
+    assert.deepEqual(r.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true });
     // The shapes seeded before the snapshot.
     const row = async (id) => (await c.query(`SELECT tok, ge100 FROM study.frame WHERE frame = 'recent' AND sa_id = $1`, [id])).rows[0];
     const s3 = await row(await saIdOf(c, views.S3));

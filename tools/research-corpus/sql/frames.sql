@@ -29,13 +29,15 @@
 --
 -- Token-holding: at least one native asset at the snapshot (recent) or at the
 -- peak window's start or end (peak); held UTxOs count (x9_count_held). The
--- draw's conditions: (b) at least 5 spends in the window; (c) 100 or more
--- tokens, read as distinct assets at the reference block, for the peak frame
--- at its start or end (x8_measure selects distinct, units or nft); (d)
--- fragmented: a token-holding wallet some fungible asset of which (by the
--- classification rule, lib-cip67.sql) sits on 10 or more of its UTxOs
--- (frag_min_utxos), held UTxOs included, at the snapshot (recent) or at the
--- peak window's start or end (peak).
+-- draw's condition (draw.sql): ge5, at least 5 spends in the window
+-- (spends_min). Two descriptive conditions, counted in the frame report and
+-- read by the simulator's live-fire pick (sim-wallets.sql): ge100, 100 or
+-- more tokens (assets_min), read as distinct assets at the reference block,
+-- for the peak frame at its start or end (x8_measure selects distinct, units
+-- or nft); frag, fragmented: a token-holding wallet some fungible asset of
+-- which (by the classification rule, lib-cip67.sql) sits on 10 or more of its
+-- UTxOs (frag_min_utxos), held UTxOs included, at the snapshot (recent) or at
+-- the peak window's start or end (peak).
 --
 -- The draw and split keys: SHA-256 of the ASCII bytes of "draw" (or "split"),
 -- then the 32 raw bytes of h, then the 28 raw bytes of the stake credential's
@@ -84,10 +86,10 @@ g AS (
          (f.n_pay_key <= {{pay_cred_cap}}) AS s5,
          NOT (f.lovelace_script_pay > {{script_share}} * f.lovelace_all) AS s6,
          (f.n_assets_a >= 1 OR f.n_assets_b >= 1) AS tok,
-         (f.n_spends >= {{spends_b_min}}) AS ge5,
+         (f.n_spends >= {{spends_min}}) AS ge5,
          (CASE {{x8_measure}} WHEN 'units' THEN greatest(f.n_units_a, f.n_units_b)
                               WHEN 'nft' THEN greatest(f.n_nft_a, f.n_nft_b)
-                              ELSE greatest(f.n_assets_a, f.n_assets_b) END) >= {{assets_c_min}} AS ge100,
+                              ELSE greatest(f.n_assets_a, f.n_assets_b) END) >= {{assets_min}} AS ge100,
          ((f.n_assets_a >= 1 OR f.n_assets_b >= 1) AND greatest(f.max_ft_utxos_a, f.max_ft_utxos_b) >= {{frag_min_utxos}}) AS frag,
          (f.n_tx > {{heavy_tx}}) AS heavy
     FROM f JOIN study.cred c ON c.sa_id = f.sa_id

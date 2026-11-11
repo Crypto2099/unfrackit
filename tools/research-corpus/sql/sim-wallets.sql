@@ -10,7 +10,7 @@
 --    1  recent frame, token-holding
 --    2  recent frame, token-holding with at least 5 spend events in the window
 --    3  recent frame, holding 100 or more distinct assets at the snapshot
---    4  recent frame, fragmented (requirement (d) of the draw)
+--    4  recent frame, fragmented (frames.sql)
 --    5  recent frame, ADA-only
 --    6  recent frame, a script-executing spend in the window
 --    7  recent frame, more than 1,000 UTxOs at the snapshot
@@ -40,7 +40,7 @@ firsts AS (
   SELECT frame,
          min(k) FILTER (WHERE tok) AS c1,
          min(k) FILTER (WHERE tok AND ge5) AS c2,
-         min(k) FILTER (WHERE n_assets >= {{assets_c_min}}) AS c3,
+         min(k) FILTER (WHERE n_assets >= {{assets_min}}) AS c3,
          min(k) FILTER (WHERE frag) AS c4,
          min(k) FILTER (WHERE NOT tok) AS c5,
          min(k) FILTER (WHERE n_utxo > {{sim_utxo_over}}) AS c7,

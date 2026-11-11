@@ -26,7 +26,7 @@ test('T16 explain on preprod: plans, the statements not planned, nothing written
     const names = r.planned.map((x) => x.name);
     for (const n of ['txo#2', 'label_309_from', 'order_check', 'cred#2', 'script_tx#2', 'unfrackit_tx#2', 'tip_block']) assert.ok(names.includes(n), `${n} planned`);
     assert.ok(r.planned.every((x) => !x.error), 'every plan made');
-    assert.ok(r.not_planned.some((x) => x.name === 'scam_policy#3' && /reads study tables: scam_fp/.test(x.reason)));
+    assert.ok(r.not_planned.some((x) => x.name === 'draw#7' && /reads study tables: activity, draw_group, frame, txo/.test(x.reason)));
     assert.ok(r.not_planned.some((x) => x.name === 'activity#2' && /reads study tables/.test(x.reason)));
     const file = JSON.parse(readFileSync(r.file, 'utf8'));
     assert.ok(!/"(Plan Rows|Total Cost|Startup Cost|Plan Width|Workers Planned|Planned Partitions|JIT)"/.test(JSON.stringify(file)), 'plan numbers stripped');

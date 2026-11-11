@@ -25,7 +25,6 @@ import { checkLogPath, verifyLog } from '../../src/checklog.mjs';
 import { runDir } from '../../src/paths.mjs';
 import { mark } from '../../src/runner.mjs';
 
-const STRATA = new URL('../fixtures/strata-preprod.json', import.meta.url).pathname;
 const TEST_H = createHash('sha256').update(`live-fire test h ${TAG}`).digest('hex');
 
 async function markedTables(c, runId) {
@@ -37,7 +36,7 @@ async function markedTables(c, runId) {
 test('T14 live-fire runs: no counts, check log, tables dropped or kept and cleaned up', { timeout: 4 * 3600 * 1000 }, async () => {
   const c = await db();
   const lines = [];
-  const common = { expectNetwork: 'preprod', snapshot: 'tip', strataList: STRATA, set: ['guard=1000'], log: (s) => lines.push(s) };
+  const common = { expectNetwork: 'preprod', snapshot: 'tip', set: ['guard=1000'], log: (s) => lines.push(s) };
   try {
     // Refused: a real epoch nonce or block hash as the test h.
     const nonce = (await c.query(`SELECT encode(nonce, 'hex') AS n FROM epoch_param WHERE nonce IS NOT NULL ORDER BY epoch_no DESC LIMIT 1`)).rows[0].n;
@@ -59,12 +58,13 @@ test('T14 live-fire runs: no counts, check log, tables dropped or kept and clean
     assert.equal(e1.type, 'live-fire');
     assert.equal(e1.test_h, TEST_H);
     assert.equal(e1.wallet_level_output, 'kept for debugging');
-    assert.ok(e1.steps.length >= 25 && e1.steps.every((s) => s.ok && typeof s.ms === 'number' && !('rows' in s)));
+    assert.ok(e1.steps.length >= 20 && e1.steps.every((s) => s.ok && typeof s.ms === 'number' && !('rows' in s)));
     for (const v of Object.values(e1.checks)) assert.equal(typeof v, 'boolean');
+    for (const k of ['draw_groups_add_up', 'draw_quotas_hold', 'draw_sample_size_holds', 'draw_caps_hold']) assert.equal(e1.checks[k], true, k);
     for (const v of Object.values(e1.parse)) assert.equal(typeof v, 'boolean');
     const keptTables = await markedTables(c, `${TAG}-lf1`);
     assert.ok(keptTables.length > 20, 'study tables kept');
-    for (const t of ['flow', 'draw_summary', 'ft_floor', 'sc_floor', 'nft_top', 'unfrackit_tx']) assert.ok(!keptTables.includes(t), `aggregate ${t} dropped although kept`);
+    for (const t of ['flow', 'draw_summary', 'draw_group', 'unfrackit_tx']) assert.ok(!keptTables.includes(t), `aggregate ${t} dropped although kept`);
     assert.equal(e1.start_seq, e1.seq - 1);
     const dir1 = runDir('preprod', `${TAG}-lf1`);
     assert.deepEqual(readdirSync(dir1).sort(), ['live-fire.json', 'plans.json']);
