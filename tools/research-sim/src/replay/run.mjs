@@ -89,7 +89,8 @@ export function rescueFields(x) {
 // wallet-arm's ms is the attempt's time, which the parent measures: it is
 // written here as 0, in the position the time takes, and the parent sets it
 // in the timing row (spoolJob holds that row back).
-export function* jobRecords(x, { key, hypotheses }) {
+export function* jobRecords(x, { key, hypotheses, opts = {} }) {
+  const { absorb } = opts;
   if (x.refused) {
     yield record('refused', key, { reason: x.refused });
     return;
@@ -97,7 +98,7 @@ export function* jobRecords(x, { key, hypotheses }) {
   for (const p of x.plans) yield record('plan', key, p);
   for (const s of x.spends) yield record('spend', key, s);
   for (const b of x.bursts) yield record('burst', key, b);
-  yield record('wallet-arm', key, { hypotheses, methodVersion: x.method.version, ...x.summary, ms: 0 });
+  yield record('wallet-arm', key, { hypotheses, methodVersion: x.method.version, ...(absorb !== undefined ? { absorb } : {}), ...x.summary, ms: 0 });
 }
 
 // What a worker answers for a replay job (replay/worker.mjs): the job's
@@ -108,6 +109,14 @@ export function spoolJob(x, job) {
   const spooled = spoolRecords(job.spool, jobRecords(x, job), { hold: (rec) => rec.kind === 'wallet-arm' });
   if (x.refused) return { refused: true, spooled };
   return { refused: false, validity: x.summary.validity || null, rescue: job.arm === 'maintained-tidy' ? rescueFields(x) : null, spooled };
+}
+
+// The options a replay job gives its method (checked by the engine): the seed
+// is the repetition, in every arm, so that arms of one repetition share it;
+// the absorption setting, where the job has one (UnFrack.It's rule), is
+// opts.absorb, which the wallet-arm record shows.
+export function replayJobOpts(j) {
+  return { seed: j.repetition, changePolicy: j.change, collateralRule: j.collateral === 'none-needed' ? 'ledger' : j.collateral, ...(j.absorb !== undefined ? { absorb: j.absorb } : {}) };
 }
 
 const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent' && e.intent.collateral.required);
@@ -140,7 +149,7 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
             variant: j.variant,
             repetition: j.repetition,
             method: { name: j.method, options: methodOptions[j.method] || {} },
-            opts: { seed: j.repetition, changePolicy: j.change, collateralRule: j.collateral === 'none-needed' ? 'ledger' : j.collateral },
+            opts: replayJobOpts(j),
             settleEvery,
             policyLock: j.policyLock,
             validity,

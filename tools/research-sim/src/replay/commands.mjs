@@ -5,7 +5,8 @@
 //
 //   replay  --treatment <dir> [--treatment-pins <file>]
 //           (--history <file or directory>... | --shapes <names|all>)
-//           --plan recent | peak | test [--reps-h1 <n>] [--reps-variants <n>]
+//           --plan recent | peak | test
+//           [--collateral-rule ledger | practice] [--reps <n>]
 //           [--test-reps <n>] [--run-id <id>] [--workers <n>]
 //           [--analysis-freeze-tx <hash>] [--validity]
 //   battery --treatment <dir> [--treatment-pins <file>]
@@ -17,8 +18,12 @@
 //
 // A history directory is read for its *.jsonl files. --shapes takes `all`
 // (the 21 fixed shapes) or a comma-separated list of fixed shapes and heavy
-// wallets H<k>E<e> (shapes/heavy.mjs). A test plan runs the
-// test method only and is never a study run. Results go to the private run
+// wallets H<k>E<e> (shapes/heavy.mjs). A recent or peak plan is the study's
+// (arms/plan.mjs): it needs --collateral-rule, the one rule every job runs
+// under, and --reps sets the repetitions of a library that picks at random
+// (10 when absent). A test plan runs the test method only and is never a
+// study run; it runs under every collateral rule unless --collateral-rule
+// names one. Results go to the private run
 // directory (out/records.mjs); the command prints counts only. No time limit
 // decides a result: every replay, answer and oracle call runs to completion,
 // under watchdogs that only make hung work run again (pool.mjs,
@@ -162,12 +167,14 @@ export async function cmdReplay(opts) {
   const wallets = walletsOf(opts, { stream: 'synthetic' });
   const { T, pool, runId, threads } = await setup(opts, 'replay');
   const first = loadSource(T, wallets[0].spec);
-  const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, { reps: { h1: opts.repsH1 ? Number(opts.repsH1) : undefined, variants: opts.repsVariants ? Number(opts.repsVariants) : undefined } });
+  if (plan !== 'test' && !opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
+  if (plan === 'test' && opts.reps !== undefined) throw new Error('--reps is for the recent and peak plans; a test plan takes --test-reps');
+  const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
   const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
   const out = new RunOutput(first.network, runId, header('replay', opts, T, threads, { plan, entries }));
   out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
   try {
-    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity });
+    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, ...(opts.collateralRule ? { collateralRules: [opts.collateralRule] } : {}) });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats });
     return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {

@@ -4,46 +4,42 @@
 // Run plans: which arms run in which window, under which selectors, change
 // policies, collateral rules and repetitions. The command line expands a plan
 // into jobs, one per (wallet, arm, variant, selector, change policy,
-// collateral rule, repetition).
+// absorption setting, collateral rule, repetition).
 //
 // Selectors are named by role, so that a plan is the study's for the
-// baselines and a test plan for the test method:
+// libraries and a test plan for the test method:
 //   lf      cardano-serialization-lib Largest-First (deterministic)
 //   ri      cardano-serialization-lib random selection
-//   rrri    cardano-js-sdk round-robin Random-Improve, seeded: the primary
-//           selector of H-2 to H-6 and H-9
-//   evo     the Evolution SDK default (deterministic), H-7 and H-12 only
+//   rrri    cardano-js-sdk round-robin Random-Improve, seeded
+//   evo     the Evolution SDK default (deterministic)
+//   h12     UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //   lf-pure, ri-pure  lf and ri with prefer_pure_change set: the sensitivity
 //           arm on change policy, in the snapshot battery only
-// Repetitions: 30 for a random selector in H-1's arms (observed, tidy-once,
-// maintained-tidy and the controls), at the snapshot, and for H-9's tidy-once
-// arm; 10 in the layout variants and H-11's factorial; one run for each
-// deterministic selector. Repetition r runs the seeded selector with seed r
-// and any random layout with seed r, so arms compared with each other share
-// one seed sequence (common random numbers).
 //
-// Recent window: H-1's three arms under the three baselines; H-1's two
-// controls under the primary selector; the observed arm under the Evolution
-// SDK default (H-7's drift); H-2's groupings and byte-optimal packing, H-3's
-// six bundle sizes, H-4's three layouts (tidy-once) and H-6's thresholds and
-// never-propose arm (maintained-tidy), each under the primary selector with
-// Largest-First as sensitivity; H-5's reserve rules (maintained-tidy) under the
-// primary selector, with Largest-First and random selection as sensitivity;
-// H-9's tidy-once arm under the primary selector with its default and the
-// layout-preserving change.
-// Peak window: H-1's arms and controls, the Evolution SDK's observed arm, H-5's
-// reserve rules, and H-11's factorial (the observed arm, the three baselines
-// crossed with the single, layout-preserving and naive change).
-// Each arm runs under the ledger and practice collateral rules, with the ledger
-// minimum and token-bearing collateral as sensitivity arms, when the wallet's
-// window holds a script interaction; otherwise the rule has nothing to decide
-// and the arm runs once, its collateral field 'none-needed'.
+// The study's replay plan answers two questions, in both windows alike. Every
+// arm replays the wallet's observed state, under one collateral rule (a job
+// of a wallet whose window holds no script interaction records
+// 'none-needed'). For each library role L of lf, ri, rrri and evo:
+//   L/own     L's inputs and L's own change ('default'): question 1's
+//             reference and the user switching away from L
+//   L/layout  L's inputs and UnFrack.It's change ('layout'): question 1's
+//             treatment and question 2's reference
+// and for UnFrack.It's rule (h12), its inputs and its own change, once with
+// absorption on and once with it off (the variants 'absorb-on' and
+// 'absorb-off', which give the planner its default settings; the setting
+// reaches the method as opts.absorb). Question 1 compares L/layout with
+// L/own; question 2 compares the rule with L/layout.
+// Repetitions: 10 for a library that picks at random (ri, rrri), one for a
+// deterministic one and for the rule. Repetition r seeds the selector with r
+// in L/own and in L/layout alike, so the two arms share one seed sequence
+// (common random numbers; replay/run.mjs replayJobOpts). With four libraries
+// that is 2 + 20 + 20 + 2 + 2 = 46 jobs per wallet and window.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
-export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', 'lf-pure': 'csl-lf-pure', 'ri-pure': 'csl-ri-pure' });
-export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', 'lf-pure': 'test-largest-first', 'ri-pure': 'test-largest-first' });
-const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'lf-pure']);
+export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', h12: 'unfrackit-h12', 'lf-pure': 'csl-lf-pure', 'ri-pure': 'csl-ri-pure' });
+export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', h12: 'test-largest-first', 'lf-pure': 'test-largest-first', 'ri-pure': 'test-largest-first' });
+const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'lf-pure', 'h12']);
 const BASELINES = ['lf', 'ri', 'rrri'];
 
 const H1 = { arms: ['observed', 'tidy-once', 'maintained-tidy'], controls: ['naive-tidy', 'random-tidy'] };
@@ -53,47 +49,31 @@ const H4 = ['default', 'isolation-asset', 'isolation-policy'];
 const H5 = ['R0', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6'];
 const H6 = ['default', 'never-propose', 'dust-1', 'band-3-6', 'band-5-20'];
 
+export const LIBRARY_ROLES = Object.freeze(['lf', 'ri', 'rrri', 'evo']);
+export const RANDOM_REPETITIONS = 10;
+
 // The plan's entries for a window: [{ hypothesis, arm, variant, role, change,
-// repetitions, policyLock }]. reps: { h1, variants } overrides (tests).
-export function windowPlan(window, { reps = {} } = {}) {
-  const R1 = reps.h1 ?? 30;
-  const RV = reps.variants ?? 10;
-  const n = (role, r) => (DETERMINISTIC_ROLES.has(role) ? 1 : r);
+// repetitions, absorb? }], the same in both windows. reps: the repetitions of
+// a library that picks at random (10 when absent; tests give fewer).
+export function windowPlan(window, { reps = RANDOM_REPETITIONS } = {}) {
+  if (window !== 'recent' && window !== 'peak') throw new Error(`no replay plan for window ${window}`);
+  if (!Number.isSafeInteger(reps) || reps < 1) throw new Error(`the repetitions must be a positive whole number, not ${reps}`);
+  const n = (role) => (DETERMINISTIC_ROLES.has(role) ? 1 : reps);
   const out = [];
-  const add = (hypothesis, arm, variant, role, change, repetitions, extra = {}) => out.push({ hypothesis, arm, variant, role, change, repetitions: n(role, repetitions), ...extra });
-  const h1 = () => {
-    for (const arm of H1.arms) for (const role of BASELINES) add('H-1', arm, 'default', role, 'default', R1);
-    for (const arm of H1.controls) add('H-1', arm, 'default', 'rrri', 'default', R1);
-    add('H-7', 'observed', 'default', 'evo', 'default', 1);
-  };
-  const h5 = () => {
-    for (const v of H5) for (const role of ['rrri', 'lf', 'ri']) add('H-5', 'maintained-tidy', v, role, 'default', RV);
-  };
-  if (window === 'recent') {
-    h1();
-    for (const v of H2) for (const role of ['rrri', 'lf']) add('H-2', 'tidy-once', v, role, 'default', RV);
-    for (const v of H3) for (const role of ['rrri', 'lf']) add('H-3', 'tidy-once', v, role, 'default', RV, { policyLock: true });
-    for (const v of H4) for (const role of ['rrri', 'lf']) add('H-4', 'tidy-once', v, role, 'default', RV);
-    for (const v of H6) for (const role of ['rrri', 'lf']) add('H-6', 'maintained-tidy', v, role, 'default', RV);
-    h5();
-    for (const change of ['default', 'layout']) add('H-9', 'tidy-once', 'default', 'rrri', change, R1);
-    add('H-9', 'maintained-tidy', 'default', 'rrri', 'default', R1);
-  } else if (window === 'peak') {
-    h1();
-    h5();
-    for (const role of BASELINES) for (const change of ['single', 'layout', 'naive']) add('H-11', 'observed', 'default', role, change, RV);
-  } else {
-    throw new Error(`no replay plan for window ${window}`);
+  for (const role of LIBRARY_ROLES) {
+    out.push({ hypothesis: 'Q1', arm: 'observed', variant: 'default', role, change: 'default', repetitions: n(role) });
+    for (const hypothesis of ['Q1', 'Q2']) out.push({ hypothesis, arm: 'observed', variant: 'default', role, change: 'layout', repetitions: n(role) });
   }
+  for (const absorb of [true, false]) out.push({ hypothesis: 'Q2', arm: 'observed', variant: absorb ? 'absorb-on' : 'absorb-off', role: 'h12', change: 'default', repetitions: 1, absorb });
   return out;
 }
 
-// One entry per distinct (arm, variant, role, change), the largest repetition
+// One entry per distinct (arm, variant, role, change, absorb), the largest repetition
 // count and every hypothesis kept: entries the hypotheses share run once.
 export function mergePlan(entries) {
   const m = new Map();
   for (const e of entries) {
-    const k = `${e.arm}|${e.variant}|${e.role}|${e.change}`;
+    const k = `${e.arm}|${e.variant}|${e.role}|${e.change}|${e.absorb ?? ''}`;
     const x = m.get(k);
     if (!x) m.set(k, { ...e, hypotheses: [e.hypothesis] });
     else {
@@ -105,15 +85,15 @@ export function mergePlan(entries) {
   return [...m.values()];
 }
 
-// The jobs of a plan for one wallet: collateral rules expanded when the
-// window holds a script interaction.
+// The jobs of a plan for one wallet: the collateral rules (one, in the study)
+// expanded when the window holds a script interaction.
 export function expandJobs(entries, { roles, needsCollateral, collateralRules = COLLATERAL_RULES }) {
   const jobs = [];
   for (const e of mergePlan(entries)) {
     const rules = needsCollateral ? collateralRules : ['none-needed'];
     for (const collateral of rules) {
       for (let rep = 1; rep <= e.repetitions; rep++) {
-        jobs.push({ hypotheses: e.hypotheses, arm: e.arm, variant: e.variant, role: e.role, method: roles[e.role], change: e.change, collateral, repetition: rep, policyLock: !!e.policyLock });
+        jobs.push({ hypotheses: e.hypotheses, arm: e.arm, variant: e.variant, role: e.role, method: roles[e.role], change: e.change, ...(e.absorb !== undefined ? { absorb: e.absorb } : {}), collateral, repetition: rep, policyLock: !!e.policyLock });
       }
     }
   }

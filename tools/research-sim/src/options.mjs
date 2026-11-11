@@ -20,10 +20,10 @@ const WALLET_VALUES = ['wallets'];
 
 // What the study takes by use (study/study.mjs studyOptions refuses, per plan,
 // an option the plan does not use). The lists are the union of the plans.
-export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'repsH1', 'repsVariants', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity']);
+export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps']);
 export const STUDY_DATABASE = Object.freeze(['expectNetwork', 'snapshot', 'extractionRun', 'wallets', 'wallet', 'fromStudy', 'analysisFreezeTx', 'bytes', 'immutableDir', 'immutableHost', 'set']);
 export const STUDY_PLAN_OPTIONS = Object.freeze({
-  synthetic: Object.freeze([...STUDY_COMMON, 'shapes']),
+  synthetic: Object.freeze([...STUDY_COMMON, 'shapes', 'collateralRule']),
   preprod: Object.freeze([...STUDY_COMMON, ...STUDY_DATABASE, 'days']),
   corpus: Object.freeze([...STUDY_COMMON, ...STUDY_DATABASE])
 });
@@ -56,12 +56,12 @@ export const COMMAND_OPTIONS = Object.freeze({
   'near-cap': { flags: ['fromStudy', 'allWallets'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   collateral: { flags: ['explain'], values: [...CONTEXT_VALUES, 'runId', 'days', 'batch'], repeat: ['set'] },
   'battery-pools': { flags: [], values: ['runId', 'network', 'historyRun'], repeat: [] },
-  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'repsH1', 'repsVariants'], repeat: ['history'] },
+  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule'], repeat: ['history'] },
   battery: { flags: ['oracle', 'validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'shapes', 'analysisFreezeTx', 'methods', 'reps', 'pools', 'oracleSettings', 'oracleWorkers'], repeat: ['history'] },
   fidelity: { flags: [], values: ['treatment', 'treatmentPins', 'analysisFreezeTx', 'runId'], repeat: ['history'] },
   study: {
-    flags: ['oracle', 'validity'],
-    values: unique(STUDY_PLAN_OPTIONS.synthetic, STUDY_PLAN_OPTIONS.preprod, STUDY_PLAN_OPTIONS.corpus).filter((k) => !['oracle', 'validity', 'wallet', 'set'].includes(k)),
+    flags: [],
+    values: unique(STUDY_PLAN_OPTIONS.synthetic, STUDY_PLAN_OPTIONS.preprod, STUDY_PLAN_OPTIONS.corpus).filter((k) => !['wallet', 'set'].includes(k)),
     repeat: ['wallet', 'set']
   },
   'live-fire': {
@@ -78,10 +78,11 @@ const CLOSED = Object.freeze({
   fromStudy: { '*': FROM_STUDY },
   methods: { '*': ['study', 'test'] },
   bytes: { '*': BYTES },
-  plan: { replay: ['recent', 'peak', 'test'], study: ['synthetic', 'preprod', 'corpus'] }
+  plan: { replay: ['recent', 'peak', 'test'], study: ['synthetic', 'preprod', 'corpus'] },
+  collateralRule: { '*': ['ledger', 'practice'] }
 });
 const WINDOW = /^(recent|peak|snapshot|blocks:\d+-\d+)$/;
-const WHOLE = ['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants', 'testReps', 'days', 'batch'];
+const WHOLE = ['workers', 'oracleWorkers', 'reps', 'testReps', 'days', 'batch'];
 
 export const flagOf = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 const camelOf = (s) => s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());

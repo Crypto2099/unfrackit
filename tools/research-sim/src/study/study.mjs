@@ -8,41 +8,55 @@
 //         [--treatment-pins <file>] [options]
 //
 // Plans and their stages, in order:
-//   synthetic  replay-recent, replay-peak, battery, over the synthetic shapes
-//              (--shapes); no database.
-//   preprod    history-recent, history-peak, history-snapshot, census,
-//              near-cap, collateral, fidelity, battery-pools, replay-recent,
-//              replay-peak, battery, on a test network (--expect-network):
-//              the wallets from --wallets or --wallet, or --from-study random
-//              or all; the snapshot from --snapshot (a block id or hash) or
-//              --extraction-run, never the moving tip; the windows from
-//              --extraction-run or the test-network defaults; --days for the
-//              collateral measurement.
+//   synthetic  replay-recent, replay-peak, over the synthetic shapes
+//              (--shapes); no database; --collateral-rule ledger | practice
+//              is required, since there is no collateral measurement.
+//   preprod    history-recent, history-peak, census, near-cap, collateral,
+//              fidelity, replay-recent, replay-peak, on a test network
+//              (--expect-network): the wallets from --wallets or --wallet, or
+//              --from-study random or all; the snapshot from --snapshot (a
+//              block id or hash) or --extraction-run, never the moving tip;
+//              the windows from --extraction-run or the test-network
+//              defaults; --days for the collateral measurement.
 //   corpus     the same stages over every sampled wallet (--from-study all),
 //              with --analysis-freeze-tx, since every sampled wallet's split
 //              is read; the snapshot and the windows are the extraction
 //              run's: on mainnet the final freeze's study run, through the
 //              gate (history/db.mjs), elsewhere --extraction-run.
+// The two replay stages run the refocused arms (arms/plan.mjs): per library
+// its own change and UnFrack.It's change on its inputs, and UnFrack.It's
+// H-12 rule with absorption on and off. The study's snapshot battery, its
+// oracle and the stages only the battery read (history-snapshot and
+// battery-pools) are not in any plan; the battery command remains.
 // The database stages come first, so the database is needed only at the
 // start. The fidelity check reads the recent and peak history files of the
 // exploration split (and those that carry no split, as on a test network);
-// battery-pools reads history-recent's files; the replays read their window's
-// files; the battery reads history-snapshot's files and battery-pools' pools.
-// Repetitions (--reps-h1, --reps-variants, --reps), workers (--workers,
-// --oracle-workers), the oracle (--oracle, --oracle-settings) and --validity
-// pass through to the replay and battery stages; --analysis-freeze-tx to
-// history, replay and battery. An option the plan does not use is refused,
-// and so is a worker count that is not a positive whole number, before any
-// stage starts.
+// the replays read their window's files.
+// Collateral: every replay job runs under one rule. With the collateral
+// stage, the rule is section 7.6's pick from that stage's report
+// (collateral.json: the share of the recent window's script-executing
+// transactions whose collateral inputs all sit at key addresses and carry
+// under 20 ADA in total; above one half the practice rule, otherwise the
+// ledger rule), read when the first replay stage starts and recorded in the
+// header (`collateralRule`: the rule, where it came from, the share); a run
+// whose measurement found no such transaction is refused there. In the
+// synthetic plan the rule is --collateral-rule, recorded the same way.
+// Repetitions of a library that picks at random (--reps, 10 when absent) and
+// workers (--workers) pass to the replay stages, with validity checks on every
+// job; --analysis-freeze-tx to history and replay. An option the plan does
+// not use is refused, and so is a worker count that is not a positive whole
+// number, before any stage starts.
 //
 // Layout, under the private root (history/paths.mjs):
 //   <network>/<id>/study.json   the header: plan, network, stages, options
-//                               but the worker counts, the input files'
+//                               but the worker count, the input files'
 //                               SHA-256 (treatment pins, wallets, extraction
 //                               run), the code manifest (`hash`) and its
-//                               SHA-256, Node
+//                               SHA-256, Node, and the collateral rule with
+//                               its source (filled in when the rule is known;
+//                               not compared on resume)
 //   <network>/<id>/log.jsonl    the study's log, appended: each invocation's
-//                               start or resume with its worker counts and
+//                               start or resume with its worker count and
 //                               machine (out/host.mjs), each stage's start
 //                               and its end (with the stage's printout) or
 //                               error, skipped stages, the end
@@ -54,8 +68,8 @@
 // Resume: running the same plan and run id again resumes it. The header must
 // equal the first start's in plan, network, stages, options (paths made
 // absolute), input files and code manifest, or the run is refused. The worker
-// counts (--workers, --oracle-workers) are not compared: they change no
-// record, so a resume may use others, on this machine or another. A stage
+// count (--workers) is not compared: it changes no
+// record, so a resume may use another, on this machine or another. A stage
 // whose end entry is in the log is skipped. Any other stage is rerun from its
 // start: its directory is removed first, so it is written as by an
 // uninterrupted run (the stages' records are deterministic but for the
@@ -75,19 +89,21 @@ import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
+import { pickCollateralRule } from '../history/reports.mjs';
 import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS } from '../options.mjs';
 import { workerCount } from '../replay/pool.mjs';
 import { machineRecord } from '../out/host.mjs';
 
-const DB_STAGES = Object.freeze(['history-recent', 'history-peak', 'history-snapshot', 'census', 'near-cap', 'collateral']);
-const OFFLINE_STAGES = Object.freeze(['fidelity', 'battery-pools', 'replay-recent', 'replay-peak', 'battery']);
+const DB_STAGES = Object.freeze(['history-recent', 'history-peak', 'census', 'near-cap', 'collateral']);
+const OFFLINE_STAGES = Object.freeze(['fidelity', 'replay-recent', 'replay-peak']);
 export const PLANS = Object.freeze({
-  synthetic: Object.freeze(['replay-recent', 'replay-peak', 'battery']),
+  synthetic: Object.freeze(['replay-recent', 'replay-peak']),
   preprod: Object.freeze([...DB_STAGES, ...OFFLINE_STAGES]),
   corpus: Object.freeze([...DB_STAGES, ...OFFLINE_STAGES])
 });
 
-// The command each stage runs.
+// The command each stage runs: the study's stages and the live-fire
+// command's, which still runs the snapshot battery (study/live-fire.mjs).
 export const STAGE_COMMAND = Object.freeze({
   'history-recent': 'history',
   'history-peak': 'history',
@@ -124,7 +140,6 @@ export function studyOptions(opts) {
   if (!o.treatment || o.treatment === true) throw new Refusal('refusing: --treatment <dir> names the treatment directory');
   try {
     workerCount(o.workers, '--workers');
-    workerCount(o.oracleWorkers, '--oracle-workers');
   } catch (e) {
     throw new Refusal(`refusing: ${e.message}`);
   }
@@ -136,6 +151,7 @@ export function studyOptions(opts) {
   if (o.analysisFreezeTx !== undefined && !HEX64.test(String(o.analysisFreezeTx))) throw new Refusal('refusing: --analysis-freeze-tx is a transaction hash, 64 lowercase hex digits');
   if (plan === 'synthetic') {
     if (!o.shapes || o.shapes === true) throw new Refusal('refusing: the synthetic plan needs --shapes <names|all>');
+    if (!['ledger', 'practice'].includes(o.collateralRule)) throw new Refusal('refusing: the synthetic plan has no collateral measurement; give --collateral-rule ledger | practice');
     return o;
   }
   if (!o.expectNetwork || o.expectNetwork === true || !/^[a-z]+$/.test(o.expectNetwork)) throw new Refusal(`refusing: the ${plan} plan needs --expect-network <name>, the database's network`);
@@ -167,16 +183,32 @@ function inputDigests(o) {
   return d;
 }
 
+const COLLATERAL_SOURCE = 'the collateral stage: above one half of the recent window\'s measured script transactions under 20 ADA of collateral picks practice, otherwise ledger';
+
+// The rule the collateral stage's report picks (collateral.json in the
+// stage's run directory), with the figures behind it. A Refusal when the
+// report is missing or its measurement found no script-executing transaction
+// with all collateral at key addresses, since no rule is picked then.
+export function collateralPick(network, runId) {
+  const path = join(runDir(network, `${runId}/collateral`), 'collateral.json');
+  if (!existsSync(path)) throw new Refusal(`refusing: the collateral stage's report ${path} is missing, and every replay job needs its rule`);
+  const r = JSON.parse(readFileSync(path, 'utf8'));
+  const rule = pickCollateralRule(r.result.shareUnder20Ada);
+  if (rule === null) throw new Refusal('refusing: the collateral measurement found no script-executing transaction in the recent window with all collateral inputs at key addresses, so it picks no rule; the replays need one');
+  return { rule, source: COLLATERAL_SOURCE, shareUnder20Ada: r.result.shareUnder20Ada, measured: r.result.measured };
+}
+
 const withoutMachine = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !MACHINE_OPTIONS.includes(k)));
 
 export function studyHeader(o, { manifest = formatHashList } = {}) {
   const network = o.plan === 'synthetic' ? 'synthetic' : o.expectNetwork;
   const m = manifest();
-  return { command: 'study', plan: o.plan, network, runId: o.runId, stages: [...PLANS[o.plan]], options: withoutMachine(o), inputs: inputDigests(o), manifestSha256: sha256(m), node: process.version, manifest: m };
+  const collateralRule = o.plan === 'synthetic' ? { rule: o.collateralRule, source: '--collateral-rule' } : { rule: null, source: COLLATERAL_SOURCE };
+  return { command: 'study', plan: o.plan, network, runId: o.runId, stages: [...PLANS[o.plan]], options: withoutMachine(o), inputs: inputDigests(o), manifestSha256: sha256(m), node: process.version, collateralRule, manifest: m };
 }
 
 // What differs between a recorded header and this invocation's, by name; the
-// worker counts are not compared.
+// worker count is not compared.
 export function headerDifferences(was, now) {
   const out = [];
   for (const k of ['plan', 'network', 'stages']) if (canonical(was[k]) !== canonical(now[k])) out.push(k);
@@ -303,20 +335,19 @@ export function fidelityFiles(dirs) {
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
 
-// The options a stage's command runs with.
-export function stageOptions(stage, o, network) {
+// The options a stage's command runs with. collateralRule: the rule the
+// study's replays run under (the pick, or --collateral-rule).
+export function stageOptions(stage, o, network, { collateralRule = o.collateralRule } = {}) {
   const id = (s) => `${o.runId}/${s}`;
   const pins = o.treatmentPins || DEFAULT_PINS;
   const db = pick(o, ['expectNetwork', 'snapshot', 'extractionRun', 'bytes', 'immutableDir', 'immutableHost']);
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
-  const replayOpts = pick(o, ['repsH1', 'repsVariants', 'workers', 'validity']);
-  const batteryOpts = pick(o, ['reps', 'workers', 'oracle', 'oracleWorkers', 'oracleSettings', 'validity']);
+  const replayOpts = { ...pick(o, ['reps', 'workers']), validity: true };
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':
     case 'history-peak':
-    case 'history-snapshot':
       return { runId, treatment: o.treatment, treatmentPins: pins, ...db, ...pick(o, ['set']), ...(wallets || { fromStudy: o.fromStudy }), ...freeze, window: stage.slice('history-'.length) };
     case 'census':
       return { runId, treatment: o.treatment, treatmentPins: pins, ...db, ...pick(o, ['set']), ...(wallets || { fromStudy: true }) };
@@ -326,17 +357,11 @@ export function stageOptions(stage, o, network) {
       return { runId, ...db, ...pick(o, ['days']) };
     case 'fidelity':
       return { runId, treatment: o.treatment, treatmentPins: pins, history: fidelityFiles(['recent', 'peak'].map((w) => historyDir(network, id(`history-${w}`)))) };
-    case 'battery-pools':
-      return { runId, network, historyRun: id('history-recent') };
     case 'replay-recent':
     case 'replay-peak': {
       const w = stage.slice('replay-'.length);
       const src = o.plan === 'synthetic' ? { shapes: o.shapes } : { history: [historyDir(network, id(`history-${w}`))] };
-      return { runId, treatment: o.treatment, treatmentPins: pins, ...src, plan: w, ...replayOpts, ...freeze };
-    }
-    case 'battery': {
-      const src = o.plan === 'synthetic' ? { shapes: o.shapes } : { history: [historyDir(network, id('history-snapshot'))], pools: join(runDir(network, id('battery-pools')), 'battery-pools.json') };
-      return { runId, treatment: o.treatment, treatmentPins: pins, ...src, ...batteryOpts, ...freeze };
+      return { runId, treatment: o.treatment, treatmentPins: pins, ...src, plan: w, collateralRule, ...replayOpts, ...freeze };
     }
     default:
       throw new Error(`unknown stage ${stage}`);
@@ -366,7 +391,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     const done = new Map();
     for (const e of StudyLog.entries(logPath)) if (e.event === 'stage-end') done.set(e.stage, e);
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: o.oracle ? workerCount(o.oracleWorkers, '--oracle-workers') : 0 }) });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0 }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {
@@ -384,7 +409,22 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
       // A stage reruns from its start: what an interrupted invocation left
       // in its directory goes first.
       rmSync(runDir(header.network, `${o.runId}/${stage}`), { recursive: true, force: true });
-      const stageOpts = stageOptions(stage, o, header.network);
+      // The rule the replays run under: the synthetic plan's option, or the
+      // collateral stage's pick, read once and recorded in the header.
+      if (stage.startsWith('replay-') && header.collateralRule.rule === null) {
+        let picked;
+        try {
+          picked = collateralPick(header.network, o.runId);
+        } catch (e) {
+          log.note({ event: 'stage-error', stage, error: scrubText(e.message) });
+          throw e;
+        }
+        header.collateralRule = picked;
+        writeJson(headerPath, header);
+        log.note({ event: 'collateral-rule', ...picked });
+        say(`study ${o.runId}: every replay runs under the ${picked.rule} collateral rule (${(100 * picked.shareUnder20Ada).toFixed(1)}% of ${picked.measured} measured script transactions under 20 ADA of collateral)`);
+      }
+      const stageOpts = stageOptions(stage, o, header.network, { collateralRule: header.collateralRule.rule });
       log.note({ event: 'stage-start', stage, command: name });
       say(`study ${o.runId}: ${stage} started`);
       const s0 = performance.now();
@@ -416,6 +456,6 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
 // The command line's study: the real commands, imported when it runs.
 export async function cmdStudy(opts) {
   const [h, r, rc, f] = await Promise.all([import('../history/commands.mjs'), import('../history/reports.mjs'), import('../replay/commands.mjs'), import('../fidelity/fidelity.mjs')]);
-  const commands = { history: h.cmdHistory, census: r.cmdCensus, 'near-cap': r.cmdNearCap, collateral: r.cmdCollateral, 'battery-pools': r.cmdBatteryPools, fidelity: f.cmdFidelity, replay: rc.cmdReplay, battery: rc.cmdBattery };
+  const commands = { history: h.cmdHistory, census: r.cmdCensus, 'near-cap': r.cmdNearCap, collateral: r.cmdCollateral, fidelity: f.cmdFidelity, replay: rc.cmdReplay };
   return runStudy(opts, { commands });
 }

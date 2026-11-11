@@ -70,7 +70,11 @@ export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak',
 // One repetition of every arm, variant and random selector: each code path a
 // study run takes runs at least once, and a run over ten mainnet wallets ends
 // in hours at most.
-export const LIVE_FIRE_REPS = Object.freeze({ repsH1: 1, repsVariants: 1, reps: 1 });
+export const LIVE_FIRE_REPS = Object.freeze({ reps: 1 });
+// The smoke test runs every replay under one collateral rule without the
+// collateral measurement, which the study's plans make: it exercises the
+// code paths, and decides nothing.
+export const LIVE_FIRE_COLLATERAL_RULE = 'ledger';
 
 const RUN_OPTIONS = new Set(LIVE_FIRE_RUN_OPTIONS);
 const CLEANUP_OPTIONS = new Set(LIVE_FIRE_CLEANUP_OPTIONS);
@@ -132,7 +136,7 @@ export function liveFireOptions(opts) {
 export function planOf(o) {
   return {
     stages: [...LIVE_FIRE_STAGES],
-    repetitions: { h1: LIVE_FIRE_REPS.repsH1, variants: LIVE_FIRE_REPS.repsVariants, battery: LIVE_FIRE_REPS.reps },
+    repetitions: { replay: LIVE_FIRE_REPS.reps, battery: LIVE_FIRE_REPS.reps },
     watchdogs_ms: { replay: REPLAY_WATCHDOG_MS, answer: ANSWER_WATCHDOG_MS, oracle: ORACLE_WATCHDOG_MS },
     oracle_budget: { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, program_work: ORACLE_SETTINGS.maxProgramWork },
     oracle: true,
@@ -163,7 +167,7 @@ export function liveFireStageOptions(stage, o, pick, network) {
     case 'replay-recent':
     case 'replay-peak': {
       const w = stage.slice('replay-'.length);
-      return { runId, ...loads, history: [historyDir(network, id(`history-${w}`))], plan: w, repsH1: String(LIVE_FIRE_REPS.repsH1), repsVariants: String(LIVE_FIRE_REPS.repsVariants), workers: String(o.workers), validity: true };
+      return { runId, ...loads, history: [historyDir(network, id(`history-${w}`))], plan: w, reps: String(LIVE_FIRE_REPS.reps), collateralRule: LIVE_FIRE_COLLATERAL_RULE, workers: String(o.workers), validity: true };
     }
     case 'battery':
       return { runId, ...loads, history: [historyDir(network, id('history-snapshot'))], pools: join(runDir(network, id('battery-pools')), 'battery-pools.json'), reps: String(LIVE_FIRE_REPS.reps), workers: String(o.workers), oracle: true, oracleWorkers: String(o.oracleWorkers), validity: true };

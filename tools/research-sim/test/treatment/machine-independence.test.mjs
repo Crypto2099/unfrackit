@@ -105,7 +105,12 @@ test('replays: one worker, a fresh worker per job, and a watchdog stop write the
   const wallets = SHAPES.map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
   const first = wallets.map((w) => loadSource(T, w.spec).events.find((e) => e.kind === 'intent').intent.id);
   const plan = [
-    ...windowPlan('recent', { reps: { h1: 1, variants: 1 } }).filter((e) => e.hypothesis === 'H-1' || e.hypothesis === 'H-7' || (e.hypothesis === 'H-6' && ['default', 'never-propose'].includes(e.variant))),
+    // The study's refocused arms, one repetition each, and the tidy arms of
+    // the engine (H-1's, and H-6's default and never-propose twins, so that the
+    // trigger join runs): the engine still replays them.
+    ...windowPlan('recent', { reps: 1 }),
+    ...['observed', 'tidy-once', 'maintained-tidy'].flatMap((arm) => ['lf', 'ri', 'rrri'].map((role) => ({ hypothesis: 'H-1', arm, variant: 'default', role, change: 'default', repetitions: 1 }))),
+    ...['default', 'never-propose'].flatMap((variant) => ['rrri', 'lf'].map((role) => ({ hypothesis: 'H-6', arm: 'maintained-tidy', variant, role, change: 'default', repetitions: 1 }))),
     { hypothesis: 'test', arm: 'observed', variant: 'default', role: 'stall', change: 'default', repetitions: 1 }
   ];
   const opts = { wallets, plan, roles: { ...STUDY_ROLES, stall: 'test-stall' }, methodOptions: { 'test-stall': { stallMs: STALL_MS, only: first } }, collateralRules: ['ledger'] };

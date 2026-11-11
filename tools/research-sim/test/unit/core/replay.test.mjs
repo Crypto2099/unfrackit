@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { record, assertClean, scrubText, RunOutput, IdentifierInRecord } from '../../../src/out/records.mjs';
 import { windowPlan, mergePlan, expandJobs, testPlan, STUDY_ROLES, batteryPlan } from '../../../src/arms/plan.mjs';
+import { replayJobOpts } from '../../../src/replay/run.mjs';
 import { armSettings, VARIANTS } from '../../../src/arms/arms.mjs';
 import { eligibleCollateral, collateralAvailability, totalCollateralFor } from '../../../src/replay/collateral.mjs';
 import { rescueOutcomes } from '../../../src/replay/run.mjs';
@@ -70,27 +71,64 @@ test('the run directory is private and the records are JSON Lines', () => {
   }
 });
 
-test('run plans: arms per window, repetitions by selector, collateral rules when a script runs', () => {
-  const recent = mergePlan(windowPlan('recent'));
-  const one = (arm, variant, role, change = 'default') => recent.find((e) => e.arm === arm && e.variant === variant && e.role === role && e.change === change);
-  assert.equal(one('observed', 'default', 'rrri').repetitions, 30);
-  assert.equal(one('observed', 'default', 'lf').repetitions, 1);
-  assert.equal(one('observed', 'default', 'evo').repetitions, 1);
-  assert.equal(one('maintained-tidy', 'R1', 'rrri').repetitions, 10);
-  assert.equal(one('tidy-once', 'bundle-60', 'rrri').policyLock, true);
-  assert.deepEqual(one('tidy-once', 'default', 'rrri').hypotheses.sort(), ['H-1', 'H-2', 'H-4', 'H-9']);
-  assert.equal(one('observed', 'default', 'rrri', 'layout'), undefined, 'H-11 runs in the peak window only');
-  const peak = mergePlan(windowPlan('peak'));
-  assert.ok(peak.find((e) => e.hypotheses.includes('H-11') && e.change === 'naive' && e.role === 'ri'));
-  assert.ok(!peak.find((e) => e.hypotheses.includes('H-2')));
-  const jobs = expandJobs(windowPlan('peak'), { roles: STUDY_ROLES, needsCollateral: false });
-  assert.ok(jobs.every((j) => j.collateral === 'none-needed'));
-  const withScripts = expandJobs(windowPlan('peak'), { roles: STUDY_ROLES, needsCollateral: true });
-  assert.equal(withScripts.length, 4 * jobs.length);
+test('run plans: the refocused arms, the same in both windows, 46 jobs per wallet at four libraries', () => {
+  for (const w of ['recent', 'peak']) {
+    const plan = mergePlan(windowPlan(w));
+    const one = (role, change, variant = 'default') => plan.find((e) => e.role === role && e.change === change && e.variant === variant);
+    assert.ok(plan.every((e) => e.arm === 'observed'), 'every arm replays the observed state');
+    // Per library: its own change under Q1, UnFrack.It's change under Q1 and Q2.
+    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1]]) {
+      assert.equal(one(role, 'default').repetitions, reps, role);
+      assert.equal(one(role, 'layout').repetitions, reps, role);
+      assert.deepEqual(one(role, 'default').hypotheses, ['Q1'], role);
+      assert.deepEqual(one(role, 'layout').hypotheses, ['Q1', 'Q2'], role);
+      assert.equal(plan.filter((e) => e.role === role).length, 2, role);
+    }
+    // The rule: UnFrack.It's own change, absorption on and off, one run each.
+    const on = one('h12', 'default', 'absorb-on');
+    const off = one('h12', 'default', 'absorb-off');
+    assert.deepEqual([on.absorb, off.absorb, on.repetitions, off.repetitions], [true, false, 1, 1]);
+    assert.deepEqual([on.hypotheses, off.hypotheses], [['Q2'], ['Q2']]);
+    assert.equal(plan.length, 10);
+    // 46 jobs a wallet: 2 + 20 + 20 + 2 + 2.
+    const jobs = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: false });
+    assert.equal(jobs.length, 46);
+    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'unfrackit-h12': 2 });
+    assert.ok(jobs.every((j) => j.collateral === 'none-needed'));
+    // One collateral rule: a script wallet's jobs run under it alone.
+    const withScripts = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
+    assert.equal(withScripts.length, 46);
+    assert.ok(withScripts.every((j) => j.collateral === 'practice'));
+    // Every tidy arm, control and variant is gone.
+    assert.ok(!plan.some((e) => e.arm !== 'observed' || e.hypotheses.some((h) => !['Q1', 'Q2'].includes(h))));
+  }
+  assert.equal(windowPlan('recent', { reps: 3 }).filter((e) => e.role === 'ri' && e.change === 'default')[0].repetitions, 3);
+  assert.equal(windowPlan('recent', { reps: 3 }).filter((e) => e.role === 'lf' && e.change === 'default')[0].repetitions, 1);
+  assert.throws(() => windowPlan('recent', { reps: 0 }), /positive whole number/);
   assert.throws(() => windowPlan('snapshot'), /no replay plan/);
   assert.ok(testPlan().length > 20);
   const b = batteryPlan();
   assert.deepEqual(b.map((m) => [m.name, m.repetitions]), [['csl-lf', 1], ['csl-ri', 30], ['cjs-rrri', 30], ['evo-lf', 1], ['csl-lf-pure', 1], ['csl-ri-pure', 30], ['unfrackit-h12', 1]]);
+});
+
+test('run plans: L/own and L/layout of one repetition draw the same seed; the rule\'s jobs carry the absorption setting and differ in their keys', () => {
+  const jobs = expandJobs(windowPlan('recent'), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
+  for (const method of ['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf']) {
+    const own = jobs.filter((j) => j.method === method && j.change === 'default');
+    const layout = jobs.filter((j) => j.method === method && j.change === 'layout');
+    assert.equal(own.length, layout.length, method);
+    assert.deepEqual(own.map((j) => j.repetition), layout.map((j) => j.repetition), method);
+    own.forEach((j, i) => {
+      assert.equal(replayJobOpts(j).seed, replayJobOpts(layout[i]).seed, `${method} repetition ${j.repetition}`);
+      assert.equal(replayJobOpts(j).seed, j.repetition);
+    });
+  }
+  const rule = jobs.filter((j) => j.method === 'unfrackit-h12');
+  assert.deepEqual(rule.map((j) => replayJobOpts(j).absorb).sort(), [false, true]);
+  assert.equal(new Set(rule.map((j) => `${j.variant}|${j.change}|${j.repetition}`)).size, 2, 'the keys differ');
+  assert.deepEqual(rule.map((j) => [j.variant, replayJobOpts(j).absorb]).sort(), [['absorb-off', false], ['absorb-on', true]]);
+  assert.ok(jobs.filter((j) => j.method !== 'unfrackit-h12').every((j) => !('absorb' in replayJobOpts(j))));
+  assert.equal(replayJobOpts({ repetition: 4, change: 'layout', collateral: 'none-needed' }).collateralRule, 'ledger');
 });
 
 test('arm settings: variants, controls and seeds', () => {
@@ -102,7 +140,8 @@ test('arm settings: variants, controls and seeds', () => {
   assert.throws(() => armSettings('naive-tidy', 'R1', 1), /default settings only/);
   assert.throws(() => armSettings('tidy-once', 'nope', 1), /unknown variant/);
   assert.throws(() => armSettings('tidy-once', 'default', 0), /numbered from 1/);
-  assert.equal(Object.keys(VARIANTS).length, 24);
+  assert.deepEqual([armSettings('observed', 'absorb-on', 1), armSettings('observed', 'absorb-off', 1)], [{}, {}]);
+  assert.equal(Object.keys(VARIANTS).length, 26);
 });
 
 test('collateral eligibility under each rule, smallest first', () => {

@@ -26,7 +26,8 @@ function sample(key, command) {
   if (key === 'methods') return 'test';
   if (key === 'bytes') return 'tx_cbor';
   if (key === 'window') return 'blocks:10-20';
-  if (['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants', 'testReps', 'days', 'batch'].includes(key)) return '3';
+  if (['workers', 'oracleWorkers', 'reps', 'testReps', 'days', 'batch'].includes(key)) return '3';
+  if (key === 'collateralRule') return 'ledger';
   return 'x';
 }
 const argvOf = (key, command, spec) => (spec.flags.includes(key) ? [flagOf(key)] : [flagOf(key), sample(key, command)]);
@@ -142,6 +143,10 @@ test('closed values: methods, bytes, plan and window', () => {
     assert.equal(parseArgs(['--bytes', 'immutable'], c).bytes, 'immutable');
     refused(['--bytes', 'cbor'], c, /--bytes takes tx_cbor \| immutable/);
   }
+  for (const c of ['replay', 'study']) {
+    for (const r of ['ledger', 'practice']) assert.equal(parseArgs(['--collateral-rule', r], c).collateralRule, r);
+    refused(['--collateral-rule', 'ledger-minimum'], c, /--collateral-rule takes ledger \| practice/);
+  }
   for (const p of ['recent', 'peak', 'test']) assert.equal(parseArgs(['--plan', p], 'replay').plan, p);
   refused(['--plan', 'synthetic'], 'replay', /--plan takes recent \| peak \| test, not "synthetic" for replay/);
   for (const p of ['synthetic', 'preprod', 'corpus']) assert.equal(parseArgs(['--plan', p], 'study').plan, p);
@@ -151,7 +156,7 @@ test('closed values: methods, bytes, plan and window', () => {
 });
 
 test('whole-number options: positive whole numbers only', () => {
-  const byCommand = { replay: ['workers', 'testReps', 'repsH1', 'repsVariants'], battery: ['workers', 'oracleWorkers', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'oracleWorkers', 'reps', 'repsH1', 'repsVariants'], 'live-fire': ['workers', 'oracleWorkers'] };
+  const byCommand = { replay: ['workers', 'testReps', 'reps'], battery: ['workers', 'oracleWorkers', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'reps'], 'live-fire': ['workers', 'oracleWorkers'] };
   for (const [command, keys] of Object.entries(byCommand)) {
     for (const k of keys) {
       assert.equal(parseArgs([flagOf(k), '12'], command)[k], '12');
@@ -181,7 +186,7 @@ test('the study and live-fire sets come from the lists their modules read', () =
   const live = COMMAND_OPTIONS['live-fire'];
   assert.deepEqual([...live.flags, ...live.values, ...live.repeat].sort(), [...new Set([...LIVE_FIRE_RUN_OPTIONS, ...LIVE_FIRE_CLEANUP_OPTIONS])].sort());
   assert.deepEqual([...live.flags].sort(), ['cleanup', 'keepForDebug']);
-  assert.deepEqual([...study.flags].sort(), ['oracle', 'validity']);
+  assert.deepEqual([...study.flags], []);
 });
 
 test('census and near-cap take --wallet; collateral takes --batch; --explain is census and collateral only', () => {

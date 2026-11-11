@@ -177,6 +177,17 @@ export async function cmdNearCap(opts) {
   }
 }
 
+// The rule every replay job of the study runs under, picked by the collateral
+// measurement (pre-registration section 7.6): `share` is the share of the
+// recent window's script-executing transactions whose collateral inputs all
+// sit at key addresses that carry less than 20 ADA of collateral in total.
+// Above one half the practice rule; otherwise the ledger rule; null when
+// the measurement found no such transaction.
+export function pickCollateralRule(share) {
+  if (share === null || share === undefined) return null;
+  return share > 0.5 ? 'practice' : 'ledger';
+}
+
 const ADA_BINS = [0, 1, 2, 5, 10, 20, 50, 100, 1000];
 const binOf = (lovelace) => {
   let k = 0;
@@ -274,9 +285,11 @@ export async function cmdCollateral(opts) {
       perTransactionQuantiles: Object.fromEntries([0.05, 0.25, 0.5, 0.75, 0.95].map((pp) => [pp, quantile(pp)]))
     };
     const seconds = (performance.now() - t0) / 1000;
-    // The study's rule: the practice rule is confirmatory when more than half
-    // of these transactions carry less than 20 ADA of collateral.
-    const summary = { command: 'collateral', network: ctx.network, snapshot: ctx.snapshot, window: w, result: res, practiceRuleConfirmatory: res.shareUnder20Ada === null ? null : res.shareUnder20Ada > 0.5, seconds, statementSeconds: timing, plans };
+    // The study's rule (pre-registration section 7.6): every replay job runs
+    // under the practice rule when more than half of these transactions carry
+    // less than 20 ADA of collateral, otherwise under the ledger rule.
+    const collateralRule = pickCollateralRule(res.shareUnder20Ada);
+    const summary = { command: 'collateral', network: ctx.network, snapshot: ctx.snapshot, window: w, result: res, collateralRule, practiceRuleConfirmatory: collateralRule === null ? null : collateralRule === 'practice', seconds, statementSeconds: timing, plans };
     writeJson(join(runDir(ctx.network, opts.runId), 'collateral.json'), summary);
     return { ...summary, print: { command: 'collateral', seconds, statementSeconds: timing, result: res } };
   } finally {

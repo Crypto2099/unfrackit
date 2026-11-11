@@ -65,7 +65,12 @@ export const VARIANTS = Object.freeze({
   'never-propose': { pureAdaOnly: 'never' },
   'dust-1': { dustAda: 1 },
   'band-3-6': { collateralBandAda: ADA_BAND(3, 6) },
-  'band-5-20': { collateralBandAda: ADA_BAND(5, 20) }
+  'band-5-20': { collateralBandAda: ADA_BAND(5, 20) },
+  // The study's two runs of UnFrack.It's H-12 rule: absorption on and off. The
+  // setting is the method's option (opts.absorb), not the planner's, so both
+  // names give the planner its defaults; they tell the two runs apart in a key.
+  'absorb-on': {},
+  'absorb-off': {}
 });
 
 // H-1's ablations (run only when H-1a is contradicted under any selector):

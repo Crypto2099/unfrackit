@@ -22,7 +22,6 @@ import { treatment, skip } from '../lib/treatment.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
 import { replay } from '../../src/replay/engine.mjs';
 import { makeMethod } from '../../src/methods/registry.mjs';
-import { windowPlan, mergePlan } from '../../src/arms/plan.mjs';
 import { settle } from '../../src/kit/heap.mjs';
 
 const T = await treatment();
@@ -118,13 +117,4 @@ test('H-9\'s cost contrast is computable from the records, and each part it read
     }
   }
   console.log(JSON.stringify(seen));
-});
-
-test('the maintained-tidy default entry names H-9 and the replay plan keeps its job count', () => {
-  const entries = mergePlan(windowPlan('recent'));
-  const m = entries.find((e) => e.arm === 'maintained-tidy' && e.variant === 'default' && e.role === 'rrri' && e.change === 'default');
-  assert.deepEqual([...m.hypotheses].sort(), ['H-1', 'H-6', 'H-9']);
-  assert.equal(m.repetitions, 30);
-  assert.equal(entries.length, 66);
-  assert.equal(entries.filter((e) => e.hypotheses.includes('H-9')).length, 3);
 });

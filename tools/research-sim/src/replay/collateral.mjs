@@ -5,7 +5,8 @@
 // under each collateral rule, whether any is available at a script
 // interaction, and which one a spend uses.
 //
-// The rules (each arm runs under one; availability is recorded under all):
+// The rules (each replay job runs under one; availability is recorded under
+// all of them):
 //   ledger          a pure-ADA UTxO of at least 5 ADA that is not an input of
 //                   the spend, with a collateral return output
 //   practice        a pure-ADA UTxO of 5 to 20 ADA that is not an input of the

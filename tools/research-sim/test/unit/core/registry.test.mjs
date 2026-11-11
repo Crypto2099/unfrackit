@@ -60,9 +60,9 @@ test('every method a study plan names resolves, and the test plans name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the three H-1 baselines and the Evolution SDK default,
-  // never the prefer_pure_change arm.
-  assert.deepEqual([...study].sort(), ['cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf']);
+  // The replays run the four libraries and UnFrack.It's H-12 rule, never the
+  // prefer_pure_change arm.
+  assert.deepEqual([...study].sort(), ['cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'unfrackit-h12']);
   const battery = batteryPlan();
   assert.deepEqual(battery.map((m) => [m.name, m.repetitions]), [['csl-lf', 1], ['csl-ri', 30], ['cjs-rrri', 30], ['evo-lf', 1], ['csl-lf-pure', 1], ['csl-ri-pure', 30], ['unfrackit-h12', 1]]);
   for (const n of [...study, ...battery.map((m) => m.name)]) assert.ok(names.has(n), n);

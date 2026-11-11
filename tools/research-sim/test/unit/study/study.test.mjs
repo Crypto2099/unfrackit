@@ -9,7 +9,8 @@
 // code changed on resume, the plans' own
 // rules, a confirmation-split wallet without the analysis-freeze
 // transaction, a second invocation while one runs); the nested run ids, and
-// the pools handed from battery-pools to the battery.
+// the collateral rule read from the collateral stage's report (and refused
+// when the measurement picks none), and the battery-pools command's output.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,23 +45,26 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const preprod = (runId, extra = {}) => ({ _: [], plan: 'preprod', runId, treatment: join(root, 'treatment'), expectNetwork: 'preprod', snapshot: '100', wallets: walletsFile, repsH1: '1', reps: '1', workers: '2', ...extra });
-const synthetic = (runId, extra = {}) => ({ _: [], plan: 'synthetic', runId, treatment: join(root, 'treatment'), shapes: 'S1,S8', repsH1: '2', reps: '2', oracle: true, validity: true, ...extra });
+const preprod = (runId, extra = {}) => ({ _: [], plan: 'preprod', runId, treatment: join(root, 'treatment'), expectNetwork: 'preprod', snapshot: '100', wallets: walletsFile, reps: '1', workers: '2', ...extra });
+const synthetic = (runId, extra = {}) => ({ _: [], plan: 'synthetic', runId, treatment: join(root, 'treatment'), shapes: 'S1,S8', reps: '2', collateralRule: 'ledger', ...extra });
 const run = (opts, stub = {}, more = {}) => runStudy(opts, { commands: stubCommands({ network: opts.plan === 'synthetic' ? 'synthetic' : opts.expectNetwork, ...stub }), manifest: MANIFEST, say: () => {}, ...more });
 const logOf = (network, id) => readFileSync(join(runDir(network, id), 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 const recordsOf = (network, id, stage) => readFileSync(join(runDir(network, `${id}/${stage}`), 'records.jsonl'), 'utf8');
 
-test('the preprod plan runs its eleven stages in order, each in its own run directory with the options it needs', async () => {
+test('the preprod plan runs its eight stages in order, each in its own run directory with the options it needs', async () => {
   const calls = [];
   const r = await run(preprod('order'), { calls });
   assert.deepEqual(calls.map(([s]) => s), [...PLANS.preprod]);
-  assert.deepEqual([...PLANS.preprod], ['history-recent', 'history-peak', 'history-snapshot', 'census', 'near-cap', 'collateral', 'fidelity', 'battery-pools', 'replay-recent', 'replay-peak', 'battery']);
+  assert.deepEqual([...PLANS.preprod], ['history-recent', 'history-peak', 'census', 'near-cap', 'collateral', 'fidelity', 'replay-recent', 'replay-peak']);
+  assert.deepEqual([...PLANS.corpus], [...PLANS.preprod]);
+  assert.deepEqual([...PLANS.synthetic], ['replay-recent', 'replay-peak']);
+  for (const gone of ['battery', 'battery-pools', 'history-snapshot']) assert.ok(![...PLANS.preprod, ...PLANS.corpus, ...PLANS.synthetic].includes(gone), gone);
   const by = new Map(calls);
   for (const s of PLANS.preprod) {
     assert.equal(by.get(s).runId, `order/${s}`);
     assert.equal(recordsOf('preprod', 'order', s).split('\n').filter(Boolean).length, STUB_RECORDS);
   }
-  assert.deepEqual(['history-recent', 'history-peak', 'history-snapshot'].map((s) => by.get(s).window), ['recent', 'peak', 'snapshot']);
+  assert.deepEqual(['history-recent', 'history-peak'].map((s) => by.get(s).window), ['recent', 'peak']);
   for (const s of ['history-recent', 'census', 'near-cap', 'collateral']) {
     assert.equal(by.get(s).expectNetwork, 'preprod');
     assert.equal(by.get(s).snapshot, '100');
@@ -71,40 +75,63 @@ test('the preprod plan runs its eleven stages in order, each in its own run dire
   const want = [];
   for (const w of ['recent', 'peak']) for (const k of [1, 3, 4]) want.push(join(historyDir('preprod', `order/history-${w}`), `${k}.${w}.jsonl`));
   assert.deepEqual(by.get('fidelity').history, want);
-  assert.equal(by.get('battery-pools').historyRun, 'order/history-recent');
-  assert.equal(by.get('battery-pools').network, 'preprod');
   assert.deepEqual(by.get('replay-recent').history, [historyDir('preprod', 'order/history-recent')]);
   assert.equal(by.get('replay-recent').plan, 'recent');
   assert.deepEqual(by.get('replay-peak').history, [historyDir('preprod', 'order/history-peak')]);
   assert.equal(by.get('replay-peak').plan, 'peak');
-  assert.equal(by.get('replay-peak').repsH1, '1');
-  assert.deepEqual(by.get('battery').history, [historyDir('preprod', 'order/history-snapshot')]);
-  assert.equal(by.get('battery').pools, join(runDir('preprod', 'order/battery-pools'), 'battery-pools.json'));
-  assert.equal(by.get('battery').reps, '1');
-  assert.equal(by.get('battery').workers, '2');
+  for (const s of ['replay-recent', 'replay-peak']) {
+    // The collateral stand-in's share is 0.75: practice, for every job, and
+    // validity checks on every job.
+    assert.deepEqual([by.get(s).reps, by.get(s).workers, by.get(s).collateralRule, by.get(s).validity], ['1', '2', 'practice', true], s);
+    assert.equal(by.get(s).repsH1, undefined);
+  }
   const header = JSON.parse(readFileSync(join(runDir('preprod', 'order'), 'study.json'), 'utf8'));
   assert.equal(header.plan, 'preprod');
   assert.deepEqual(header.stages, [...PLANS.preprod]);
   assert.equal(header.manifest, MANIFEST());
   assert.match(header.manifestSha256, /^[0-9a-f]{64}$/);
+  assert.equal(header.collateralRule.rule, 'practice');
+  assert.equal(header.collateralRule.shareUnder20Ada, 0.75);
+  assert.match(header.collateralRule.source, /collateral stage/);
   assert.equal(r.failed, false);
   const log = logOf('preprod', 'order');
-  assert.deepEqual(log.map((e) => e.event), ['start', ...PLANS.preprod.flatMap(() => ['stage-start', 'stage-end']), 'end']);
+  assert.deepEqual(log.map((e) => e.event), ['start', ...PLANS.preprod.flatMap((s) => (s === 'replay-recent' ? ['collateral-rule'] : []).concat(['stage-start', 'stage-end'])), 'end']);
+  assert.equal(log.find((e) => e.event === 'collateral-rule').rule, 'practice');
   assert.ok(!existsSync(join(runDir('preprod', 'order'), 'lock')));
 });
 
-test('the synthetic plan runs both replays and the battery over the shapes, with the oracle and the validity checks', async () => {
+test('the synthetic plan runs both replays over the shapes under the given collateral rule, with the validity checks', async () => {
   const calls = [];
   await run(synthetic('shapes'), { calls });
-  assert.deepEqual(calls.map(([s]) => s), ['replay-recent', 'replay-peak', 'battery']);
+  assert.deepEqual(calls.map(([s]) => s), ['replay-recent', 'replay-peak']);
   const by = new Map(calls);
   assert.equal(by.get('replay-recent').shapes, 'S1,S8');
   assert.equal(by.get('replay-recent').plan, 'recent');
   assert.equal(by.get('replay-peak').plan, 'peak');
-  assert.equal(by.get('replay-peak').validity, true);
-  assert.equal(by.get('battery').oracle, true);
-  assert.equal(by.get('battery').reps, '2');
-  assert.equal(by.get('battery').pools, undefined);
+  assert.deepEqual([by.get('replay-peak').validity, by.get('replay-peak').reps, by.get('replay-peak').collateralRule], [true, '2', 'ledger']);
+  const header = JSON.parse(readFileSync(join(runDir('synthetic', 'shapes'), 'study.json'), 'utf8'));
+  assert.deepEqual(header.collateralRule, { rule: 'ledger', source: '--collateral-rule' });
+  assert.equal(header.options.collateralRule, 'ledger');
+});
+
+test('the collateral rule is the measurement\'s pick: practice above one half under 20 ADA, ledger otherwise, none when nothing was measured', async () => {
+  for (const [share, rule] of [[0.5, 'ledger'], [0.5001, 'practice'], [0, 'ledger'], [1, 'practice']]) {
+    const calls = [];
+    await run(preprod(`rule-${String(share).replace('.', '_')}`), { calls, share });
+    assert.ok(calls.filter(([s]) => s.startsWith('replay-')).every(([, o]) => o.collateralRule === rule), `${share}`);
+  }
+  const calls = [];
+  await assert.rejects(run(preprod('rule-none'), { calls, share: null }), /picks no rule/);
+  assert.deepEqual(calls.map(([s]) => s), PLANS.preprod.slice(0, PLANS.preprod.indexOf('replay-recent')));
+  const log = logOf('preprod', 'rule-none');
+  assert.equal(log[log.length - 1].event, 'stage-error');
+  assert.equal(log[log.length - 1].stage, 'replay-recent');
+  const header = JSON.parse(readFileSync(join(runDir('preprod', 'rule-none'), 'study.json'), 'utf8'));
+  assert.equal(header.collateralRule.rule, null);
+  // The synthetic plan takes no measurement: the rule is required.
+  await assert.rejects(run({ ...synthetic('rule-req'), collateralRule: undefined }), /--collateral-rule ledger \| practice/);
+  await assert.rejects(run(synthetic('rule-bad', { collateralRule: 'ledger-minimum' })), /--collateral-rule ledger \| practice/);
+  await assert.rejects(run(preprod('rule-db', { collateralRule: 'ledger' })), /does not use --collateral-rule/);
 });
 
 test('the corpus plan reads every sampled wallet with the analysis-freeze transaction', async () => {
@@ -112,14 +139,14 @@ test('the corpus plan reads every sampled wallet with the analysis-freeze transa
   await run({ _: [], plan: 'corpus', runId: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'preprod', extractionRun: walletsFile, analysisFreezeTx: FREEZE }, { calls });
   const by = new Map(calls);
   assert.deepEqual(calls.map(([s]) => s), [...PLANS.corpus]);
-  for (const s of ['history-recent', 'history-peak', 'history-snapshot']) {
+  for (const s of ['history-recent', 'history-peak']) {
     assert.equal(by.get(s).fromStudy, 'all');
     assert.equal(by.get(s).analysisFreezeTx, FREEZE);
   }
   assert.equal(by.get('census').fromStudy, true);
   assert.equal(by.get('near-cap').fromStudy, true);
   assert.equal(by.get('replay-recent').analysisFreezeTx, FREEZE);
-  assert.equal(by.get('battery').analysisFreezeTx, FREEZE);
+  assert.equal(by.get('replay-peak').analysisFreezeTx, FREEZE);
 });
 
 function runChild(opts, stub) {
@@ -147,13 +174,13 @@ test('a stage killed half way is rerun from its start on resume, and the run end
   assert.ok(existsSync(join(runDir('preprod', 'killed'), 'lock')), 'the killed process leaves its lock');
   const calls = [];
   await run(preprod('killed'), { calls });
-  assert.deepEqual(calls.map(([s]) => s), ['replay-peak', 'battery']);
+  assert.deepEqual(calls.map(([s]) => s), ['replay-peak']);
   assert.ok(!existsSync(join(runDir('preprod', 'killed/replay-peak'), 'partial')), 'the rerun stage starts from an empty directory');
   for (const s of PLANS.preprod) assert.equal(recordsOf('preprod', 'killed', s), recordsOf('preprod', 'whole', s), s);
   const log = logOf('preprod', 'killed');
   const resumed = log.slice(before.length);
-  assert.deepEqual(resumed.map((e) => e.event), ['resume', ...PLANS.preprod.slice(0, 9).map(() => 'stage-skipped'), 'stage-start', 'stage-end', 'stage-start', 'stage-end', 'end']);
-  assert.deepEqual(resumed[0].finished, PLANS.preprod.slice(0, 9));
+  assert.deepEqual(resumed.map((e) => e.event), ['resume', ...PLANS.preprod.slice(0, 7).map(() => 'stage-skipped'), 'collateral-rule', 'stage-start', 'stage-end', 'end']);
+  assert.deepEqual(resumed[0].finished, PLANS.preprod.slice(0, 7));
   // Run again: everything is skipped.
   const again = [];
   await run(preprod('killed'), { calls: again });
@@ -169,14 +196,14 @@ test('a stage that throws stops the run with its error logged, and a resume reru
   assert.equal(log[log.length - 1].stage, 'replay-peak');
   const resumed = [];
   await run(synthetic('fails'), { calls: resumed });
-  assert.deepEqual(resumed.map(([s]) => s), ['replay-peak', 'battery']);
+  assert.deepEqual(resumed.map(([s]) => s), ['replay-peak']);
 });
 
 test('a resume with an option, an input file or the code changed is refused, and runs nothing', async () => {
   await run(preprod('strict'));
   const calls = [];
-  await assert.rejects(run(preprod('strict', { repsH1: '2' }), { calls }), /differs from its first start in --reps-h1/);
-  await assert.rejects(run(preprod('strict', { validity: true }), { calls }), /--validity/);
+  await assert.rejects(run(preprod('strict', { reps: '2' }), { calls }), /differs from its first start in --reps/);
+  await assert.rejects(run(preprod('strict', { validity: true }), { calls }), /does not use --validity/);
   await assert.rejects(run(preprod('strict'), { calls }, { manifest: () => 'another manifest\n' }), /the code manifest/);
   const copy = join(root, 'wallets-copy.txt');
   writeFileSync(copy, readFileSync(walletsFile));
@@ -192,25 +219,24 @@ test('a resume with an option, an input file or the code changed is refused, and
   assert.equal(calls.length, 0, 'the same options resume, with every stage finished');
 });
 
-test('a resume may use other worker counts: they change no record, and the log records each invocation\'s with its machine', async () => {
+test('a resume may use another worker count: it changes no record, and the log records each invocation\'s with its machine', async () => {
   const calls = [];
-  await assert.rejects(run(synthetic('elastic', { workers: '2', oracleWorkers: '1' }), { calls, fail: 'replay-peak' }), /stand-in failure/);
+  await assert.rejects(run(synthetic('elastic', { workers: '2' }), { calls, fail: 'replay-peak' }), /stand-in failure/);
   const resumed = [];
-  await run(synthetic('elastic', { workers: '6', oracleWorkers: '3' }), { calls: resumed });
-  assert.deepEqual(resumed.map(([s]) => s), ['replay-peak', 'battery']);
+  await run(synthetic('elastic', { workers: '6' }), { calls: resumed });
+  assert.deepEqual(resumed.map(([s]) => s), ['replay-peak']);
   const by = new Map(resumed);
-  assert.deepEqual([by.get('replay-peak').workers, by.get('battery').workers, by.get('battery').oracleWorkers], ['6', '6', '3']);
-  assert.equal(recordsOf('synthetic', 'elastic', 'battery').length > 0, true);
+  assert.equal(by.get('replay-peak').workers, '6');
+  assert.equal(recordsOf('synthetic', 'elastic', 'replay-peak').length > 0, true);
   const log = logOf('synthetic', 'elastic');
   const starts = log.filter((e) => e.event === 'start' || e.event === 'resume');
-  assert.deepEqual(starts.map((e) => [e.event, e.machine.workers, e.machine.oracleWorkers, e.machine.node]), [['start', 2, 1, process.version], ['resume', 6, 3, process.version]]);
+  assert.deepEqual(starts.map((e) => [e.event, e.machine.workers, e.machine.node]), [['start', 2, process.version], ['resume', 6, process.version]]);
   assert.ok(starts.every((e) => Number.isSafeInteger(e.machine.logicalCores) && e.machine.totalMemoryBytes > 0));
   // The header holds the options that decide the records, and not the
-  // worker counts.
+  // worker count.
   const header = JSON.parse(readFileSync(join(runDir('synthetic', 'elastic'), 'study.json'), 'utf8'));
   assert.equal('workers' in header.options, false);
-  assert.equal('oracleWorkers' in header.options, false);
-  assert.equal(header.options.repsH1, '2');
+  assert.equal(header.options.reps, '2');
 });
 
 test('each plan refuses what it does not use, before anything is written', async () => {
@@ -239,12 +265,14 @@ test('each plan refuses what it does not use, before anything is written', async
   // Worker counts are positive whole numbers, with no cap; the time limits
   // and the oracle's wall-clock limit are gone. Before any stage.
   await refuse(synthetic('r19', { workers: 'many' }), /--workers takes a positive whole number/);
-  await refuse(synthetic('r18', { oracleWorkers: '0' }), /--oracle-workers takes a positive whole number/);
+  await refuse(synthetic('r18', { oracleWorkers: '1' }), /does not use --oracle-workers/);
+  await refuse(synthetic('r23', { oracle: true }), /does not use --oracle/);
+  await refuse(synthetic('r24', { repsH1: '2' }), /does not use --reps-h1/);
   await refuse(synthetic('r20', { oracleLimitMs: '60000' }), /does not use --oracle-limit-ms/);
   await refuse(synthetic('r21', { limitMs: '300000' }), /does not use --limit-ms/);
   await refuse(synthetic('r22', { answerLimitMs: '60000' }), /does not use --answer-limit-ms/);
-  assert.equal(studyOptions(synthetic('ok12', { workers: '48', oracleWorkers: '16' })).workers, '48');
-  assert.equal(studyOptions(synthetic('ok13', { workers: '64', oracle: undefined })).workers, '64');
+  assert.equal(studyOptions(synthetic('ok12', { workers: '48' })).workers, '48');
+  assert.equal(studyOptions(synthetic('ok13', { workers: '64' })).workers, '64');
   assert.equal(studyOptions({ ...corpus, runId: 'ok' }).fromStudy, 'all');
 });
 
@@ -268,7 +296,7 @@ test('a second invocation is refused while the first runs; a lock left by a proc
   writeFileSync(join(dir, 'lock'), '2147483646\n');
   const calls = [];
   await run(synthetic('locked'), { calls });
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 2);
 });
 
 test('a stage\'s run id nests in the study run\'s directory, one level deep', () => {

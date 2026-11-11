@@ -10,8 +10,12 @@
 // that the fidelity stage's selection can be checked; given `samples`, it
 // first applies the history command's own refusals (refuseWallets).
 //
+// The collateral stand-in also writes collateral.json, whose measurement
+// gives `share` (the share under 20 ADA; 0.75 when absent, null for a
+// measurement that found no transaction), as the study reads it.
+//
 // options: { network, calls (an array each call is pushed to: [stage,
-// options]), hang (a stage that writes half its records, a `partial` file,
+// options]), share, hang (a stage that writes half its records, a `partial` file,
 // prints HUNG and never returns), fail (a stage that throws), splits,
 // samples }.
 
@@ -31,7 +35,7 @@ function normalized(opts) {
   return Object.fromEntries(Object.keys(opts).filter((k) => k !== 'runId').sort().map((k) => [k, strip(opts[k])]));
 }
 
-export function stubCommands({ network, calls = [], hang = null, fail = null, splits = STUB_SPLITS, samples = null } = {}) {
+export function stubCommands({ network, calls = [], hang = null, fail = null, splits = STUB_SPLITS, samples = null, share = 0.75 } = {}) {
   const make = (command, networkOf) => async (opts) => {
     const stage = stageOf(opts.runId);
     calls.push([stage, opts]);
@@ -44,6 +48,7 @@ export function stubCommands({ network, calls = [], hang = null, fail = null, sp
       for (const w of wallets) writePrivate(join(historyDir(net, opts.runId), `${w}.${opts.window}.jsonl`), JSON.stringify({ kind: 'header', wallet: w, frame: opts.window, split: splits[w - 1] }) + '\n');
       writeJson(join(dir, 'history-run.json'), { files: wallets.length });
     }
+    if (command === 'collateral') writeJson(join(dir, 'collateral.json'), { command, result: { shareUnder20Ada: share, measured: share === null ? 0 : 40 } });
     const lines = Array.from({ length: STUB_RECORDS }, (_x, n) => JSON.stringify({ command, stage, n, opts: normalized(opts) }) + '\n');
     if (hang === stage) {
       writePrivate(join(dir, 'records.jsonl'), lines.slice(0, STUB_RECORDS / 2).join(''));

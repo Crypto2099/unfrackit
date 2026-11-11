@@ -131,7 +131,7 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
     assert.equal(o.extractionRun, undefined);
   }
   assert.equal(by.get('battery-pools').historyRun, 'sim-clean/history-recent');
-  for (const s of ['replay-recent', 'replay-peak']) assert.deepEqual([by.get(s).repsH1, by.get(s).repsVariants, by.get(s).workers, by.get(s).validity], ['1', '1', '8', true]);
+  for (const s of ['replay-recent', 'replay-peak']) assert.deepEqual([by.get(s).reps, by.get(s).collateralRule, by.get(s).workers, by.get(s).validity], ['1', 'ledger', '8', true]);
   const b = by.get('battery');
   assert.deepEqual([b.reps, b.oracle, b.workers, b.oracleWorkers, b.validity, b.oracleLimitMs], ['1', true, '8', '4', true, undefined]);
   for (const o of by.values()) for (const k of ['limitMs', 'answerLimitMs']) assert.equal(o[k], undefined, k);
@@ -144,7 +144,7 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
   assert.equal(g.outcome, 'succeeded');
   assert.ok(g.seq < st.seq);
   assert.deepEqual([st.purpose, st.test_h, st.extraction_run, st.command], ['confirm the replays run on real data', TEST_H, 'clean-1', 'live-fire --run-id sim-clean']);
-  assert.deepEqual(st.plan.repetitions, { h1: 1, variants: 1, battery: 1 });
+  assert.deepEqual(st.plan.repetitions, { replay: 1, battery: 1 });
   assert.deepEqual(st.plan.watchdogs_ms, { replay: 24 * 3600000, answer: 30 * 60000, oracle: 3600000 });
   assert.equal('limits_ms' in st.plan, false);
   assert.deepEqual(st.plan.oracle_budget, { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, program_work: ORACLE_SETTINGS.maxProgramWork });
