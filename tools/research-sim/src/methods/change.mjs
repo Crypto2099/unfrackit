@@ -87,8 +87,10 @@ function leftover(inputs, requested, implicit, order) {
 // address, coin and assets, or for a replayed intent their own bytes), and
 // the policy's change. Returns { ok, bytes, fee, size, k, outputs } or
 // { ok: false, class, detail }. collateral: the UTxO set aside, for a replayed
-// script spend.
-export function buildWithChange(T, { state, params, inputs, intent, policy, collateral = null }) {
+// script spend. collateralFor: instead, a function from a fee to the
+// collateral a library chose itself (kit/replay.mjs assembleReplayOnce), for a
+// library that cannot be given one.
+export function buildWithChange(T, { state, params, inputs, intent, policy, collateral = null, collateralFor: given = null }) {
   if (!CHANGE_POLICIES.includes(policy)) throw new Error(`unknown change policy ${policy}`);
   const tp = treatmentParams(T, params);
   const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
@@ -139,7 +141,7 @@ export function buildWithChange(T, { state, params, inputs, intent, policy, coll
   };
   let r;
   if (replay) {
-    const collateralFor = setAsideCollateralFor(params, intent, collateral, change);
+    const collateralFor = given || setAsideCollateralFor(params, intent, collateral, change);
     r = assembleReplayAtMinimumFee(T, params, { intent, inputs, changeFor, collateralFor });
     if (r.ok) r.outputs = [...requested, ...r.change];
   } else {
