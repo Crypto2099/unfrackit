@@ -590,11 +590,13 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
   const inspected = inspectTx(last.bytes);
   // The collateral of a script spend is the UTxO set aside, and no other,
   // unless the method's library chooses its own (aside.library), which the
-  // kit's check alone judges.
+  // kit's check alone judges. It is the collateral of the transaction that
+  // runs the scripts, the last; a chain's earlier transactions (the H-12
+  // rule's consolidation, the planner's) run none and carry no collateral.
   if (aside.collateral) {
     for (const t of r.txs) {
       const c = t === last ? inspected.collateralInputs : inspectTx(t.bytes).collateralInputs;
-      if (c.length !== 1 || c[0].ref !== aside.collateral.ref) return { ok: false, class: CLASSES.other, detail: `${method.name}: a transaction's collateral is not the UTxO set aside`, ms };
+      if (t === last ? c.length !== 1 || c[0].ref !== aside.collateral.ref : c.length !== 0) return { ok: false, class: CLASSES.other, detail: `${method.name}: a transaction's collateral is not the UTxO set aside`, ms };
     }
   }
   // The intent's redeemers the transaction lacks (the intent's parts belong

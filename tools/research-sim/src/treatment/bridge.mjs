@@ -19,10 +19,12 @@
 // minimum-UTxO rule is not coins per byte (protocol major under 7) or whose
 // largest fee is 2^32 lovelace or more; resolveParams refuses both, and the
 // bridge refuses any parameter the treatment would read differently from the
-// run's. It reads no other parameter: it spends no UTxO carrying a reference
-// script (those are held) and builds no script, certificate or governance
-// action, so the reference-script price and the governance deposits cannot
-// change what it builds.
+// run's. It reads no other parameter: the planner spends no UTxO carrying a
+// reference script (those are held) and builds no script, certificate or
+// governance action, and a replayed intent's script fee, deposits and refunds
+// reach the H-12 rule in its request (methods/h12.mjs), computed under the
+// run's parameters by the history reader, so the reference-script price and
+// the governance deposits reach the treatment only through them.
 
 import { readFileSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';

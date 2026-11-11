@@ -21,8 +21,9 @@
 //            'naive'), collateralRule, absorb, collateral, random }
 //            collateral: for a replayed script spend, the UTxO the engine set
 //            aside under the arm's rule (replay/engine.mjs setAside); the
-//            state the method is given does not hold it, and every
-//            transaction the method assembles carries it as collateral
+//            state the method is given does not hold it, and the
+//            transaction that runs the scripts, the last, carries it as
+//            collateral (a chain's earlier transactions carry none)
 //            random: a function returning the next draw in [0, 1), which a
 //            seeded method draws from. In a replay it is the job's one
 //            generator (replay/engine.mjs jobOptions), mulberry32 seeded

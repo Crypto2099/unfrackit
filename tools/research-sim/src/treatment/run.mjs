@@ -13,6 +13,7 @@ import { treatmentParams } from './bridge.mjs';
 import { treatmentWallet, adapterFor } from './wallet.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
+import { addUtxos } from '../state/state.mjs';
 
 export class StopPoint extends Error {
   constructor(message, detail) {
@@ -54,8 +55,10 @@ function free(built) {
 }
 
 // Kit checks over the treatment's transactions, applied in order from `state`.
-function kitAgree(state, params, txs, treatmentPass, what, validity = null) {
-  const r = checkAndApply(state, params, txs, { validity });
+// kit: a replayed intent's view (methods/h12.mjs), whose implicit values,
+// script fee, fixed parts and held inputs belong to the last transaction.
+function kitAgree(state, params, txs, treatmentPass, what, validity = null, kit = null) {
+  const r = checkAndApply(state, params, txs, { validity, ...(kit ? { implicit: kit.implicit, scriptFee: kit.scriptFee, fixed: kit.fixed, extraWitnesses: kit.extraWitnesses, heldInputs: kit.heldInputs } : {}) });
   if (!r.ok) {
     const f = r.failure;
     throw new StopPoint(`${what}: transaction ${r.failed} passes the treatment's checks and fails the kit's (${f.check}: ${f.detail})`, { failures: r.checks[r.failed].failures });
@@ -92,17 +95,27 @@ export function planState(T, state, params, settings = {}, { ladder, refs, arriv
   return { plan, txs, after: k.state, treatmentChecks, kitChecks: k.checks };
 }
 
-// The H-12 rule's answer to a request ({ outputs: [{ address (bech32), coin,
-// tokens }] }) on a state. options: { absorb (required), settings, refs }.
-// Returns the selector's error, or its transactions with both checks passed
-// and the state after them.
-export function selectState(T, state, request, params, { absorb, settings = {}, refs } = {}) {
+// The H-12 rule's answer to a request on a state: a battery spend's ({
+// outputs: [{ address (bech32), coin, tokens }] }) or a replayed intent's
+// (methods/h12.mjs h12Request). options: { absorb (required), settings, refs,
+// kit }; kit, for a replayed intent, is the ledger kit's view of it
+// (methods/h12.mjs): its implicit values, script fee, fixed parts, fixed
+// witnesses and held inputs, and the collateral set aside, which `state`
+// does not hold and the kit's state for the check gets back. Returns the
+// selector's error, or its transactions with both checks passed and the
+// state after them. A selection the treatment cannot build is a stop point.
+export function selectState(T, state, request, params, { absorb, settings = {}, refs, kit = null } = {}) {
   const tp = treatmentParams(T, params);
   const { wallet, utxos } = treatmentWallet(T, state, { refs });
   const adapter = adapterFor(T, state.changeAddress, tp, 'select');
   const result = T.select.select(utxos, request, tp, adapter, { absorb, settings });
   if (!result.ok) return { ok: false, result };
-  const built = T.selectCsl.buildResult(result, wallet);
+  let built;
+  try {
+    built = T.selectCsl.buildResult(result, wallet);
+  } catch (e) {
+    throw new StopPoint(`the treatment cannot build the H-12 rule's selection: ${e && e.message ? e.message : e}`);
+  }
   const n = result.payment.index;
   const pay = T.selectCsl.checkPayment(built[n], result.txs[n], result, request);
   const chain = built.slice(0, n).map((b, i) => T.conform.checkBuiltTx(b, result.txs[i], result.plan));
@@ -112,6 +125,7 @@ export function selectState(T, state, request, params, { absorb, settings = {}, 
   if (!idsMatch) throw new StopPoint('a plan transaction id the H-12 rule used differs from the built one');
   const txs = built.map((b, i) => record(b, result.txs[i], i === n ? 'payment' : 'plan'));
   free(built);
-  const k = kitAgree(state, params, txs, [...chain, pay], 'H-12 rule');
+  const kitState = kit && kit.collateral ? addUtxos(state, [kit.collateral]) : state;
+  const k = kitAgree(kitState, params, txs, [...chain, pay], 'H-12 rule', null, kit);
   return { ok: true, result, txs, after: k.state, treatmentChecks: [...chain, pay], kitChecks: k.checks };
 }

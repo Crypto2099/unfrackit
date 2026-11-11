@@ -350,7 +350,11 @@ test('the H-12 method refuses what its request cannot carry', { skip }, () => {
   const s = shapeState(T, 'S1').state;
   const m = h12Method(T);
   const it = standardBattery(T, s, P, { pools: SHAPE_POOLS })[0];
-  assert.equal(m.build(s, { ...it, source: 'replay' }, P, { changePolicy: 'default', absorb: true }).class, 'not-replayable');
+  // A battery spend carries no replay part; one that did would not be the
+  // battery's, and its request is refused. A replayed intent's carries them
+  // all (test/unit/core/library-replay-h12.test.mjs).
+  assert.equal(m.build(s, { ...it, implicit: { ...it.implicit, deposits: 1n } }, P, { changePolicy: 'default', absorb: true }).class, 'not-replayable');
+  assert.equal(m.build(s, { ...it, source: 'replay' }, P, { changePolicy: 'default', absorb: true }).ok, true);
   assert.equal(m.build(s, it, P, { changePolicy: 'layout', absorb: true }).class, CLASSES.other);
   assert.equal(m.build(s, it, P, { changePolicy: 'default', absorb: true }).ok, true);
 });
