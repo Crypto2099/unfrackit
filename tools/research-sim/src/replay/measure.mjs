@@ -12,6 +12,16 @@
 //   changeOutputs the outputs at the wallet's stake credential that are not
 //                 requested outputs: their count, bytes, and the largest
 //                 change Value's bytes
+//   consumedWalletInputs       the count of wallet UTxOs the spend consumes, the
+//                 intent's fixed wallet inputs included (inputs leaves them out)
+//   largestConsumedValueBytes  the largest Value among those UTxOs
+//   changeTokenMinimum   the minimum coin of the token-carrying change outputs
+//                 (coinsPerUtxoByte * (160 + output bytes))
+//   consumedTokenMinimum the minimum coin the consumed token-carrying UTxOs
+//                 would need without the tokens the spend sends away (a
+//                 requested token no change output carries); a UTxO left with
+//                 no token adds nothing. Criterion A of H-7's drift compares
+//                 the two minimums.
 //   dragBytes     H-2's replayed drag: the bytes, in the change outputs' Values,
 //                 of the tokens that shared a consumed output with a requested
 //                 token without being requested themselves
@@ -84,8 +94,31 @@ export function spendMeasures(state, intent, tx, walletInputs, params, requested
     dragBytes += bytesOf(o, (a) => sharing.has(key(a)));
     for (const p of new Set(o.assets.map((a) => a.policy))) policies.set(p, (policies.get(p) || 0) + bytesOf(o, (a) => a.policy === p));
   }
+  // Every wallet UTxO the spend consumes: the method's inputs and the intent's
+  // fixed inputs that are wallet UTxOs of the state (by reference, once each).
+  const consumed = new Map();
+  for (const r of walletInputs) if (state.utxos.has(r)) consumed.set(r, state.utxos.get(r));
+  if (intent.fixed) for (const x of intent.fixed.inputs) if (state.utxos.has(x.ref)) consumed.set(x.ref, state.utxos.get(x.ref));
+  // A token is sent away when a requested output carries it and no change
+  // output does; one only partly sent stays in the change and in the minimum
+  // of the UTxO it came from.
+  const kept = new Set(change.flatMap((o) => o.assets.map(key)));
+  const away = (a) => reqAssets.has(key(a)) && !kept.has(key(a));
+  let largestConsumed = 0;
+  let consumedTokenMinimum = 0n;
+  for (const u of consumed.values()) {
+    largestConsumed = Math.max(largestConsumed, valueSize(u.coin, u.assets));
+    const left = u.assets.filter((a) => !away(a));
+    if (left.length) consumedTokenMinimum += outputMinimum(params, outputLength(u) - bytesOf(u, away));
+  }
+  let changeTokenMinimum = 0n;
+  for (const o of change) if (o.assets.length) changeTokenMinimum += outputMinimum(params, o.raw.length);
   return {
     inputs: walletInputs.length,
+    consumedWalletInputs: consumed.size,
+    largestConsumedValueBytes: largestConsumed,
+    changeTokenMinimum,
+    consumedTokenMinimum,
     keys: new Set(ins.map((u) => u.cred)).size,
     dragged,
     changeOutputs: { count: change.length, bytes: change.reduce((s, o) => s + o.raw.length, 0), largestValueBytes: change.reduce((m, o) => Math.max(m, valueSize(o.coin, o.assets)), 0) },
