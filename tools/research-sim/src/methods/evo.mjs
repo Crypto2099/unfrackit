@@ -9,8 +9,9 @@
 // default encoding. The builder is made with no wallet and no provider
 // (makeTxBuilder, TransactionBuilder.ts:1850-1859) and given the change
 // address, the available UTxOs and the run's protocol parameters at build time
-// (BuildOptions, :475-668). It serves H-7 and H-12 only, so it takes no change
-// substitution.
+// (BuildOptions, :475-668). Its change policies are its own ('default') and
+// UnFrack.It's layout change on the inputs the library selected ('layout',
+// layoutOnLibraryInputs below); 'single' and 'naive' are refused.
 //
 // The library, at that commit:
 //   CoinSelection.ts:67-113, largestFirstSelection: every available UTxO
@@ -171,6 +172,7 @@ import { minFee } from '../kit/fee.mjs';
 import { need } from '../kit/params.mjs';
 import { decode, raw, head, encUint, asUint } from '../history/cbor.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
+import { buildWithChange } from './change.mjs';
 import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 export const EVO_VERSION = JSON.parse(readFileSync(createRequire(import.meta.url).resolve('@evolution-sdk/evolution/package.json'), 'utf8')).version;
@@ -578,11 +580,46 @@ function walletKeysOf(state, intent, inputs, collateralRefs) {
   return replayWitnessKeys(intent.fixed, { inputs, collateral });
 }
 
+// The layout change on the library's inputs (opts.changePolicy 'layout'). The
+// library has built its transaction as for its own change, with the same pool,
+// options and collateral choice; the wallet inputs it selected and the
+// collateral it chose are read from that transaction, its change outputs are
+// dropped, and the simulator's layout change (methods/change.mjs) is built on
+// those inputs, the kit assembling the transaction at its exact fee with the
+// intent's fixed parts. The collateral stays as the library wrote it: its
+// inputs, its total collateral and its return output, which the library
+// cannot be told to choose otherwise. A library that fails to build fails
+// before this point, as for its own change.
+async function layoutOnLibraryInputs(T, state, intent, params, built, fixedRefs, name) {
+  const tx = await built.toTransaction();
+  const refs = tx.body.inputs.map(refOfInput);
+  for (const x of fixedRefs) if (!refs.includes(x)) return { ok: false, class: CLASSES.other, detail: `the library left out the fixed input ${x}` };
+  const inputs = recordsOf(state, refs.filter((x) => !fixedRefs.has(x)));
+  let collateralFor;
+  let collateralRefs = [];
+  if (tx.body.collateralInputs && tx.body.collateralInputs.length) {
+    const seen = inspectTx(E.Transaction.toCBORHex(tx));
+    collateralRefs = seen.collateralInputs.map((x) => x.ref);
+    const utxos = collateralRefs.map((ref) => {
+      const u = state.utxos.get(ref);
+      if (!u) throw new Error(`${name}: the library chose ${ref} as collateral, which is not in the state`);
+      return u;
+    });
+    const collateral = { utxos, total: seen.totalCollateral, returnBytes: seen.collateralReturn ? seen.collateralReturn.raw : null };
+    collateralFor = () => ({ ok: true, collateral });
+  } else if (intent.collateral.required) collateralFor = () => null;
+  const r = buildWithChange(T, { state, params, inputs, intent, policy: 'layout', ...(collateralFor ? { collateralFor } : {}) });
+  if (!r.ok) return { ok: false, class: r.class, detail: `layout change on the library's inputs: ${r.detail}` };
+  return { ok: true, kind: 'single', txs: [txRecord(r.bytes, inputs.map((u) => u.ref), r.fee, r.size, r.k)], library: { collateral: collateralRefs } };
+}
+
 // Builds the intent with the library: the battery path for a battery spend,
 // the replay path for a replayed intent. It refuses nothing: the method below
 // refuses what its coverage leaves out first.
-export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', unfrack = null } = {}) {
-  if (opts.changePolicy !== 'default') return { ok: false, class: CLASSES.other, detail: 'the Evolution SDK baseline takes no change substitution' };
+export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', unfrack = null, T = null } = {}) {
+  const layout = opts.changePolicy === 'layout';
+  if (opts.changePolicy !== 'default' && !layout) return { ok: false, class: CLASSES.other, detail: 'the Evolution SDK baseline takes its own change or the layout change only' };
+  if (layout && !T) throw new Error(`${name}: the layout change needs the treatment`);
   if (opts.collateral) throw new Error(`${name}: the library chooses its own collateral and cannot be given a UTxO set aside`);
   const replay = intent.source === 'replay';
   if (replay) {
@@ -630,6 +667,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
     const cause = e && e.cause && e.cause.message ? ` (${e.cause.message})` : '';
     return { ok: false, class: classOfEvoError(e), detail: `build: ${errorText(e).split('\n')[0]}${cause}` };
   }
+  if (layout) return layoutOnLibraryInputs(T, state, intent, params, r.right, fixedRefs, name);
   if (!replay) {
     const tx = await r.right.toTransactionWithFakeWitnesses();
     const refs = tx.body.inputs.map(refOfInput);
@@ -705,7 +743,7 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
 
 // unfrack: the library's unfrack option ({} for its defaults), for the
 // builder survey only; the baseline runs without it.
-export function evoMethod({ unfrack = null } = {}) {
+export function evoMethod({ unfrack = null, T = null } = {}) {
   const name = unfrack ? 'evo-unfrack' : 'evo-lf';
   return {
     name,
@@ -715,7 +753,7 @@ export function evoMethod({ unfrack = null } = {}) {
     ownCollateral: true,
     async build(state, intent, params, opts) {
       refuseUncovered(name, REPLAY_COVERAGE.evo, intent);
-      return buildEvo(state, intent, params, opts, { name, unfrack });
+      return buildEvo(state, intent, params, opts, { name, unfrack, T });
     }
   };
 }

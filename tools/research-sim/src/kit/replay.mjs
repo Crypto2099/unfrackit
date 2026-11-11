@@ -377,7 +377,10 @@ export function replayRefusal(intent) {
 }
 
 // parts: { intent, inputs [UTxO records], change [{ address, coin, assets }],
-// collateral null | { utxo, returnAddress, total }, fee }.
+// collateral null | { utxo, returnAddress, total } | { utxos, total,
+// returnBytes }, fee }. The second form is a collateral a library chose
+// itself: its inputs, its total collateral (null when it wrote none) and its
+// return output as the library encoded it (null when it wrote none).
 export function assembleReplayOnce(T, parts) {
   const { intent, inputs, change, collateral, fee } = parts;
   const fixed = intent.fixed;
@@ -386,7 +389,7 @@ export function assembleReplayOnce(T, parts) {
   const allRefs = [...inputs.map((u) => u.ref), ...(fixed ? fixed.inputs.map((x) => x.ref) : [])];
   if (new Set(allRefs).size !== allRefs.length) throw new Error('replay: an input is given twice');
   const sorted = allRefs.slice().sort(cmpRef);
-  const keys = replayWitnessKeys(fixed, { inputs, collateral: collateral ? [collateral.utxo] : [] });
+  const keys = replayWitnessKeys(fixed, { inputs, collateral: collateral ? collateral.utxos || [collateral.utxo] : [] });
 
   const body = [];
   const put = (k, v) => body.push([k, v]);
@@ -403,7 +406,14 @@ export function assembleReplayOnce(T, parts) {
   if (fixed && fixed.witnesses[5] !== undefined) reds = redeemerBytes(fixed, sorted);
   const datums = fixed && fixed.witnesses[4] !== undefined ? Buffer.from(fixed.witnesses[4], 'hex') : null;
   if (reds || datums) put(11, encBytes(blake2b256(Buffer.concat([reds || Buffer.alloc(0), datums || Buffer.alloc(0)]))));
-  if (collateral) {
+  if (collateral && collateral.utxos) {
+    put(13, SET(collateral.utxos.map((u) => inputBytes(u.ref))));
+    if (collateral.returnBytes) {
+      ret = { raw: collateral.returnBytes };
+      put(16, collateral.returnBytes);
+    }
+    if (collateral.total !== null) put(17, encUint(collateral.total));
+  } else if (collateral) {
     const u = collateral.utxo;
     put(13, SET([inputBytes(u.ref)]));
     const retCoin = u.coin - collateral.total;
