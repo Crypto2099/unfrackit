@@ -1,0 +1,98 @@
+name: unfrackit-dbsync-preprod
+x-dbsync: &dbsync
+  image: ghcr.io/intersectmbo/cardano-db-sync:13.7.2.1@sha256:1421fc5a2e80a093ccf64e4f4f704beb8ad43cb934915cd65136fbfd3d167e00
+  command: [--config, /config/db-sync-config.json, --socket-path, /ipc/node.socket]
+  security_opt: [seccomp=unconfined]
+  environment:
+    DbSyncAbortOnPanic: "1"
+  restart: unless-stopped
+  stop_grace_period: 300s
+services:
+  postgres:
+    container_name: dbsync-preprod-postgres
+    image: docker.io/library/postgres:17.2-alpine@sha256:7e5df973a74872482e320dcbdeb055e178d6f42de0558b083892c50cda833c96
+    user: "1000:1000"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets: [pg_superuser_password]
+    ports: ["127.0.0.1:5433:5432"]
+    shm_size: 4gb
+    command:
+      - postgres
+      - -c
+      - shared_buffers=4GB
+      - -c
+      - effective_cache_size=12GB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - max_parallel_maintenance_workers=4
+      - -c
+      - max_worker_processes=16
+      - -c
+      - max_parallel_workers=8
+      - -c
+      - max_parallel_workers_per_gather=4
+      - -c
+      - max_wal_size=8GB
+      - -c
+      - min_wal_size=1GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_compression=on
+      - -c
+      - synchronous_commit=off
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_connections=50
+    volumes:
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/pgdata:/var/lib/postgresql/data
+      - /etc/passwd:/etc/passwd:ro
+    restart: unless-stopped
+    stop_grace_period: 120s
+  cardano-node:
+    container_name: dbsync-preprod-node
+    image: ghcr.io/intersectmbo/cardano-node:11.0.1@sha256:007da778998d0bdb043fb834c62b9da1c95e33610f31f6f9cccab29a945e2b99
+    user: "1000:1000"
+    entrypoint: [cardano-node]
+    command: [run, --config, /config/config.json, --topology, /config/topology.json, --database-path, /data/db, --socket-path, /ipc/node.socket, --host-addr, 0.0.0.0, --port, "3001"]
+    security_opt: [seccomp=unconfined]
+    volumes:
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/config/node:/config:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/node-db:/data/db
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/node-ipc:/ipc
+    restart: unless-stopped
+    stop_grace_period: 300s
+  cardano-db-sync:
+    <<: *dbsync
+    container_name: dbsync-preprod-dbsync
+    volumes:
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/config/dbsync:/config:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/config/node:/node-config:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/secrets/pgpass-dbsync_preprod:/configuration/pgpass:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/dbsync-state:/var/lib/cexplorer
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/node-ipc:/ipc
+    depends_on: [postgres, cardano-node]
+  cardano-db-sync-r:
+    <<: *dbsync
+    container_name: dbsync-preprod-dbsync-r
+    volumes:
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/config/dbsync:/config:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/config/node:/node-config:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/secrets/pgpass-dbsync_preprod_r:/configuration/pgpass:ro
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/dbsync-state-r:/var/lib/cexplorer
+      - ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/node-ipc:/ipc
+    depends_on: [postgres, cardano-node]
+secrets:
+  pg_superuser_password:
+    file: ${DBSYNC_ROOT:?set DBSYNC_ROOT to the data root}/secrets/pg_superuser_password
