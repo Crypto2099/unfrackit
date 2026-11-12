@@ -39,8 +39,11 @@ function fakeCtx(scope, { readable = true } = {}) {
         seen.push(name);
         return { rows };
       };
-      if (s.includes('AS has_frame')) return hit('study_readable', [{ usage: readable, has_frame: readable }]);
+      if (s.includes('AS has_frame')) return hit('study_readable', [{ usage: readable, has_frame: readable, has_draw: readable }]);
       if (s.includes('bool_or(s.kind')) return hit('study_samples', SAMPLE);
+      if (s.includes('FROM study.draw_group')) return hit('study_draw_groups', []);
+      if (s.includes('FROM study.draw_summary')) return hit('study_draw_summary', []);
+      if (s.includes('s.history_hi')) return hit('study_sample_draw', []);
       if (s.includes('WHERE sa.view')) {
         const m = /sa\.view = '([^']+)'/.exec(s);
         const id = m && VIEWS.get(m[1]);

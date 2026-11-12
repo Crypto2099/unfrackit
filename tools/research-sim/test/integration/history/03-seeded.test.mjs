@@ -100,9 +100,33 @@ test('seeded shapes equal their specification, and their own spends as intents',
     for (const s of ['S3', 'S9', 'S5']) {
       const path = join(runDir('preprod', TAG), 'tests', `03-${s}.jsonl`);
       const f = new JsonLines(path);
-      await walletHistory(ctx, { saId: sa[s], frame: 'recent', window: win, snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx }, split: null }, f);
+      const full = await walletHistory(ctx, { saId: sa[s], frame: 'recent', window: win, snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx }, split: null }, f);
       f.close();
       const lines = readFileSync(path, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      // No draw given: the header says so and the end record is uncapped.
+      assert.equal(lines[0].draw, null);
+      assert.equal(lines[lines.length - 1].capped, false);
+      assert.equal(lines[lines.length - 1].at.tx, win.hi);
+      // The same window with the extraction's draw fields for a cap one
+      // transaction short of the wallet's window transactions: the history
+      // ends at the last of the first T - 1 transactions and says so.
+      if (full.windowTx >= 2) {
+        const txIds = lines.filter((e) => e.txId !== undefined).map((e) => e.txId);
+        const ordered = [...new Set(txIds)].sort((x, y) => x - y);
+        const cap = full.windowTx - 1;
+        const draw = { sizeGroup: 'B0', nWindowTx: full.windowTx, capped: true, historyHi: ordered[cap - 1], historyCap: cap };
+        const cpath = join(runDir('preprod', TAG), 'tests', `03-${s}-capped.jsonl`);
+        const cf = new JsonLines(cpath);
+        const capped = await walletHistory(ctx, { saId: sa[s], frame: 'recent', window: win, snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx }, split: null, draw }, cf);
+        cf.close();
+        const clines = readFileSync(cpath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+        assert.equal(capped.windowTx, cap);
+        assert.equal(clines[0].window.hi, draw.historyHi);
+        assert.deepEqual(clines[0].draw, { sizeGroup: 'B0', nWindowTx: full.windowTx, capped: true, historyHi: draw.historyHi });
+        assert.equal(clines[clines.length - 1].capped, true);
+        assert.equal(clines[clines.length - 1].at.tx, draw.historyHi);
+        assert.ok(clines.every((e) => e.txId === undefined || e.txId <= draw.historyHi), 'no event past the history end');
+      }
       out.spends[s] = lines
         .filter((e) => e.kind === 'intent' || e.kind === 'self-reorganization')
         .map((e) => {

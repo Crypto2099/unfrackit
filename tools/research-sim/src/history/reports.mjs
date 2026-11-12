@@ -178,7 +178,7 @@ export async function cmdNearCap(opts) {
 }
 
 // The rule every replay job of the study runs under, picked by the collateral
-// measurement (pre-registration section 7.6): `share` is the share of the
+// measurement (pre-registration section 7.2): `share` is the share of the
 // recent window's script-executing transactions whose collateral inputs all
 // sit at key addresses that carry less than 20 ADA of collateral in total.
 // Above one half the practice rule; otherwise the ledger rule; null when
@@ -285,7 +285,7 @@ export async function cmdCollateral(opts) {
       perTransactionQuantiles: Object.fromEntries([0.05, 0.25, 0.5, 0.75, 0.95].map((pp) => [pp, quantile(pp)]))
     };
     const seconds = (performance.now() - t0) / 1000;
-    // The study's rule (pre-registration section 7.6): every replay job runs
+    // The study's rule (pre-registration section 7.2): every replay job runs
     // under the practice rule when more than half of these transactions carry
     // less than 20 ADA of collateral, otherwise under the ledger rule.
     const collateralRule = pickCollateralRule(res.shareUnder20Ada);

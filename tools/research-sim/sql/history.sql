@@ -268,7 +268,19 @@ WITH u AS (
 SELECT u.usage,
        CASE WHEN NOT u.usage THEN false
             WHEN to_regclass('study.frame') IS NULL OR to_regclass('study.sample') IS NULL THEN false
-            ELSE has_table_privilege(current_user, 'study.sample', 'SELECT') END AS has_frame
+            ELSE has_table_privilege(current_user, 'study.sample', 'SELECT') END AS has_frame,
+       -- The draw's columns and tables (extraction tool e861aa0 or later):
+       -- study.sample's size_group, n_window_tx, capped and history_hi, and
+       -- study.draw_group and study.draw_summary with the columns read below.
+       -- Ten columns in all; the catalog needs no privilege on the tables.
+       (SELECT count(*)
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'study' AND a.attnum > 0 AND NOT a.attisdropped
+           AND ((c.relname = 'sample' AND a.attname IN ('size_group', 'n_window_tx', 'capped', 'history_hi'))
+             OR (c.relname = 'draw_summary' AND a.attname IN ('quota_scale', 'sample_n', 'history_cap'))
+             OR (c.relname = 'draw_group' AND a.attname IN ('quota', 'n_drawn', 'n_taken')))) = 10 AS has_draw
   FROM u;
 
 -- The extraction's study tables (tools/research-corpus, sql/draw.sql,
@@ -284,6 +296,25 @@ SELECT s.sa_id, bool_or(s.kind = 'random') AS random,
   FROM study.sample s
  GROUP BY s.sa_id
  ORDER BY s.sa_id;
+
+-- The draw fields of each sampled wallet and frame (study.sample).
+-- @query study_sample_draw
+SELECT s.sa_id, s.frame, s.size_group, s.n_window_tx, s.capped, s.history_hi
+  FROM study.sample s
+ WHERE s.kind = 'random'
+ ORDER BY s.sa_id, s.frame;
+
+-- D_k, A_k and the quota of each frame and size group, and each frame's
+-- quota scale, sample size and history cap.
+-- @query study_draw_groups
+SELECT g.frame, g.size_group, g.quota, g.n_drawn, g.n_taken
+  FROM study.draw_group g
+ ORDER BY g.frame, g.size_group;
+
+-- @query study_draw_summary
+SELECT d.frame, d.quota_scale::text AS quota_scale, d.sample_n, d.history_cap
+  FROM study.draw_summary d
+ ORDER BY d.frame;
 
 -- @query study_franken
 SELECT encode(f.payment_cred, 'hex') AS payment_cred FROM study.franken f WHERE f.sa_id = {{sa_id}} AND f.flagged;

@@ -40,5 +40,5 @@ SELECT r.run_id, r.network,
 -- for a table that does not exist).
 -- @query gate_table_marks
 SELECT t.name, obj_description(to_regclass('study.' || t.name), 'pg_class') AS mark
-  FROM unnest(ARRAY['frame', 'sample', 'franken', 'txo', 'txo_asset', 'asset']) WITH ORDINALITY AS t(name, n)
+  FROM unnest(ARRAY['frame', 'sample', 'draw_group', 'draw_summary', 'franken', 'txo', 'txo_asset', 'asset']) WITH ORDINALITY AS t(name, n)
  ORDER BY t.n;

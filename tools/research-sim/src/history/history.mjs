@@ -24,7 +24,17 @@
 //                                       deposit of the withdrawn ADA
 //                  mark                 every 30 days of block time from the
 //                                       window's first block
-//   end          the UTxO set's count and digest at the window's last block
+//   end          the UTxO set's count and digest at the end of the replayed
+//                history, and whether the wallet was capped
+//
+// A capped wallet (the extraction's study.sample: its window holds more than
+// the history cap's transactions) is replayed only to its cap-th window
+// transaction, `draw.historyHi`: the header's window range ends there, the
+// end state is the state after that transaction, the marks run to that
+// transaction's block time (`window.endTime`), and the end record says
+// `capped`. The header's `draw` carries the extraction's size group, window
+// transaction count, capped flag and history end for the wallet and frame
+// (null when the wallet is not in that frame's sample).
 //
 // A burst is a maximal run of the wallet's spends with no more than 60
 // seconds between consecutive block times. It is chained if any of its
@@ -152,7 +162,30 @@ export async function reconstructionCheck(ctx, saIds, block, tOfBlock, lifeOf, {
   return out;
 }
 
-// w: { saId, frame, window: { first, last, lo, hi }, snapshot: { block, tx }, split, sample, franken (Set) or null }
+// The extraction's draw fields for one wallet and frame, as the header
+// carries them: { sizeGroup, nWindowTx, capped, historyHi, historyCap }, or
+// null for a wallet outside the frame's sample.
+//
+// The window's transaction ids for a wallet are the distinct transactions in
+// [lo, hi] that create or consume one of its outputs, in id order: the
+// extraction's T (activity.sql n_tx_any). They must number nWindowTx; a
+// capped wallet's historyCap-th id must be historyHi and nWindowTx must exceed
+// the cap; an uncapped wallet's nWindowTx must not exceed it and its history
+// ends at the window's hi. Returns the transaction id the replay ends at.
+export function drawEnd(draw, windowIds, windowHi) {
+  if (!draw) return windowHi;
+  const { nWindowTx, capped, historyHi, historyCap } = draw;
+  if (windowIds.length !== nWindowTx) throw new IntentCheck(`the window holds ${windowIds.length} transactions of the wallet, the extraction's T is ${nWindowTx}`);
+  if (capped !== nWindowTx > historyCap) throw new IntentCheck(`the extraction marks the wallet ${capped ? 'capped' : 'uncapped'} with T ${nWindowTx} and the cap ${historyCap}`);
+  if (!capped) {
+    if (historyHi !== windowHi) throw new IntentCheck('the extraction ends an uncapped wallet\'s history at a transaction other than the window\'s last');
+    return windowHi;
+  }
+  if (windowIds[historyCap - 1] !== historyHi) throw new IntentCheck(`the wallet's ${historyCap}th window transaction is not the extraction's history end`);
+  return historyHi;
+}
+
+// w: { saId, frame, window: { first, last, lo, hi }, snapshot: { block, tx }, split, sample, draw, franken (Set) or null }
 export async function walletHistory(ctx, w, out) {
   const { saId } = w;
   ctx.resolved = new Map();
@@ -164,18 +197,23 @@ export async function walletHistory(ctx, w, out) {
 
   const isSnapshot = w.frame === 'snapshot';
   const lo = isSnapshot ? w.snapshot.tx + 1 : w.window.lo;
-  const hi = isSnapshot ? w.snapshot.tx : w.window.hi;
+  const windowHi = isSnapshot ? w.snapshot.tx : w.window.hi;
   const tStart = isSnapshot ? w.snapshot.tx : w.window.tStart;
   const startRows = aliveAt(life, tStart);
-  const endRows = aliveAt(life, hi);
-  const inWindow = (t) => t !== null && t >= lo && t <= hi;
+  const draw = isSnapshot ? null : w.draw || null;
+  const inWindow = (t) => t !== null && t >= lo && t <= windowHi;
   const created = new Map();
   const consumed = new Map();
   for (const r of life) {
     if (inWindow(r.createdTx)) (created.get(r.createdTx) || created.set(r.createdTx, []).get(r.createdTx)).push(r);
     if (inWindow(r.consumedTx)) (consumed.get(r.consumedTx) || consumed.set(r.consumedTx, []).get(r.consumedTx)).push(r);
   }
-  const ids = [...new Set([...created.keys(), ...consumed.keys()])].sort((a, b) => a - b);
+  const windowIds = [...new Set([...created.keys(), ...consumed.keys()])].sort((a, b) => a - b);
+  const hi = drawEnd(draw, windowIds, windowHi);
+  const capped = !!(draw && draw.capped);
+  const ids = windowIds.filter((t) => t <= hi);
+  for (const m of [created, consumed]) for (const k of [...m.keys()]) if (k > hi) m.delete(k);
+  const endRows = aliveAt(life, hi);
   const isSpend = (id) => (consumed.get(id) || []).some((r) => !r.scriptPay);
   const spendIds = ids.filter(isSpend);
   await loadExtras(ctx, [...startRows, ...[...created.values()].flat()]);
@@ -247,7 +285,10 @@ export async function walletHistory(ctx, w, out) {
     if (missing.length || extra.length) throw new IntentCheck(`wallet ${saId}: the observed replay ends with ${extra.length} UTxOs too many and ${missing.length} too few`);
   }
 
-  const withMarks = isSnapshot ? [] : placeMarks(events, Number(w.window.first.time), Number(w.window.last.time), ctx.settings);
+  // A capped wallet's window ends at the block time of its last replayed
+  // transaction.
+  const endTime = isSnapshot ? null : capped ? timeOf(rows.get(hi)).blockTime : Number(w.window.last.time);
+  const withMarks = isSnapshot ? [] : placeMarks(events, Number(w.window.first.time), endTime, ctx.settings);
   counts.mark = withMarks.filter((e) => e.kind === 'mark').length;
 
   out.write({
@@ -258,7 +299,8 @@ export async function walletHistory(ctx, w, out) {
     frame: w.frame,
     split: w.split || null,
     sample: w.sample || null,
-    window: isSnapshot ? null : { first: w.window.first, last: w.window.last, lo, hi, tStart },
+    draw: draw ? { sizeGroup: draw.sizeGroup, nWindowTx: draw.nWindowTx, capped: draw.capped, historyHi: draw.historyHi } : null,
+    window: isSnapshot ? null : { first: w.window.first, last: w.window.last, lo, hi, tStart, endTime },
     snapshot: w.snapshot,
     params: ctx.params,
     franken: [...franken].sort(),
@@ -271,6 +313,6 @@ export async function walletHistory(ctx, w, out) {
   out.write({ kind: 'state', at: { tx: tStart }, utxos: startRows.map((r) => utxoRecord(ctx, r, 'initial', franken)) });
   for (const e of withMarks) out.write(e);
   const d = digestOf(endRows);
-  out.write({ kind: 'end', at: { tx: hi }, utxos: d.n, digest: d.digest, counts });
-  return { counts, spends: spends.length, utxosStart: startRows.length, utxosEnd: endRows.length };
+  out.write({ kind: 'end', at: { tx: hi }, utxos: d.n, digest: d.digest, capped, counts });
+  return { counts, spends: spends.length, utxosStart: startRows.length, utxosEnd: endRows.length, windowTx: ids.length, capped };
 }

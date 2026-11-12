@@ -15,6 +15,10 @@ import { readHistory, HISTORY_FORMAT, startChangeAddress } from '../../../src/st
 import { paramsFromRow } from '../../../src/history/params.mjs';
 import { tx, input, out, baseAddr, scriptAddr, keyHash, STAKE } from '../../lib/txcbor.mjs';
 import { inspectTx } from '../../../src/kit/inspect.mjs';
+import { loadSource } from '../../../src/replay/source.mjs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const POL = 'cc'.repeat(28);
 const A0 = baseAddr(keyHash(0));
@@ -232,4 +236,26 @@ test('the change address follows the outputs received; a wallet is refused only 
   assert.equal(run([], [dep(3, [u(T2, 0, A0, 4000000n, { datum: { kind: 'inline', cbor: '182a' } })]), intent(4)]).gap, null);
   // A source without annotations keeps its start address.
   assert.equal(changeAddressGap({ changeAddress: addressTextOf(A0), start: [], events: [intent(4)] }), null);
+});
+
+test('a capped wallet\'s source ends at its last replayed transaction\'s block time and says it was capped', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'capped-'));
+  const load = (window, draw, name) => {
+    const lines = historyText().trim().split('\n').map((l) => JSON.parse(l));
+    lines[0] = { ...lines[0], window, draw };
+    const path = join(dir, name);
+    writeFileSync(path, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    return loadSource(null, { kind: 'history', path });
+  };
+  const w = { first: { time: 100 }, last: { time: 5000 }, lo: 2, hi: 8, tStart: 1 };
+  const capped = load({ ...w, hi: 6, endTime: 900 }, { sizeGroup: 'B3', nWindowTx: 1001, capped: true, historyHi: 6 }, 'a.jsonl');
+  assert.equal(capped.capped, true);
+  assert.equal(capped.windowEnd, 900);
+  const full = load({ ...w, endTime: 5000 }, { sizeGroup: 'B2', nWindowTx: 1000, capped: false, historyHi: 8 }, 'b.jsonl');
+  assert.equal(full.capped, false);
+  assert.equal(full.windowEnd, 5000);
+  // A file without the draw field or endTime reads as before.
+  const old = load(w, undefined, 'c.jsonl');
+  assert.equal(old.capped, false);
+  assert.equal(old.windowEnd, 5000);
 });

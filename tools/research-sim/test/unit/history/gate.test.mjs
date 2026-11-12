@@ -24,7 +24,7 @@ import { seedPick } from '../../lib/live-fire.mjs';
 
 const blocks = loadAll();
 const HASH = 'ab'.repeat(32);
-const TABLES = ['frame', 'sample', 'franken', 'txo', 'txo_asset', 'asset'];
+const TABLES = ['frame', 'sample', 'draw_group', 'draw_summary', 'franken', 'txo', 'txo_asset', 'asset'];
 const win = (a) => ({ first_block: a, last_block: a + 10, lo: a * 2, hi: a * 2 + 30, t_start: a * 2 - 1 });
 
 // A finished study run of the final freeze, as the extraction's driver

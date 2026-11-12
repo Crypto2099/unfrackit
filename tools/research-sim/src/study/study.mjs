@@ -33,7 +33,7 @@
 // exploration split (and those that carry no split, as on a test network);
 // the replays read their window's files.
 // Collateral: every replay job runs under one rule. With the collateral
-// stage, the rule is section 7.6's pick from that stage's report
+// stage, the rule is section 7.2's pick from that stage's report
 // (collateral.json: the share of the recent window's script-executing
 // transactions whose collateral inputs all sit at key addresses and carry
 // under 20 ADA in total; above one half the practice rule, otherwise the

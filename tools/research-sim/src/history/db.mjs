@@ -30,7 +30,7 @@
 //   deletes when a run starts or resumes and writes as its last act;
 // - its `snapshot` row is a block fixed by rule, with id, hash and T(B), and
 //   its `windows` row gives both windows' blocks and transaction-id bounds;
-// - every study table this code reads (frame, sample, franken, txo,
+// - every study table this code reads (frame, sample, draw_group, draw_summary, franken, txo,
 //   txo_asset, asset) carries that run's mark, `research-corpus run <id>`, so
 //   the samples and flags read are that run's.
 // The grant is that run's snapshot and windows, in the form an extraction
@@ -166,7 +166,7 @@ export async function liveFireGrant(read, liveFire) {
   return { path: 'live-fire', pick };
 }
 
-const STUDY_TABLES = Object.freeze(['frame', 'sample', 'franken', 'txo', 'txo_asset', 'asset']);
+const STUDY_TABLES = Object.freeze(['frame', 'sample', 'draw_group', 'draw_summary', 'franken', 'txo', 'txo_asset', 'asset']);
 const HEX64 = /^[0-9a-f]{64}$/;
 const isId = (x) => Number.isSafeInteger(x) && x >= 0;
 export const runMark = (runId) => `research-corpus run ${runId}`;

@@ -196,25 +196,71 @@ export async function windowFor(ctx, frame) {
   throw new Error(`unknown window ${frame}`);
 }
 
+// Whether the study tables are readable. Readable tables without the
+// extraction's draw columns and tables are refused: the history stage records
+// them, and an older extraction run has none.
 async function studyReadable(ctx) {
   const r = (await q(ctx.client, ctx.blocks, 'study_readable'))[0];
-  return r.usage && r.has_frame;
+  if (!(r.usage && r.has_frame)) return false;
+  if (!r.has_draw) throw new Refusal(DRAW_MISSING);
+  return true;
 }
+
+export const DRAW_MISSING = 'refusing: the extraction run lacks the size groups, draw counts and window cap (study.sample size_group, n_window_tx, capped and history_hi; study.draw_group; study.draw_summary quota_scale, sample_n and history_cap); rerun the extraction at e861aa0 or later';
 
 // The extraction's sample rows by wallet, when its study tables are
-// readable: { split, excluded, random, randomRecent, randomPeak, stratumRecent }.
-// `random` is the random sample of either frame; the two frames' memberships
-// and the recent frame's purposive strata are beside it.
+// readable: { split, excluded, random, randomRecent, randomPeak, stratumRecent,
+// draw }. `random` is the random sample of either frame; the two frames'
+// memberships and the recent frame's purposive strata are beside it. `draw`
+// holds the wallet's size group, window transaction count, capped flag and
+// history end per frame ({ recent, peak }), with the frame's history cap.
+// Refuses an extraction run without the draw's columns (studyReadable).
 export async function studySamples(ctx) {
   if (!(await studyReadable(ctx))) return null;
-  return samplesFromRows(await q(ctx.client, ctx.blocks, 'study_samples'));
+  const rows = await q(ctx.client, ctx.blocks, 'study_samples');
+  const draw = await q(ctx.client, ctx.blocks, 'study_sample_draw');
+  const caps = drawRunLevel(await q(ctx.client, ctx.blocks, 'study_draw_groups'), await q(ctx.client, ctx.blocks, 'study_draw_summary'));
+  const m = samplesFromRows(rows, draw, caps);
+  m.drawRunLevel = caps;
+  return m;
 }
 
-// The `study_samples` rows as a map by wallet.
-export function samplesFromRows(rows) {
+// The `study_samples` rows as a map by wallet, with the `study_sample_draw`
+// rows (one per wallet and frame) and the run-level record (drawRunLevel)
+// that gives each frame's history cap.
+export function samplesFromRows(rows, drawRows = [], runLevel = null) {
   const m = new Map();
-  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak, stratumRecent: r.stratum_recent });
+  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak, stratumRecent: r.stratum_recent, draw: {} });
+  for (const r of drawRows) {
+    const s = m.get(Number(r.sa_id));
+    if (!s) continue;
+    const cap = runLevel && runLevel[r.frame] ? runLevel[r.frame].historyCap : undefined;
+    s.draw[r.frame] = { sizeGroup: r.size_group, nWindowTx: Number(r.n_window_tx), capped: r.capped === true, historyHi: Number(r.history_hi), historyCap: cap };
+  }
   return m;
+}
+
+// The draw fields of a wallet in a frame: the extraction's size group, window
+// transaction count, capped flag, history end and the frame's history cap; null
+// when the study tables were not read, the frame is not one of the
+// extraction's windows or the wallet is not in the frame's sample.
+export function drawOf(samples, sa, frame) {
+  if (!samples || !samples.has(sa)) return null;
+  return samples.get(sa).draw[frame] || null;
+}
+
+// The draw's run-level record, from the `study_draw_groups` and
+// `study_draw_summary` rows: per frame, the quota scale s (decimal text), the
+// sample size, the history cap, and per size group the quota (null for B0),
+// D_k (nDrawn) and A_k (nTaken). The weight D_k / A_k is not computed here.
+export function drawRunLevel(groupRows, summaryRows) {
+  const out = {};
+  for (const r of summaryRows) out[r.frame] = { quotaScale: String(r.quota_scale), sampleN: Number(r.sample_n), historyCap: Number(r.history_cap), groups: {} };
+  for (const r of groupRows) {
+    if (!out[r.frame]) throw new Error(`study.draw_group names the frame ${r.frame}, which study.draw_summary does not`);
+    out[r.frame].groups[r.size_group] = { quota: r.quota === null || r.quota === undefined ? null : Number(r.quota), nDrawn: Number(r.n_drawn), nTaken: Number(r.n_taken) };
+  }
+  return out;
 }
 
 // What a history header records of a wallet's sample membership: null when
@@ -272,6 +318,7 @@ export async function cmdHistory(opts, scope = {}) {
       settings: ctx.settings,
       bytes: ctx.bytes.mode,
       studyTables: samples ? 'read' : 'not readable',
+      draw: samples ? samples.drawRunLevel : null,
       analysisFreezeTx: opts.analysisFreezeTx || null,
       confirmationWallets: wallets.filter((sa) => splitOf(sa) === 'confirmation').length,
       runs: []
@@ -288,7 +335,7 @@ export async function cmdHistory(opts, scope = {}) {
         const out = new JsonLines(tmp);
         const t0 = performance.now();
         try {
-          const r = await walletHistory(ctx, { saId: sa, frame: f, window: windows.get(f), snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx, hash: ctx.snapshot.hash, slot: ctx.snapshot.slot, time: ctx.snapshot.time, epoch: ctx.snapshot.epoch }, split: splitOf(sa), sample: sampleMembership(samples, sa), franken }, out);
+          const r = await walletHistory(ctx, { saId: sa, frame: f, window: windows.get(f), snapshot: { block: ctx.snapshot.id, tx: ctx.snapshot.tx, hash: ctx.snapshot.hash, slot: ctx.snapshot.slot, time: ctx.snapshot.time, epoch: ctx.snapshot.epoch }, split: splitOf(sa), sample: sampleMembership(samples, sa), draw: drawOf(samples, sa, f), franken }, out);
           out.close();
           renameSync(tmp, path);
           summary.runs.push({ wallet: sa, window: f, file: name, seconds: (performance.now() - t0) / 1000, ...r });

@@ -552,6 +552,9 @@ export async function replay(T, params, source, job) {
     triggers: out.triggers.length,
     start: { t: 0, ...start },
     end,
+    // The end state is the state after the wallet's 1,000th window
+    // transaction, not the window's end (pre-registration section 5.4).
+    capped: !!source.capped,
     trajectory,
     conformity,
     policies: lock ? lock.result() : null,

@@ -4,7 +4,7 @@
 // A replay's or battery's wallet, from its history file or a synthetic shape:
 //   { wallet, window, network, stakeCred, changeAddress, changeAddressEnd,
 //     franken, start, events, arrival, windowStart, windowEnd, params,
-//     analysisFreezeTx }
+//     analysisFreezeTx, capped }
 // `wallet` is db-sync's stake-credential id or the shape's name; `window` the
 // history's frame ('recent', 'peak', or a test frame), 'snapshot' for a
 // snapshot file (no window), or 'synthetic' for a shape's own stream. The
@@ -14,7 +14,9 @@
 // `changeAddressEnd` after its last event, and each event's own; either may
 // be null when the wallet has received no output the rule can name. The
 // stake credential is that of the addresses the rule names; a shape's stream
-// starts from the shape's change address.
+// starts from the shape's change address. `capped` is the header's capped
+// flag (the wallet's history ends at its 1,000th window transaction, and
+// `windowEnd` at that transaction's block time); false for a shape.
 //
 // spec: { kind: 'history', path, analysisFreezeTx } or { kind: 'shape', name,
 // stream: null | 'synthetic' } (shapes/streams.mjs).
@@ -40,6 +42,7 @@ export function loadSource(T, spec) {
       window: w ? h.header.frame : 'snapshot',
       split: h.header.split || null,
       sample: h.header.sample || null,
+      capped: !!(h.header.draw && h.header.draw.capped),
       network: h.header.network,
       stakeCred: h.stakeCred,
       changeAddress: h.changeAddress,
@@ -49,7 +52,7 @@ export function loadSource(T, spec) {
       events: h.events,
       arrival: h.arrival,
       windowStart: w ? Number(w.first.time) : null,
-      windowEnd: w ? Number(w.last.time) : null,
+      windowEnd: w ? Number(w.endTime !== undefined ? w.endTime : w.last.time) : null,
       params: h.params,
       analysisFreezeTx: h.analysisFreezeTx
     };
@@ -62,6 +65,7 @@ export function loadSource(T, spec) {
       window: spec.stream ? 'synthetic' : 'snapshot',
       split: null,
       sample: null,
+      capped: false,
       network: 'synthetic',
       stakeCred: s.state.stakeCred,
       changeAddress: change.start,
