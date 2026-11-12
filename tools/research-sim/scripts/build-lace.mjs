@@ -23,11 +23,10 @@
 // BUILD_RECORD: the repository, the commit, each path's hash, the license's,
 // the esbuild version and the bundle's SHA-256. Nothing else is written; the
 // extracted source is removed. Exit code 0 when the build is written, 1 on any
-// failure.
+// failure. The clone, the checks and the extraction are scripts/
+// wallet-source.mjs, which build-yoroi.mjs shares.
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, copyFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -35,67 +34,19 @@ import {
   LACE_REPO, LACE_COMMIT, LACE_RELEASE, LACE_SRC, LACE_PATHS, LACE_LICENSE, LACE_MANIFEST, LACE_SDK,
   OUTPUT_DIR, BUNDLE, BUILD_RECORD, ENTRY
 } from '../src/methods/lace-source.mjs';
+import { git, parseArgs, freshClone, requireCommit, checkObject, extractPaths, sha256 } from './wallet-source.mjs';
 
 const TOOL = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 
-const git = (dir, args, opts = {}) => execFileSync('git', ['-C', dir, ...args], { encoding: opts.encoding === null ? null : 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-
-function usage(msg) {
-  if (msg) console.error(`build-lace: ${msg}`);
-  console.error('usage: node scripts/build-lace.mjs --clone <dir> | --fetch <dir>');
-  process.exit(1);
-}
-
-function parseArgs(argv) {
-  if (argv.length !== 2) usage();
-  const [flag, dir] = argv;
-  if (flag !== '--clone' && flag !== '--fetch') usage(`unknown option ${flag}`);
-  return { mode: flag.slice(2), dir: resolve(dir) };
-}
-
-// A shallow clone of the pinned commit alone, its blobs fetched only for the
-// pinned paths.
-function freshClone(dir) {
-  if (existsSync(dir)) usage(`${dir} exists; --fetch makes a new clone`);
-  mkdirSync(dir, { recursive: true });
-  git(dir, ['init', '--quiet']);
-  git(dir, ['remote', 'add', 'origin', LACE_REPO]);
-  git(dir, ['config', 'remote.origin.promisor', 'true']);
-  git(dir, ['config', 'remote.origin.partialclonefilter', 'blob:none']);
-  git(dir, ['fetch', '--quiet', '--depth', '1', '--filter=blob:none', 'origin', LACE_COMMIT]);
-  return dir;
-}
-
-// Checks one path's object at the commit against its pin.
-function checkObject(clone, path, type, hash) {
-  let got;
-  let kind;
-  try {
-    got = git(clone, ['rev-parse', `${LACE_COMMIT}:${path}`]).trim();
-    kind = git(clone, ['cat-file', '-t', got]).trim();
-  } catch (e) {
-    throw new Error(`${path} at ${LACE_COMMIT}: ${String(e.stderr || e.message).trim()}`);
-  }
-  if (kind !== type) throw new Error(`${path} at ${LACE_COMMIT} is a ${kind}, pinned as a ${type}`);
-  if (got !== hash) throw new Error(`${path} at ${LACE_COMMIT} is ${got}, pinned as ${hash}`);
-  return got;
-}
-
-const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
-
 async function main() {
-  const { mode, dir } = parseArgs(process.argv.slice(2));
-  const clone = mode === 'fetch' ? freshClone(dir) : dir;
-  try {
-    git(clone, ['cat-file', '-e', `${LACE_COMMIT}^{commit}`]);
-  } catch {
-    throw new Error(`${clone} does not hold commit ${LACE_COMMIT}`);
-  }
+  const { mode, dir } = parseArgs('build-lace', process.argv.slice(2));
+  const clone = mode === 'fetch' ? freshClone('build-lace', dir, LACE_REPO, LACE_COMMIT) : dir;
+  requireCommit(clone, LACE_COMMIT);
   const objects = {};
-  for (const [path, [type, hash]] of Object.entries(LACE_PATHS)) objects[path] = { type, hash: checkObject(clone, path, type, hash) };
-  checkObject(clone, LACE_LICENSE[0], LACE_LICENSE[1], LACE_LICENSE[2]);
-  checkObject(clone, LACE_MANIFEST[0], LACE_MANIFEST[1], LACE_MANIFEST[2]);
+  for (const [path, [type, hash]] of Object.entries(LACE_PATHS)) objects[path] = { type, hash: checkObject(clone, LACE_COMMIT, path, type, hash) };
+  checkObject(clone, LACE_COMMIT, LACE_LICENSE[0], LACE_LICENSE[1], LACE_LICENSE[2]);
+  checkObject(clone, LACE_COMMIT, LACE_MANIFEST[0], LACE_MANIFEST[1], LACE_MANIFEST[2]);
 
   // The manifest's @cardano-sdk pins, against the tool's.
   const manifest = JSON.parse(git(clone, ['show', `${LACE_COMMIT}:${LACE_MANIFEST[0]}`]));
@@ -111,9 +62,7 @@ async function main() {
   const staging = mkdtempSync(join(out, '.source-'));
   try {
     // The pinned paths from the commit's objects, never a working tree.
-    const tar = git(clone, ['archive', '--format=tar', LACE_COMMIT, '--', ...Object.keys(LACE_PATHS)], { encoding: null });
-    const x = spawnSync('tar', ['-x', '-C', staging], { input: tar });
-    if (x.status !== 0) throw new Error(`tar: ${String(x.stderr).trim()}`);
+    extractPaths(clone, LACE_COMMIT, Object.keys(LACE_PATHS), staging);
     const src = join(staging, LACE_SRC);
     const entry = join(src, 'unfrackit-entry.ts');
     writeFileSync(entry, ENTRY);
