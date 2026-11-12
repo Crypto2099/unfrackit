@@ -29,7 +29,7 @@
 //   UTxOs not yet inputs in the Set's order, script-address ones left out
 //   (:2136-2166), taking the deficit inputs less outputs less the fee
 //   (getAssetSurplus, :1460-1555), recovering lovelace from the change output
-//   first (:2181-2190), selecting on what is still missing (:2211-2217) and
+//   first (:2181-2190), selecting on what is still missing (:2209-2217) and
 //   putting the surplus into the change output (adjustChangeOutput,
 //   :1634-1679); it stops once a pass gives the fee of the pass before
 //   (:2299-2303).
@@ -54,10 +54,10 @@
 //   builder counts (buildPlaceholderWitnessSet, :1435-1458, the keys of
 //   updateRequiredWitnesses, :1322-1424, and the operations below), plus the
 //   reference scripts' fee and the execution units at the prices. complete()
-//   checks no transaction size limit and writes no network id (:2062-2063).
+//   checks no transaction size limit and writes no network id (:2063-2064).
 //
 // Witnesses (setting serialization 'own'): complete() returns the transaction
-// with an empty vkey set (buildFinalWitnessSet([]), :2313); the adapter writes
+// with an empty vkey set (buildFinalWitnessSet([]), :2307); the adapter writes
 // one synthetic vkey witness per wallet key (kit/replay.mjs
 // replayWitnessKeys) into the library's witness set, encoded by the library,
 // then the intent's other vkey witnesses as observed.
@@ -66,13 +66,13 @@
 //   UTxOSelectionError "wide" or "deep" (blaze-core/src/errors.ts:5-15),
 //   "No spare inputs available to add to the transaction", "A transaction
 //   must have at least one input, but there are no available spare inputs"
-//   (TxBuilder.ts:2236-2240, :2287-2291)                       balance
+//   (TxBuilder.ts:2232-2236, :2289-2292)                       balance
 //   UTxOSelectionError "final": the selector's 30 + 30 rounds ran out on a
 //   spend the engine found feasible                            max-inputs
 //   "checkOutputMinAda: Failed due to max value size!" (blaze-tx/src/utils.ts:
 //   317-320) on a change output                                value-size
-//   "prepareCollateral: ..." (:1925-1929, :1953-1958), a UTxOSelectionError
-//   raised while choosing collateral (:1931-1946), and "checkOutputMinAda:
+//   "prepareCollateral: ..." (:1947-1949, :1971-1974), a UTxOSelectionError
+//   raised while choosing collateral (:1952-1966), and "checkOutputMinAda:
 //   collateral output does not have sufficient ADA" (utils.ts:312-316), which
 //   only the collateral return can fail, since every other output's coin is
 //   raised to its minimum before the check (:841-864)          collateral
@@ -137,7 +137,7 @@
 //                       ceil(fee * collateralPercentage / 100) (utils.ts:92-97),
 //                       writes that total and returns the rest to the change
 //                       address; when it does not, the library chooses
-//                       collateral from the wallet's UTxOs (:1917-1977), which
+//                       collateral from the wallet's UTxOs (:1915-1980), which
 //                       the engine refuses as not the UTxO set aside
 // A part the builder can neither write nor price (unpricedParts) is written on
 // the transaction it built, through the library's types, as every library's
@@ -154,7 +154,7 @@
 // after complete()), library.unpriced names the observed ones.
 // Not replayable (blazeRefusal): body field 6, as for every adapter
 // (kit/replay.mjs replayRefusal); a Byron address on a fixed input, from which
-// addInput reads a payment credential (:600-603); body field 15, which
+// addInput reads a payment credential (:619-622); body field 15, which
 // complete() never writes; certificates written after the build when one of
 // them needs a redeemer, which the library could not attach; and a vote
 // redeemer for a voter other than a script DRep, which setVotingProcedures
@@ -263,7 +263,7 @@ export function blazeRefusal(intent) {
   if (kit) return kit;
   const f = intent.fixed;
   if (!f) return null;
-  for (const x of f.inputs) if (unspentOutputParts(x.cbor).addr.type === 8) return `a Byron address on ${x.ref}: addInput reads a payment credential from every input (blaze-tx/src/TxBuilder.ts:600-603)`;
+  for (const x of f.inputs) if (unspentOutputParts(x.cbor).addr.type === 8) return `a Byron address on ${x.ref}: addInput reads a payment credential from every input (blaze-tx/src/TxBuilder.ts:619-622)`;
   if (f.body[15] !== undefined) return 'body field 15 (network id): complete() never writes it, and a replayed intent carries none';
   if (certificatesAfter(f) && f.redeemers.some((r) => r.tag === 2)) return 'a certificate no operation writes, in a transaction whose certificates need redeemers the library could not attach';
   if (f.redeemers.some((r) => r.tag === 4 && voterKind(r.target.voter) !== 3)) return 'a vote redeemer for a voter other than a script DRep: setVotingProcedures attaches redeemers to script DReps only (blaze-tx/src/TxBuilder.ts:2652-2660)';
@@ -445,9 +445,9 @@ function withFixedParts(b, intent) {
 // library's index names. The library numbers a spend redeemer by its input's
 // place among the inputs sorted by transaction id and index written as one
 // string (insertSorted, blaze-tx/src/utils.ts:231-240, called at
-// TxBuilder.ts:597), a mint redeemer among the policies sorted, a reward
-// redeemer among the withdrawals' credential hashes sorted (:3027-3030) and a
-// vote redeemer among the script DReps' hashes sorted (:2671); a certificate
+// TxBuilder.ts:606), a mint redeemer among the policies sorted, a reward
+// redeemer among the withdrawals' credential hashes sorted (:3022-3025) and a
+// vote redeemer among the script DReps' hashes sorted (:2673); a certificate
 // or proposal redeemer by its place in its list. A redeemer with no observed
 // counterpart fails the build.
 export function blazeEvaluator(intent) {
