@@ -60,7 +60,9 @@ test('admission: a held job is passed at most once per worker, then the later jo
   assert.ok([ra, rh, ...rl].every((r) => r.ok));
   assert.ok(rl[0].result.start < ra.result.end && rl[1].result.start < ra.result.end, 'l1 and l2 passed h');
   assert.ok(rh.result.start >= ra.result.end);
-  assert.ok(rl[2].result.start >= rh.result.start && rl[3].result.start >= rh.result.start, 'l3 and l4 did not pass h');
+  // h was held until a ended; l3 and l4 started no earlier, in or after the
+  // admission that started h.
+  assert.ok(rl[2].result.start >= ra.result.end && rl[3].result.start >= ra.result.end, 'l3 and l4 did not pass h');
   assert.deepEqual([pool.stats.admissionWaits, pool.stats.admissionPasses], [1, 2]);
 }, { size: 2, memoryBudget: 1000 * MiB }));
 
