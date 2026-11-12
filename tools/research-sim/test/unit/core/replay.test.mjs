@@ -71,13 +71,13 @@ test('the run directory is private and the records are JSON Lines', () => {
   }
 });
 
-test('run plans: the refocused arms, the same in both windows, 120 jobs per wallet at fourteen libraries', () => {
+test('run plans: the refocused arms, the same in both windows, 122 jobs per wallet at fifteen libraries', () => {
   for (const w of ['recent', 'peak']) {
     const plan = mergePlan(windowPlan(w));
     const one = (role, change, variant = 'default') => plan.find((e) => e.role === role && e.change === change && e.variant === variant);
     assert.ok(plan.every((e) => e.arm === 'observed'), 'every arm replays the observed state');
     // Per library: its own change under Q1, UnFrack.It's change under Q1 and Q2.
-    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1], ['mesh-rrri', 10], ['typhon-lp', 1], ['helios-sf', 1], ['cml-lf', 1], ['cml-ri', 10], ['cometa-lf', 1], ['lace-rrri', 10], ['adalite-lp', 1]]) {
+    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1], ['mesh-rrri', 10], ['typhon-lp', 1], ['helios-sf', 1], ['cml-lf', 1], ['cml-ri', 10], ['cometa-lf', 1], ['lace-rrri', 10], ['adalite-lp', 1], ['yoroi-lf', 1]]) {
       assert.equal(one(role, 'default').repetitions, reps, role);
       assert.equal(one(role, 'layout').repetitions, reps, role);
       assert.deepEqual(one(role, 'default').hypotheses, ['Q1'], role);
@@ -89,15 +89,15 @@ test('run plans: the refocused arms, the same in both windows, 120 jobs per wall
     const off = one('h12', 'default', 'absorb-off');
     assert.deepEqual([on.absorb, off.absorb, on.repetitions, off.repetitions], [true, false, 1, 1]);
     assert.deepEqual([on.hypotheses, off.hypotheses], [['Q2'], ['Q2']]);
-    assert.equal(plan.length, 30);
-    // 120 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 2.
+    assert.equal(plan.length, 32);
+    // 122 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 2 + 2.
     const jobs = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: false });
-    assert.equal(jobs.length, 120);
-    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'mesh-rrri': 20, 'typhon-lp': 2, 'helios-sf': 2, 'cml-lf': 2, 'cml-ri': 20, 'cometa-lf': 2, 'lace-rrri': 20, 'adalite-lp': 2, 'unfrackit-h12': 2 });
+    assert.equal(jobs.length, 122);
+    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'mesh-rrri': 20, 'typhon-lp': 2, 'helios-sf': 2, 'cml-lf': 2, 'cml-ri': 20, 'cometa-lf': 2, 'lace-rrri': 20, 'adalite-lp': 2, 'yoroi-lf': 2, 'unfrackit-h12': 2 });
     assert.ok(jobs.every((j) => j.collateral === 'none-needed'));
     // One collateral rule: a script wallet's jobs run under it alone.
     const withScripts = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
-    assert.equal(withScripts.length, 120);
+    assert.equal(withScripts.length, 122);
     assert.ok(withScripts.every((j) => j.collateral === 'practice'));
     // Every tidy arm, control and variant is gone.
     assert.ok(!plan.some((e) => e.arm !== 'observed' || e.hypotheses.some((h) => !['Q1', 'Q2'].includes(h))));
@@ -142,7 +142,7 @@ test('run plans: the role table leaves the existing roles\' jobs as they were', 
 
 test('run plans: L/own and L/layout of one repetition draw the same seed; the rule\'s jobs carry the absorption setting and differ in their keys', () => {
   const jobs = expandJobs(windowPlan('recent'), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
-  for (const method of ['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'helios-sf', 'cml-lf', 'cml-ri', 'lace-rrri']) {
+  for (const method of ['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'helios-sf', 'cml-lf', 'cml-ri', 'lace-rrri', 'yoroi-lf']) {
     const own = jobs.filter((j) => j.method === method && j.change === 'default');
     const layout = jobs.filter((j) => j.method === method && j.change === 'layout');
     assert.equal(own.length, layout.length, method);
@@ -308,11 +308,15 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
   };
   const sourceOf = (start) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start, events: [{ kind: 'intent', txId: 1, intent }], windowStart: 0, windowEnd: 20, params: SP });
   const LARGEST_FIRST = new Set(['csl-lf', 'cml-lf', 'evo-lf', 'lucid-lf', 'test-largest-first']);
+  // Lace's, AdaLite's and Yoroi's methods run only with the builds of the
+  // wallets' source. Yoroi's send flow writes no required signer, so the
+  // intent is not replayable for it.
+  const { yoroiBuildProblem } = await import('../../../src/methods/yoroi.mjs');
+  const NO_SIGNER = new Set(['yoroi-lf']);
+  const names = [...BASELINE_METHODS.filter((n) => (n !== 'lace-rrri' || !laceBuildProblem()) && (n !== 'adalite-lp' || !adaliteBuildProblem()) && (n !== 'yoroi-lf' || !yoroiBuildProblem())), 'test-largest-first'];
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);
-    // Lace's and AdaLite's methods run only with the build of the wallet's
-    // source.
-    for (const name of [...BASELINE_METHODS.filter((n) => (n !== 'lace-rrri' || !laceBuildProblem()) && (n !== 'adalite-lp' || !adaliteBuildProblem())), 'test-largest-first']) {
+    for (const name of names) {
       const r = await replay(T, SP, source, { arm: 'observed', variant: 'default', repetition: 1, method: makeMethod(T, name), opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25, keepTx: true, validity: true });
       const s = r.spends[0];
       if (name === 'adalite-lp' && label === 'second key only') {
@@ -323,6 +327,10 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
         // part.
         assert.deepEqual([s.outcome, s.class], ['failed', 'fee-minimum'], `${label} ${name}: ${s.detail}`);
         assert.match(s.detail, /parts the library did not price: required signers$/);
+        continue;
+      }
+      if (NO_SIGNER.has(name)) {
+        assert.deepEqual([s.outcome, s.detail], ['not-replayable', 'yoroi: body field 14'], `${label} ${name}`);
         continue;
       }
       assert.equal(s.outcome, 'built', `${label} ${name}: ${s.outcome} ${s.class} ${s.detail}`);

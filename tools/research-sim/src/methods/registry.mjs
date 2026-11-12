@@ -35,6 +35,9 @@
 //                       wallet's source (scripts/build-adalite.mjs),
 //                       Account.getTxPlan, the shortest prefix of its own
 //                       order
+//   yoroi-lf            methods/yoroi.mjs: the Yoroi wallet's send flow,
+//                       built from its source by scripts/build-yoroi.mjs;
+//                       made only when that build is present
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -62,6 +65,7 @@ import { cmlMethod } from './cml.mjs';
 import { cometaMethod } from './cometa.mjs';
 import { laceMethod } from './lace.mjs';
 import { adaliteMethod } from './adalite.mjs';
+import { yoroiMethod } from './yoroi.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -90,7 +94,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -107,6 +111,7 @@ const FACTORIES = new Map([
   ['cometa-lf', baseline('cometa-lf', (T) => cometaMethod(T))],
   ['lace-rrri', baseline('lace-rrri', (T) => laceMethod(T))],
   ['adalite-lp', baseline('adalite-lp', (T) => adaliteMethod(T))],
+  ['yoroi-lf', baseline('yoroi-lf', (T) => yoroiMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]
