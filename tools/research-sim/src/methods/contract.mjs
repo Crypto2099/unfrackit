@@ -51,6 +51,17 @@
 import { CLASSES } from '../kit/check.mjs';
 
 export const CHANGE_OPTIONS = Object.freeze(['default', 'layout']);
+
+// An error a method throws that is the run's, not the spend's: the engine
+// passes it on, so the job fails with it and nothing of it is recorded as an
+// outcome. The bridge throws it when its helper process exits, writes a line
+// that is not its response, or stops reading its requests (methods/helper.mjs).
+export class RunError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'RunError';
+  }
+}
 export const NOT_REPLAYABLE = 'not-replayable';
 export const RESULT_CLASSES = Object.freeze(new Set([...Object.values(CLASSES), NOT_REPLAYABLE]));
 

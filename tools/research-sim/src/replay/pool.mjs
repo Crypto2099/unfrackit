@@ -25,8 +25,9 @@
 // job.memory, which runReplays sets from the wallet), raised
 // for the job's wallet when a job of it was measured above it. After each
 // job the pool reads the worker's resident size (VmRSS) and its peak during
-// the job (VmHWM, reset before each job) from /proc/<pid>/status, and the
-// worker reports CSL's WebAssembly memory and V8's heap.
+// the job (VmHWM, reset before each job) from /proc/<pid>/status, each with
+// its helper processes' added (processMemory), and the worker reports CSL's
+// WebAssembly memory and V8's heap.
 //   admission  a job starts when a worker is free (an idle one, or a new one
 //              in a free place: at most `size` worker processes exist at
 //              once, counting those stopped and not yet exited) and the
@@ -67,7 +68,7 @@
 // and estimates raised.
 
 import { fork } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import os from 'node:os';
@@ -137,9 +138,34 @@ function readText(path) {
   }
 }
 
-// A process's resident size (VmRSS) and its peak (VmHWM), in bytes, or null
+// The process ids of a process's descendants (/proc/<pid>/task/*/children,
+// recursively); none where /proc gives none.
+export function descendantPids(pid) {
+  const out = [];
+  const visit = (p) => {
+    let tasks;
+    try {
+      tasks = readdirSync(`/proc/${p}/task`);
+    } catch {
+      return;
+    }
+    for (const t of tasks) {
+      const s = readText(`/proc/${p}/task/${t}/children`);
+      if (!s) continue;
+      for (const c of s.trim().split(/\s+/)) {
+        if (!/^\d+$/.test(c)) continue;
+        out.push(Number(c));
+        visit(Number(c));
+      }
+    }
+  };
+  visit(pid);
+  return out;
+}
+
+// One process's resident size (VmRSS) and its peak (VmHWM), in bytes, or null
 // where /proc gives none.
-export function processMemory(pid) {
+function ownMemory(pid) {
   const s = readText(`/proc/${pid}/status`);
   if (!s) return null;
   const kb = (k) => {
@@ -151,14 +177,33 @@ export function processMemory(pid) {
   return { rss, hwm: kb('VmHWM') ?? rss };
 }
 
-// Resets a process's peak (VmHWM) to its resident size, so that the peak
-// read after a job is the job's. Where the kernel refuses, the peak read is
-// the process's since its start, which only overstates the job's.
+// A worker's resident size and its peak, in bytes, or null where /proc gives
+// none: its own plus its descendants' (the helper processes of the methods
+// whose library runs in another language, methods/helper.mjs), each read
+// alike. The sum of the peaks can only overstate the joint peak.
+export function processMemory(pid) {
+  const own = ownMemory(pid);
+  if (!own) return null;
+  for (const c of descendantPids(pid)) {
+    const m = ownMemory(c);
+    if (!m) continue;
+    own.rss += m.rss;
+    own.hwm += m.hwm;
+  }
+  return own;
+}
+
+// Resets the peak (VmHWM) of a worker and its descendants to their resident
+// sizes, so that the peak read after a job is the job's. Where the kernel
+// refuses, the peak read is the process's since its start, which only
+// overstates the job's.
 function resetPeak(pid) {
-  try {
-    writeFileSync(`/proc/${pid}/clear_refs`, '5');
-  } catch {
-    // the lifetime peak stands
+  for (const p of [pid, ...descendantPids(pid)]) {
+    try {
+      writeFileSync(`/proc/${p}/clear_refs`, '5');
+    } catch {
+      // the lifetime peak stands
+    }
   }
 }
 

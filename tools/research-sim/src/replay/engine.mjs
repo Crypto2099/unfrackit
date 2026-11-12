@@ -73,6 +73,9 @@
 //     method or in the planner, is never a failure or a refusal on its first
 //     appearance: it fails the job, which runs again in a fresh worker
 //     (replay/pool.mjs), and is recorded only if it happens there too.
+//     A method's run error (methods/contract.mjs RunError: the bridge's
+//     helper process exiting or answering out of turn, methods/helper.mjs) is
+//     never an outcome: it fails the job.
 // At the first spend of each parallel burst, a separate pass builds the
 // burst's intents in order from the state at its start without spending any
 // output created earlier in the burst (burst feasibility), while the
@@ -104,7 +107,7 @@ import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
 import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers, missingRedeemers, requiredSigners } from '../kit/replay.mjs';
-import { checkResult, checkOptions, choosesOwnCollateral, NOT_REPLAYABLE } from '../methods/contract.mjs';
+import { checkResult, checkOptions, choosesOwnCollateral, NOT_REPLAYABLE, RunError } from '../methods/contract.mjs';
 import { planOnly, StopPoint } from '../treatment/run.mjs';
 import { checkArm } from '../arms/arms.mjs';
 import { replaySuffices } from './feasible.mjs';
@@ -478,7 +481,7 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
   try {
     r = checkResult(method, await method.build(aside.pool, intent, params, aside.collateral ? { ...opts, collateral: aside.collateral } : opts));
   } catch (e) {
-    if (e instanceof StopPoint) throw e;
+    if (e instanceof StopPoint || e instanceof RunError) throw e;
     passMachineErrors(e);
     r = { ok: false, class: CLASSES.other, detail: String(e && (e.message || e)) };
   }
