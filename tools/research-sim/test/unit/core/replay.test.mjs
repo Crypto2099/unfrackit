@@ -71,13 +71,13 @@ test('the run directory is private and the records are JSON Lines', () => {
   }
 });
 
-test('run plans: the refocused arms, the same in both windows, 118 jobs per wallet at thirteen libraries', () => {
+test('run plans: the refocused arms, the same in both windows, 120 jobs per wallet at fourteen libraries', () => {
   for (const w of ['recent', 'peak']) {
     const plan = mergePlan(windowPlan(w));
     const one = (role, change, variant = 'default') => plan.find((e) => e.role === role && e.change === change && e.variant === variant);
     assert.ok(plan.every((e) => e.arm === 'observed'), 'every arm replays the observed state');
     // Per library: its own change under Q1, UnFrack.It's change under Q1 and Q2.
-    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1], ['mesh-rrri', 10], ['typhon-lp', 1], ['helios-sf', 1], ['cml-lf', 1], ['cml-ri', 10], ['cometa-lf', 1], ['lace-rrri', 10]]) {
+    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1], ['mesh-rrri', 10], ['typhon-lp', 1], ['helios-sf', 1], ['cml-lf', 1], ['cml-ri', 10], ['cometa-lf', 1], ['lace-rrri', 10], ['adalite-lp', 1]]) {
       assert.equal(one(role, 'default').repetitions, reps, role);
       assert.equal(one(role, 'layout').repetitions, reps, role);
       assert.deepEqual(one(role, 'default').hypotheses, ['Q1'], role);
@@ -89,15 +89,15 @@ test('run plans: the refocused arms, the same in both windows, 118 jobs per wall
     const off = one('h12', 'default', 'absorb-off');
     assert.deepEqual([on.absorb, off.absorb, on.repetitions, off.repetitions], [true, false, 1, 1]);
     assert.deepEqual([on.hypotheses, off.hypotheses], [['Q2'], ['Q2']]);
-    assert.equal(plan.length, 28);
-    // 118 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2.
+    assert.equal(plan.length, 30);
+    // 120 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 2.
     const jobs = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: false });
-    assert.equal(jobs.length, 118);
-    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'mesh-rrri': 20, 'typhon-lp': 2, 'helios-sf': 2, 'cml-lf': 2, 'cml-ri': 20, 'cometa-lf': 2, 'lace-rrri': 20, 'unfrackit-h12': 2 });
+    assert.equal(jobs.length, 120);
+    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'mesh-rrri': 20, 'typhon-lp': 2, 'helios-sf': 2, 'cml-lf': 2, 'cml-ri': 20, 'cometa-lf': 2, 'lace-rrri': 20, 'adalite-lp': 2, 'unfrackit-h12': 2 });
     assert.ok(jobs.every((j) => j.collateral === 'none-needed'));
     // One collateral rule: a script wallet's jobs run under it alone.
     const withScripts = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
-    assert.equal(withScripts.length, 118);
+    assert.equal(withScripts.length, 120);
     assert.ok(withScripts.every((j) => j.collateral === 'practice'));
     // Every tidy arm, control and variant is gone.
     assert.ok(!plan.some((e) => e.arm !== 'observed' || e.hypotheses.some((h) => !['Q1', 'Q2'].includes(h))));
@@ -267,6 +267,7 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
   const { replay } = await import('../../../src/replay/engine.mjs');
   const { makeMethod, BASELINE_METHODS } = await import('../../../src/methods/registry.mjs');
   const { laceBuildProblem } = await import('../../../src/methods/lace.mjs');
+  const { adaliteBuildProblem } = await import('../../../src/methods/adalite.mjs');
   const { shapeState } = await import('../../../src/shapes/shapes.mjs');
   const { SYNTHETIC_PARAMS } = await import('../../../src/kit/params.mjs');
   const { outputBytes } = await import('../../../src/kit/assemble.mjs');
@@ -309,10 +310,21 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
   const LARGEST_FIRST = new Set(['csl-lf', 'cml-lf', 'evo-lf', 'lucid-lf', 'test-largest-first']);
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);
-    // Lace's method runs only with the build of the wallet's source.
-    for (const name of [...BASELINE_METHODS.filter((n) => n !== 'lace-rrri' || !laceBuildProblem()), 'test-largest-first']) {
+    // Lace's and AdaLite's methods run only with the build of the wallet's
+    // source.
+    for (const name of [...BASELINE_METHODS.filter((n) => (n !== 'lace-rrri' || !laceBuildProblem()) && (n !== 'adalite-lp' || !adaliteBuildProblem())), 'test-largest-first']) {
       const r = await replay(T, SP, source, { arm: 'observed', variant: 'default', repetition: 1, method: makeMethod(T, name), opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25, keepTx: true, validity: true });
       const s = r.spends[0];
+      if (name === 'adalite-lp' && label === 'second key only') {
+        // AdaLite writes no required signer, so the adapter adds it after
+        // the build, unpriced; the wallet prices one witness for its one
+        // input (estimateTxSize.ts:77-78), and the signer's second witness
+        // takes the transaction past the wallet's fee. The record names the
+        // part.
+        assert.deepEqual([s.outcome, s.class], ['failed', 'fee-minimum'], `${label} ${name}: ${s.detail}`);
+        assert.match(s.detail, /parts the library did not price: required signers$/);
+        continue;
+      }
       assert.equal(s.outcome, 'built', `${label} ${name}: ${s.outcome} ${s.class} ${s.detail}`);
       const v = r.summary.validity;
       assert.equal(v.failed, 0, `${label} ${name}: ${JSON.stringify(v.failures)}`);

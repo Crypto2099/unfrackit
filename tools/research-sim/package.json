@@ -33,6 +33,10 @@
     "@lucid-evolution/lucid": "0.8.9",
     "@meshsdk/transaction": "1.9.1",
     "@stricahq/typhonjs": "4.0.0",
+    "bignumber.js": "9.3.1",
+    "cardano-crypto.js": "6.1.2",
+    "cbor": "8.1.0",
+    "lodash": "4.18.1",
     "pg": "8.23.0"
   },
   "overrides": {

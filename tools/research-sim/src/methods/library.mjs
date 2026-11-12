@@ -87,6 +87,10 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //         writes it and on its transaction after the build otherwise; a
 //         redeemer no operation can attach is not replayable
 //         (methods/lace.mjs)
+//   adalite adalite-lp: every part, the validity through the wallet's types
+//         and the rest on its transaction after the build; a redeemer, and
+//         so collateral, and a requested output's datum or script reference
+//         are not replayable (methods/adalite.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -99,7 +103,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   helios: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   cml: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   cometa: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  lace: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  lace: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  adalite: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

@@ -18,6 +18,7 @@ import { LUCID_VERSION } from '../../../src/methods/lucid.mjs';
 import { MESH_VERSION, MESH_CJS_VERSION } from '../../../src/methods/mesh.mjs';
 import { HELIOS_TX_UTILS_VERSION, HELIOS_LEDGER_VERSION } from '../../../src/methods/helios.mjs';
 import { laceBuildProblem } from '../../../src/methods/lace.mjs';
+import { adaliteBuildProblem } from '../../../src/methods/adalite.mjs';
 import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
@@ -39,15 +40,21 @@ test('every study baseline is made by name, with its library version, determinis
     'cml-lf': ['@dcspark/cardano-multiplatform-lib-nodejs 6.2.0 LargestFirstMultiAsset', true, true],
     'cml-ri': ['@dcspark/cardano-multiplatform-lib-nodejs 6.2.0 RandomImproveMultiAsset', false, false],
     'cometa-lf': ['@biglup/cometa 1.2.0 (cardano-c 1.2.0) large-first', true, true],
-    'lace-rrri': ['lace 4d553bd (lace-extension 2.5.1) @lace-contract/cardano-context TransactionBuilder with RoundRobinRandomCoinSelector', false, true]
+    'lace-rrri': ['lace 4d553bd (lace-extension 2.5.1) @lace-contract/cardano-context TransactionBuilder with RoundRobinRandomCoinSelector', false, true],
+    'adalite-lp': ['adalite e7522c2 (v7.0.2) Account.getTxPlan, SEND_ADA', true, true]
   };
-  // Lace's method loads only with the build of the wallet's source; without
-  // it, making the method names the build script.
+  // Lace's and AdaLite's methods load only with the build of the wallet's
+  // source; without it, making the method names the build script.
   const laceProblem = laceBuildProblem();
+  const adaliteProblem = adaliteBuildProblem();
   assert.deepEqual([...BASELINE_METHODS].sort(), Object.keys(want).sort());
   for (const [name, [version, deterministic, seeded]] of Object.entries(want)) {
     if (name === 'lace-rrri' && laceProblem) {
       assert.throws(() => makeMethod(T, name), /scripts\/build-lace\.mjs/);
+      continue;
+    }
+    if (name === 'adalite-lp' && adaliteProblem) {
+      assert.throws(() => makeMethod(T, name), /scripts\/build-adalite\.mjs/);
       continue;
     }
     const m = makeMethod(T, name);
@@ -76,10 +83,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the thirteen libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'cml-lf', 'cml-ri', 'cometa-lf', 'csl-lf', 'csl-ri', 'evo-lf', 'helios-sf', 'lace-rrri', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'unfrackit-h12']);
+  // The replays run the fourteen libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['adalite-lp', 'blaze-wd', 'cjs-rrri', 'cml-lf', 'cml-ri', 'cometa-lf', 'csl-lf', 'csl-ri', 'evo-lf', 'helios-sf', 'lace-rrri', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'unfrackit-h12']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);
