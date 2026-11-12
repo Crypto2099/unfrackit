@@ -10,18 +10,32 @@
 // that the fidelity stage's selection can be checked; given `samples`, it
 // first applies the history command's own refusals (refuseWallets).
 //
+// The replay stand-in writes a replay stage (src/out/stage.mjs) as the replay
+// command does: its wallets are the history files of the directories it is
+// given, or the shapes it names; each wallet's segment holds STUB_RECORDS
+// refused records whose reason is made from the command, the stage, the
+// wallet, the record's number and the options that decide the records, and
+// the stage is joined at its end. It resumes as the replay command does, at
+// the wallets the stage has not done, and pushes each wallet it runs to
+// `ran` as [stage, wallet index].
+//
 // The collateral stand-in also writes collateral.json, whose measurement
 // gives `share` (the share under 20 ADA; 0.75 when absent, null for a
 // measurement that found no transaction), as the study reads it.
 //
 // options: { network, calls (an array each call is pushed to: [stage,
-// options]), share, hang (a stage that writes half its records, a `partial` file,
-// prints HUNG and never returns), fail (a stage that throws), splits,
-// samples }.
+// options]), ran, share, hang (a stage that writes half its records, a
+// `partial` file, prints HUNG and never returns; a replay stage instead
+// completes the first half of its wallets and writes half the next one's
+// records to its spool), fail (a stage that throws), splits, samples }.
 
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { runDir, historyDir, ensureDir, writePrivate, writeJson } from '../../src/history/paths.mjs';
 import { refuseWallets } from '../../src/history/commands.mjs';
+import { walletsOf, recordOptions } from '../../src/replay/commands.mjs';
+import { openStage, walletList } from '../../src/out/stage.mjs';
+import { record } from '../../src/out/records.mjs';
+import { workerCount } from '../../src/replay/pool.mjs';
 
 export const STUB_RECORDS = 6;
 export const STUB_SPLITS = Object.freeze(['exploration', 'confirmation', null, 'exploration']);
@@ -35,12 +49,43 @@ function normalized(opts) {
   return Object.fromEntries(Object.keys(opts).filter((k) => k !== 'runId').sort().map((k) => [k, strip(opts[k])]));
 }
 
-export function stubCommands({ network, calls = [], hang = null, fail = null, splits = STUB_SPLITS, samples = null, share = 0.75 } = {}) {
+const hang = () => {
+  process.stdout.write('HUNG\n');
+  return new Promise(() => setInterval(() => {}, 1000));
+};
+
+// The replay stand-in: a replay stage over the wallets opts names.
+async function stubReplay(opts, { net, stage, hangs, ran }) {
+  const wallets = walletsOf(opts, { stream: 'synthetic' });
+  const decided = normalized({ ...recordOptions(opts), runId: opts.runId });
+  const out = await openStage(runDir(net, opts.runId), { header: { command: 'replay', options: decided }, wallets: walletList(wallets), machine: opts.machine, workers: workerCount(opts.workers, '--workers') });
+  try {
+    for (const [wi, w] of wallets.entries()) {
+      if (out.isDone(wi)) continue;
+      ran.push([stage, wi]);
+      const wallet = w.spec.kind === 'shape' ? w.spec.name : Number(basename(w.spec.path).split('.')[0]);
+      const key = { wallet, window: w.spec.kind === 'shape' ? 'synthetic' : opts.plan, arm: 'observed', variant: 'default', method: 'stub', change: 'default', collateral: 'none-needed', repetition: 1 };
+      const seg = out.segment(wi);
+      for (let n = 0; n < STUB_RECORDS; n++) {
+        if (hangs && wi === Math.floor(wallets.length / 2) && n === STUB_RECORDS / 2) await hang();
+        seg.write(record('refused', key, { reason: JSON.stringify({ command: 'replay', stage, wi, n, opts: decided }), ms: n }));
+      }
+      await out.complete(wi, seg, { wallet, totals: { jobs: 1, refused: STUB_RECORDS, triggers: 0 }, start: new Date() });
+    }
+    const totals = await out.finish();
+    return { print: { command: 'replay', stage, totals, records: out.counts } };
+  } finally {
+    out.close();
+  }
+}
+
+export function stubCommands({ network, calls = [], ran = [], hang: hangStage = null, fail = null, splits = STUB_SPLITS, samples = null, share = 0.75 } = {}) {
   const make = (command, networkOf) => async (opts) => {
     const stage = stageOf(opts.runId);
     calls.push([stage, opts]);
     if (fail === stage) throw new Error(`stand-in failure in ${stage}`);
     const net = networkOf(opts);
+    if (command === 'replay') return stubReplay(opts, { net, stage, hangs: hangStage === stage, ran });
     const dir = ensureDir(runDir(net, opts.runId));
     if (command === 'history') {
       const wallets = splits.map((_s, k) => k + 1);
@@ -50,11 +95,10 @@ export function stubCommands({ network, calls = [], hang = null, fail = null, sp
     }
     if (command === 'collateral') writeJson(join(dir, 'collateral.json'), { command, result: { shareUnder20Ada: share, measured: share === null ? 0 : 40 } });
     const lines = Array.from({ length: STUB_RECORDS }, (_x, n) => JSON.stringify({ command, stage, n, opts: normalized(opts) }) + '\n');
-    if (hang === stage) {
+    if (hangStage === stage) {
       writePrivate(join(dir, 'records.jsonl'), lines.slice(0, STUB_RECORDS / 2).join(''));
       writePrivate(join(dir, 'partial'), 'written before the kill\n');
-      process.stdout.write('HUNG\n');
-      await new Promise(() => setInterval(() => {}, 1000));
+      await hang();
     }
     writePrivate(join(dir, 'records.jsonl'), lines.join(''));
     return { print: { command, stage, records: STUB_RECORDS } };

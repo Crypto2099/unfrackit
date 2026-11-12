@@ -48,12 +48,13 @@ export function writePrivate(path, data) {
 
 export const writeJson = (path, value) => writePrivate(path, JSON.stringify(value, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2) + '\n');
 
-// A JSON Lines file written line by line, mode 0600.
+// A JSON Lines file written line by line, mode 0600; append: add to the
+// file rather than start it anew.
 export class JsonLines {
-  constructor(path) {
+  constructor(path, { append = false } = {}) {
     ensureDir(dirname(path));
     this.path = path;
-    this.fd = openSync(path, 'w', 0o600);
+    this.fd = openSync(path, append ? 'a' : 'w', 0o600);
     chmodSync(path, 0o600);
   }
   write(obj) {

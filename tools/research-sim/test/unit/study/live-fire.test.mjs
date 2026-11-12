@@ -268,7 +268,7 @@ test('a run killed in a stage leaves its start unclosed and its output behind, u
   assert.deepEqual(es.map((e) => e.type), ['query-start', 'query', 'sim-live-fire-start']);
   const open = unclosedStarts(logEntries('mainnet')).filter((e) => e.run_id === 'sim-killed');
   assert.deepEqual(open.map((e) => [e.seq, e.type]), [[es[2].seq, 'sim-live-fire-start']]);
-  assert.ok(existsSync(join(runDir('mainnet', 'sim-killed'), 'replay-recent', 'partial')));
+  assert.ok(existsSync(join(runDir('mainnet', 'sim-killed'), 'replay-recent', 'spool')));
   const c = cleanupLiveFire({ _: [], cleanup: true, runId: 'sim-killed', network: 'mainnet' });
   assert.equal(c.entry.start_seq, es[2].seq);
   assert.ok(!existsSync(runDir('mainnet', 'sim-killed')));

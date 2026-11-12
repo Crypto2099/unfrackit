@@ -20,7 +20,7 @@ const WALLET_VALUES = ['wallets'];
 
 // What the study takes by use (study/study.mjs studyOptions refuses, per plan,
 // an option the plan does not use). The lists are the union of the plans.
-export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps']);
+export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'machine']);
 export const STUDY_DATABASE = Object.freeze(['expectNetwork', 'snapshot', 'extractionRun', 'wallets', 'wallet', 'fromStudy', 'analysisFreezeTx', 'bytes', 'immutableDir', 'immutableHost', 'set']);
 export const STUDY_PLAN_OPTIONS = Object.freeze({
   synthetic: Object.freeze([...STUDY_COMMON, 'shapes', 'collateralRule']),
@@ -35,8 +35,26 @@ export const LIVE_FIRE_CLEANUP_OPTIONS = Object.freeze(['cleanup', 'runId', 'net
 
 // The options that say how a run uses the machine, never what it computes:
 // they change no record, so run.json keeps them apart from the options and a
-// study resumes with other values (study/study.mjs).
-export const MACHINE_OPTIONS = Object.freeze(['workers', 'oracleWorkers']);
+// study or a replay stage resumes with other values (study/study.mjs,
+// out/stage.mjs).
+export const MACHINE_OPTIONS = Object.freeze(['workers', 'oracleWorkers', 'machine']);
+
+// The options that say where a replay's inputs and output are on this
+// machine: the run ID, the treatment directory and pins file, the history
+// files. A replay stage's run.json leaves them out, since what they name is
+// recorded by content (the treatment pins, wallets.json's SHA-256).
+export const LOCAL_OPTIONS = Object.freeze(['runId', 'treatment', 'treatmentPins', 'history']);
+
+// A replay stage's machine label (--machine): letters, digits, - and _, at
+// most 64; `local` when absent. The operator chooses it; it is never a host
+// name or address read from the machine.
+export const MACHINE_LABEL = /^[A-Za-z0-9_-]{1,64}$/;
+export const MACHINE_LABEL_RULE = '--machine takes a label of letters, digits, - and _ (at most 64)';
+export function machineLabel(v) {
+  if (v === undefined) return 'local';
+  if (typeof v !== 'string' || !MACHINE_LABEL.test(v)) throw new Error(`${MACHINE_LABEL_RULE}, not ${JSON.stringify(v)}`);
+  return v;
+}
 
 // Options an earlier version took, refused by name wherever they appear.
 export const ORACLE_LIMIT_MS_GONE = 'refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets and maxProgramWork), and a call runs to completion';
@@ -56,7 +74,7 @@ export const COMMAND_OPTIONS = Object.freeze({
   'near-cap': { flags: ['fromStudy', 'allWallets'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   collateral: { flags: ['explain'], values: [...CONTEXT_VALUES, 'runId', 'days', 'batch'], repeat: ['set'] },
   'battery-pools': { flags: [], values: ['runId', 'network', 'historyRun'], repeat: [] },
-  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule'], repeat: ['history'] },
+  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule', 'machine'], repeat: ['history'] },
   battery: { flags: ['oracle', 'validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'shapes', 'analysisFreezeTx', 'methods', 'reps', 'pools', 'oracleSettings', 'oracleWorkers'], repeat: ['history'] },
   fidelity: { flags: [], values: ['treatment', 'treatmentPins', 'analysisFreezeTx', 'runId'], repeat: ['history'] },
   study: {
@@ -117,6 +135,7 @@ function checkValue(key, v, command) {
   if (closed && !closed.includes(v)) throw new Error(`${flagOf(key)} takes ${closed.join(' | ')}, not ${JSON.stringify(v)} for ${command}`);
   if (key === 'window' && !WINDOW.test(v)) throw new Error(`${flagOf(key)} takes recent | peak | snapshot | blocks:<first id>-<last id>, not ${JSON.stringify(v)} for ${command}`);
   if (WHOLE.includes(key) && !(/^[1-9]\d*$/.test(v) && Number.isSafeInteger(Number(v)))) throw new Error(`${flagOf(key)} takes a positive whole number, not ${JSON.stringify(v)} for ${command}`);
+  if (key === 'machine' && !MACHINE_LABEL.test(v)) throw new Error(`${MACHINE_LABEL_RULE}, not ${JSON.stringify(v)} for ${command}`);
 }
 
 // Reads a command line against the options of `command`. The result is

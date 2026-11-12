@@ -5,23 +5,26 @@
 // engine's output written as records (out/records.mjs), and the joins that
 // need two arms (H-6's rescue test).
 //
-// For each wallet: its source is read once in the parent to decide whether
-// the window holds a script interaction (which expands the collateral rules),
-// and the jobs run in the pool. Each job's worker builds the job's records
-// and writes them to the job's spool (out/spool.mjs); the parent commits the
-// spools in job order to the wallet's segment as the jobs complete, writes
-// the wallet's trigger records after them, and appends the segment to the
-// run's records once every job of the wallet has completed. So the records
-// are those of one thread writing every job in turn, whatever order the jobs
-// end in, and the parent holds no wallet's records: of a job it keeps only
+// A replay run is a stage (out/stage.mjs) that writes each wallet's records
+// whole as a segment of its own. For each wallet the stage has not done: its
+// source is read once in the parent to decide whether the window holds a
+// script interaction (which expands the collateral rules), and the jobs run
+// in the pool. Each job's worker builds the job's records and writes them to
+// the job's spool (out/spool.mjs); the parent commits the spools in job order
+// to the wallet's segment as the jobs complete, writes the wallet's trigger
+// records after them, and has the stage compress the segment and mark it
+// done once every job of the wallet has completed. So a wallet's records are
+// those of one thread writing every job in turn, whatever order the jobs end
+// in, and the parent holds no wallet's records: of a job it keeps only
 // whether it was refused, its validity summary and, for a maintained-tidy
 // job, what H-6's join reads. Every job runs to completion: a job the pool's
 // watchdog stops, or one a machine error ends, runs again (replay/pool.mjs),
 // rewriting its spool, and only the attempt that completes is recorded. An
 // engine refusal (a wallet the rules do not settle, such as one with no
 // change address) is recorded as refused; a stop point or a failed job stops
-// the run, and the wallet's segment is dropped, so the run's records hold
-// whole wallets only.
+// the run and drops the wallet's segment, so only whole wallets are marked
+// done, and the run resumes at the wallets not done. When every wallet is
+// done the stage joins the segments in wallet order.
 //
 // H-6's rescue test: each trigger of a maintained-tidy arm under the decided or
 // an alternative threshold is followed for 30 days of block time; it rescues
@@ -32,7 +35,6 @@
 // recorded under each confirmatory collateral rule, since the collateral
 // measurement chooses which one is confirmatory.
 
-import { join } from 'node:path';
 import { rmSync } from 'node:fs';
 import { record } from '../out/records.mjs';
 import { spoolPaths, spoolRecords, Frontier } from '../out/spool.mjs';
@@ -121,22 +123,27 @@ export function replayJobOpts(j) {
 
 const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent' && e.intent.collateral.required);
 
-// wallets: [{ spec }]; plan: the window's entries; roles: role -> method name
-// (a test plan's entries name role 'test'); out: a RunOutput; watchdogMs: the
-// replay watchdog (the pool's default when absent). The jobs' spools are
-// under out.dir/spool/<wallet index>/, removed when the run ends.
+// wallets: [{ spec }], in the stage's wallet order; plan: the window's
+// entries; roles: role -> method name (a test plan's entries name role
+// 'test'); out: the stage (out/stage.mjs openStage) over the same wallets;
+// watchdogMs: the replay watchdog (the pool's default when absent). A wallet
+// the stage has done is skipped. The jobs' spools are under
+// out.dir/spool/<wallet index>/, removed when the run ends. Returns the
+// stage's totals, every wallet's summed: { wallets, jobs, refused, triggers }
+// and, with validity, their validity counts.
 export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false }) {
-  const totals = { wallets: 0, jobs: 0, refused: 0, triggers: 0 };
-  const validities = [];
-  const spool = join(out.dir, 'spool');
+  if (wallets.length !== out.n) throw new Error(`the stage lists ${out.n} wallets, not the ${wallets.length} given`);
   try {
     for (const [wi, w] of wallets.entries()) {
+      if (out.isDone(wi)) continue;
+      const start = new Date();
       const source = loadSource(T, w.spec);
       if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
       const jobs = expandJobs(plan, { roles, needsCollateral: needsCollateral(source), ...(collateralRules ? { collateralRules } : {}) });
-      totals.wallets++;
-      const dir = join(spool, String(wi));
-      const seg = out.segment(dir);
+      const totals = { jobs: 0, refused: 0, triggers: 0 };
+      const validities = [];
+      const seg = out.segment(wi);
+      const dir = seg.dir;
       // H-6's fields of each maintained-tidy job that was not refused, by job.
       const rescue = new Array(jobs.length).fill(null);
       const frontier = new Frontier(jobs.length, (_i, spooled) => seg.commit(spooled));
@@ -193,14 +200,13 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
         seg.close();
         throw e;
       }
-      out.adopt(seg);
-      rmSync(dir, { recursive: true, force: true });
+      if (validity) totals.validity = sumValidity(validities);
+      await out.complete(wi, seg, { wallet: source.wallet, totals, start });
     }
   } finally {
-    rmSync(spool, { recursive: true, force: true });
+    rmSync(out.spool, { recursive: true, force: true });
   }
-  if (validity) totals.validity = sumValidity(validities);
-  return totals;
+  return out.finish();
 }
 
 // The unseeded runs kept beside a reference: per method, in the order the

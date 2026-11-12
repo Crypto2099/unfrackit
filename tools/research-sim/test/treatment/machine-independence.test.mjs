@@ -26,6 +26,7 @@ import { treatment, skip, TREATMENT_DIR } from '../lib/treatment.mjs';
 import { Pool } from '../../src/replay/pool.mjs';
 import { runReplays, runBatteries } from '../../src/replay/run.mjs';
 import { RunOutput } from '../../src/out/records.mjs';
+import { testStage, stageText, stageLog } from '../lib/stage.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
 import { windowPlan, batteryPlan, STUDY_ROLES } from '../../src/arms/plan.mjs';
@@ -71,12 +72,15 @@ function split(text, countedKinds) {
   return { seeded, unseeded: [...unseeded].sort() };
 }
 
-async function runWay(way, runId, go) {
+// A battery run writes its records whole; a replay run (wallets given) is a
+// stage, whose joined records and log are read.
+async function runWay(way, runId, go, { wallets = null } = {}) {
   const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath: pins, size: way.size, maxJobs: way.maxJobs });
-  const out = new RunOutput('synthetic', runId, { command: 'test' });
+  const out = wallets ? await testStage(runId, wallets, { workers: way.size }) : new RunOutput('synthetic', runId, { command: 'test' });
   try {
     const totals = await go(pool, out);
     out.close();
+    if (wallets) return { records: stageText(out.dir).split('\n').filter(Boolean), log: stageLog(out.dir), totals, stats: { ...pool.stats } };
     return { records: lines(out.dir, 'records.jsonl'), log: lines(out.dir, 'log.jsonl').map((l) => JSON.parse(l)), totals, stats: { ...pool.stats } };
   } finally {
     await pool.close();
@@ -115,7 +119,7 @@ test('replays: one worker, a fresh worker per job, and a watchdog stop write the
   ];
   const opts = { wallets, plan, roles: { ...STUDY_ROLES, stall: 'test-stall' }, methodOptions: { 'test-stall': { stallMs: STALL_MS, only: first } }, collateralRules: ['ledger'] };
   const runs = [];
-  for (const way of WAYS) runs.push(await runWay(way, `machine-replay-${way.name}`, (pool, out) => runReplays(T, pool, { ...opts, out, watchdogMs: way.watchdogMs })));
+  for (const way of WAYS) runs.push(await runWay(way, `machine-replay-${way.name}`, (pool, out) => runReplays(T, pool, { ...opts, out, watchdogMs: way.watchdogMs }), { wallets }));
   // The stops, in the third way only: every stalling job's (a wallet whose
   // first intent the arm builds), and any other job past the watchdog.
   const stalled = [...new Set(runs[0].records.map((l) => JSON.parse(l)).filter((r) => r.kind === 'spend' && r.method === 'test-stall' && r.detail === `stalled ${STALL_MS} ms`).map((r) => r.wallet))].sort();

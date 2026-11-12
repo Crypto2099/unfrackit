@@ -41,23 +41,26 @@
 // header (`collateralRule`: the rule, where it came from, the share); a run
 // whose measurement found no such transaction is refused there. In the
 // synthetic plan the rule is --collateral-rule, recorded the same way.
-// Repetitions of a library that picks at random (--reps, 10 when absent) and
-// workers (--workers) pass to the replay stages, with validity checks on every
-// job; --analysis-freeze-tx to history and replay. An option the plan does
-// not use is refused, and so is a worker count that is not a positive whole
-// number, before any stage starts.
+// Repetitions of a library that picks at random (--reps, 10 when absent),
+// workers (--workers) and the machine label (--machine) pass to the replay
+// stages, with validity checks on every job; --analysis-freeze-tx to history
+// and replay. An option the plan does not use is refused, and so is a worker
+// count that is not a positive whole number or a machine label that is not
+// letters, digits, - and _, before any stage starts.
 //
 // Layout, under the private root (history/paths.mjs):
 //   <network>/<id>/study.json   the header: plan, network, stages, options
-//                               but the worker count, the input files'
+//                               but the worker count and the machine label,
+//                               the input files'
 //                               SHA-256 (treatment pins, wallets, extraction
 //                               run), the code manifest (`hash`) and its
 //                               SHA-256, Node, and the collateral rule with
 //                               its source (filled in when the rule is known;
 //                               not compared on resume)
 //   <network>/<id>/log.jsonl    the study's log, appended: each invocation's
-//                               start or resume with its worker count and
-//                               machine (out/host.mjs), each stage's start
+//                               start or resume with its worker count, machine
+//                               label and machine (out/host.mjs), each stage's
+//                               start
 //                               and its end (with the stage's printout) or
 //                               error, skipped stages, the end
 //   <network>/<id>/<stage>/     the stage's own run directory, written by its
@@ -68,19 +71,21 @@
 // Resume: running the same plan and run id again resumes it. The header must
 // equal the first start's in plan, network, stages, options (paths made
 // absolute), input files and code manifest, or the run is refused. The worker
-// count (--workers) is not compared: it changes no
-// record, so a resume may use another, on this machine or another. A stage
-// whose end entry is in the log is skipped. Any other stage is rerun from its
-// start: its directory is removed first, so it is written as by an
-// uninterrupted run (the stages' records are deterministic but for the
-// unseeded selectors). A live lock refuses a second invocation; a lock whose
-// process is gone (a kill) is replaced.
+// count (--workers) and the machine label (--machine) are not compared: they
+// change no record, so a resume may use others, on this machine or another. A
+// stage whose end entry is in the log is skipped. A replay stage that has not
+// ended resumes at the wallets it has not done (out/stage.mjs), its done
+// wallets' segments kept. Any other stage is rerun from its start: its
+// directory is removed first, so it is written as by an uninterrupted run (the
+// stages' records are deterministic but for the unseeded selectors). A live
+// lock refuses a second invocation; a lock whose process is gone (a kill) is
+// replaced.
 //
 // A stage that throws stops the run, with its error in the log. A stage that
 // finishes with a failed check (a validity failure) has its end entry, marked
 // failed, and the run goes on; the command then exits non-zero.
 
-import { existsSync, readFileSync, rmSync, openSync, writeSync, closeSync, readSync, readdirSync, statSync, chmodSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, openSync, writeSync, closeSync, readSync, readdirSync, statSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -90,9 +95,10 @@ import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
 import { pickCollateralRule } from '../history/reports.mjs';
-import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS } from '../options.mjs';
+import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel } from '../options.mjs';
 import { workerCount } from '../replay/pool.mjs';
 import { machineRecord } from '../out/host.mjs';
+import { takeLock } from '../out/lock.mjs';
 
 const DB_STAGES = Object.freeze(['history-recent', 'history-peak', 'census', 'near-cap', 'collateral']);
 const OFFLINE_STAGES = Object.freeze(['fidelity', 'replay-recent', 'replay-peak']);
@@ -140,6 +146,7 @@ export function studyOptions(opts) {
   if (!o.treatment || o.treatment === true) throw new Refusal('refusing: --treatment <dir> names the treatment directory');
   try {
     workerCount(o.workers, '--workers');
+    machineLabel(o.machine);
   } catch (e) {
     throw new Refusal(`refusing: ${e.message}`);
   }
@@ -258,39 +265,6 @@ class StudyLog {
   }
 }
 
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e.code === 'EPERM';
-  }
-}
-
-function takeLock(dir) {
-  const path = join(dir, 'lock');
-  for (let i = 0; i < 2; i++) {
-    try {
-      const fd = openSync(path, 'wx', 0o600);
-      writeSync(fd, `${process.pid}\n`);
-      closeSync(fd);
-      return () => {
-        try {
-          if (readFileSync(path, 'utf8').trim() === String(process.pid)) unlinkSync(path);
-        } catch {
-          // already gone
-        }
-      };
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const pid = Number(readFileSync(path, 'utf8').trim());
-      if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && alive(pid)) throw new Refusal(`refusing: process ${pid} is running this study run`);
-      unlinkSync(path);
-    }
-  }
-  throw new Refusal('refusing: the study run\'s lock could not be taken');
-}
-
 // The first line of a history file, its header.
 function headerOf(path) {
   const fd = openSync(path, 'r');
@@ -343,7 +317,7 @@ export function stageOptions(stage, o, network, { collateralRule = o.collateralR
   const db = pick(o, ['expectNetwork', 'snapshot', 'extractionRun', 'bytes', 'immutableDir', 'immutableHost']);
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
-  const replayOpts = { ...pick(o, ['reps', 'workers']), validity: true };
+  const replayOpts = { ...pick(o, ['reps', 'workers', 'machine']), validity: true };
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':
@@ -383,7 +357,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     if (diff.length) throw new Refusal(`refusing: study run ${o.runId} differs from its first start in ${diff.join(', ')}; resume it with the same options, input files and code, or start a new run id`);
   }
   ensureDir(dir);
-  const unlock = takeLock(dir);
+  const unlock = takeLock(dir, { what: 'study run', refuse: (m) => new Refusal(m) });
   const t0 = performance.now();
   try {
     if (!resuming) writeJson(headerPath, header);
@@ -391,7 +365,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     const done = new Map();
     for (const e of StudyLog.entries(logPath)) if (e.event === 'stage-end') done.set(e.stage, e);
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0 }) });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0 }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {
@@ -406,9 +380,10 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
       const name = STAGE_COMMAND[stage];
       const fn = commands[name];
       if (!fn) throw new Error(`no command ${name} for stage ${stage}`);
-      // A stage reruns from its start: what an interrupted invocation left
-      // in its directory goes first.
-      rmSync(runDir(header.network, `${o.runId}/${stage}`), { recursive: true, force: true });
+      // A replay stage resumes at the wallets it has not done; any other
+      // stage reruns from its start, what an interrupted invocation left in
+      // its directory going first.
+      if (STAGE_COMMAND[stage] !== 'replay') rmSync(runDir(header.network, `${o.runId}/${stage}`), { recursive: true, force: true });
       // The rule the replays run under: the synthetic plan's option, or the
       // collateral stage's pick, read once and recorded in the header.
       if (stage.startsWith('replay-') && header.collateralRule.rule === null) {

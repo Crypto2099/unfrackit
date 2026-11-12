@@ -3,10 +3,11 @@
 
 // The study command (src/study/study.mjs) over stand-in commands
 // (test/lib/study-stubs.mjs), with no database and no treatment: the stages
-// of each plan in order with the options each is given, the layout, a stage
-// killed half way and the run resumed, a stage that fails, a resume with
-// other worker counts, and the refusals (an option, an input file or the
-// code changed on resume, the plans' own
+// of each plan in order with the options each is given, the layout, a replay
+// stage killed half way and resumed at the wallets it had not done, a stage
+// that fails, a resume with other worker counts and another machine label,
+// and the refusals (an option, an input file or the code changed on resume,
+// a machine label that is not one, the plans' own
 // rules, a confirmation-split wallet without the analysis-freeze
 // transaction, a second invocation while one runs); the nested run ids, and
 // the collateral rule read from the collateral stage's report (and refused
@@ -14,7 +15,8 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -49,7 +51,10 @@ const preprod = (runId, extra = {}) => ({ _: [], plan: 'preprod', runId, treatme
 const synthetic = (runId, extra = {}) => ({ _: [], plan: 'synthetic', runId, treatment: join(root, 'treatment'), shapes: 'S1,S8', reps: '2', collateralRule: 'ledger', ...extra });
 const run = (opts, stub = {}, more = {}) => runStudy(opts, { commands: stubCommands({ network: opts.plan === 'synthetic' ? 'synthetic' : opts.expectNetwork, ...stub }), manifest: MANIFEST, say: () => {}, ...more });
 const logOf = (network, id) => readFileSync(join(runDir(network, id), 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-const recordsOf = (network, id, stage) => readFileSync(join(runDir(network, `${id}/${stage}`), 'records.jsonl'), 'utf8');
+// A stage's records; a replay stage's are its joined gzip stream.
+const recordsOf = (network, id, stage) => (stage.startsWith('replay-') ? gunzipSync(readFileSync(join(runDir(network, `${id}/${stage}`), 'records.jsonl.gz'))).toString('utf8') : readFileSync(join(runDir(network, `${id}/${stage}`), 'records.jsonl'), 'utf8'));
+// The stand-in history stage's wallets per window, each a replay wallet.
+const WALLETS = 4;
 
 test('the preprod plan runs its eight stages in order, each in its own run directory with the options it needs', async () => {
   const calls = [];
@@ -62,7 +67,7 @@ test('the preprod plan runs its eight stages in order, each in its own run direc
   const by = new Map(calls);
   for (const s of PLANS.preprod) {
     assert.equal(by.get(s).runId, `order/${s}`);
-    assert.equal(recordsOf('preprod', 'order', s).split('\n').filter(Boolean).length, STUB_RECORDS);
+    assert.equal(recordsOf('preprod', 'order', s).split('\n').filter(Boolean).length, s.startsWith('replay-') ? WALLETS * STUB_RECORDS : STUB_RECORDS);
   }
   assert.deepEqual(['history-recent', 'history-peak'].map((s) => by.get(s).window), ['recent', 'peak']);
   for (const s of ['history-recent', 'census', 'near-cap', 'collateral']) {
@@ -162,7 +167,7 @@ function runChild(opts, stub) {
   });
 }
 
-test('a stage killed half way is rerun from its start on resume, and the run ends with the records of an uninterrupted one', async () => {
+test('a replay stage killed half way resumes at the wallets it had not done, and the run ends with the records of an uninterrupted one', async () => {
   await run(preprod('whole'));
   const ended = await runChild(preprod('killed'), { network: 'preprod', hang: 'replay-peak' });
   assert.equal(ended.signal, 'SIGKILL');
@@ -170,12 +175,20 @@ test('a stage killed half way is rerun from its start on resume, and the run end
   assert.deepEqual(before.filter((e) => e.event === 'stage-end').map((e) => e.stage), PLANS.preprod.slice(0, PLANS.preprod.indexOf('replay-peak')));
   assert.equal(before[before.length - 1].event, 'stage-start');
   assert.equal(before[before.length - 1].stage, 'replay-peak');
-  assert.ok(existsSync(join(runDir('preprod', 'killed/replay-peak'), 'partial')));
+  const stage = runDir('preprod', 'killed/replay-peak');
+  // Two wallets done, the third's records half written to its spool.
+  assert.deepEqual(readdirSync(join(stage, 'segments')).filter((f) => f.endsWith('.done.json')).sort(), ['0.done.json', '1.done.json']);
+  assert.ok(existsSync(join(stage, 'spool', '2', 'records.jsonl')));
+  const doneBefore = ['0', '1'].map((i) => readFileSync(join(stage, 'segments', `${i}.done.json`), 'utf8'));
   assert.ok(existsSync(join(runDir('preprod', 'killed'), 'lock')), 'the killed process leaves its lock');
+  assert.ok(existsSync(join(stage, 'lock')), 'and the stage\'s');
   const calls = [];
-  await run(preprod('killed'), { calls });
+  const ran = [];
+  await run(preprod('killed'), { calls, ran });
   assert.deepEqual(calls.map(([s]) => s), ['replay-peak']);
-  assert.ok(!existsSync(join(runDir('preprod', 'killed/replay-peak'), 'partial')), 'the rerun stage starts from an empty directory');
+  assert.deepEqual(ran, [['replay-peak', 2], ['replay-peak', 3]], 'the stage resumes at the wallets it had not done');
+  assert.deepEqual(['0', '1'].map((i) => readFileSync(join(stage, 'segments', `${i}.done.json`), 'utf8')), doneBefore, 'the done wallets\' segments are kept');
+  assert.ok(!existsSync(join(stage, 'spool')), 'the partial wallet\'s spool is removed');
   for (const s of PLANS.preprod) assert.equal(recordsOf('preprod', 'killed', s), recordsOf('preprod', 'whole', s), s);
   const log = logOf('preprod', 'killed');
   const resumed = log.slice(before.length);
@@ -237,6 +250,29 @@ test('a resume may use another worker count: it changes no record, and the log r
   const header = JSON.parse(readFileSync(join(runDir('synthetic', 'elastic'), 'study.json'), 'utf8'));
   assert.equal('workers' in header.options, false);
   assert.equal(header.options.reps, '2');
+});
+
+test('the machine label passes to the replay stages, is not in the header, and may change on resume; a label that is not one is refused', async () => {
+  const calls = [];
+  await assert.rejects(run(synthetic('labelled', { machine: 'spare-1' }), { calls, fail: 'replay-peak' }), /stand-in failure/);
+  const by = new Map(calls);
+  assert.equal(by.get('replay-recent').machine, 'spare-1');
+  assert.ok(existsSync(join(runDir('synthetic', 'labelled/replay-recent'), 'machines', 'spare-1.json')));
+  const header = JSON.parse(readFileSync(join(runDir('synthetic', 'labelled'), 'study.json'), 'utf8'));
+  assert.equal('machine' in header.options, false);
+  const resumed = [];
+  await run(synthetic('labelled', { machine: 'laptop_2' }), { calls: resumed });
+  assert.deepEqual(resumed.map(([s]) => s), ['replay-peak']);
+  assert.equal(new Map(resumed).get('replay-peak').machine, 'laptop_2');
+  const starts = logOf('synthetic', 'labelled').filter((e) => e.event === 'start' || e.event === 'resume');
+  assert.deepEqual(starts.map((e) => e.machineLabel), ['spare-1', 'laptop_2']);
+  const plain = [];
+  await run(synthetic('unlabelled'), { calls: plain });
+  assert.equal(new Map(plain).get('replay-recent').machine, undefined, 'the replay takes its default, local');
+  assert.ok(existsSync(join(runDir('synthetic', 'unlabelled/replay-recent'), 'machines', 'local.json')));
+  for (const bad of ['', 'host.example', 'a b', '192.0.2.1', 'x'.repeat(65), 'ä']) {
+    await assert.rejects(run(synthetic(`bad-label-${bad.length}`, { machine: bad })), /--machine takes a label of letters, digits, - and _/, JSON.stringify(bad));
+  }
 });
 
 test('each plan refuses what it does not use, before anything is written', async () => {

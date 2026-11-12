@@ -22,6 +22,7 @@ import { treatment, skip, TREATMENT_DIR } from '../lib/treatment.mjs';
 import { Pool } from '../../src/replay/pool.mjs';
 import { runReplays, runBatteries } from '../../src/replay/run.mjs';
 import { RunOutput } from '../../src/out/records.mjs';
+import { testStage, stageText, stageLog } from '../lib/stage.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
 
@@ -48,12 +49,18 @@ function withHome(fn) {
 const lines = (out, file) => readFileSync(join(out.dir, file), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 // One run through a pool of one worker: { text, recs, log, totals, stats }.
-async function run(runId, go) {
+// A battery run writes its records whole; a replay run (wallets given) is a
+// stage, whose joined records and log are read.
+async function run(runId, go, { wallets = null } = {}) {
   const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath: pins, size: 1 });
-  const out = new RunOutput('synthetic', runId, { command: 'test' });
+  const out = wallets ? await testStage(runId, wallets) : new RunOutput('synthetic', runId, { command: 'test' });
   try {
     const totals = await go(pool, out);
     out.close();
+    if (wallets) {
+      const text = stageText(out.dir);
+      return { text, recs: text.split('\n').filter(Boolean).map((l) => JSON.parse(l)), log: stageLog(out.dir), totals, stats: { ...pool.stats } };
+    }
     return { text: readFileSync(join(out.dir, 'records.jsonl'), 'utf8'), recs: lines(out, 'records.jsonl'), log: lines(out, 'log.jsonl'), totals, stats: { ...pool.stats } };
   } finally {
     await pool.close();
@@ -65,8 +72,8 @@ test('a replay the watchdog stops runs again to completion, and its records are 
   const first = loadSource(T, spec).events.find((e) => e.kind === 'intent').intent.id;
   const plan = [{ hypothesis: 'test', arm: 'observed', variant: 'default', role: 'stall', change: 'default', repetitions: 1 }, { hypothesis: 'test', arm: 'observed', variant: 'default', role: 'test', change: 'default', repetitions: 1 }];
   const opts = { wallets: [{ spec }], plan, roles: { stall: 'test-stall', test: 'test-largest-first' }, methodOptions: { 'test-stall': { stallMs: STALL_MS, only: [first] } }, collateralRules: ['ledger'] };
-  const stopped = await run('watchdog-replay', (pool, out) => runReplays(T, pool, { ...opts, out, watchdogMs: WATCHDOG_MS }));
-  const plain = await run('plain-replay', (pool, out) => runReplays(T, pool, { ...opts, out }));
+  const stopped = await run('watchdog-replay', (pool, out) => runReplays(T, pool, { ...opts, out, watchdogMs: WATCHDOG_MS }), { wallets: opts.wallets });
+  const plain = await run('plain-replay', (pool, out) => runReplays(T, pool, { ...opts, out }), { wallets: opts.wallets });
   // One stop, of the stalling job, at the watchdog; the rerun at twice it
   // completed.
   const stops = stopped.log.filter((e) => e.event === 'watchdog stop');

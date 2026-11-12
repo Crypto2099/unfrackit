@@ -13,14 +13,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { treatment, skip, TREATMENT_DIR } from '../lib/treatment.mjs';
 import { testPlan } from '../../src/arms/plan.mjs';
 import { Pool } from '../../src/replay/pool.mjs';
 import { runReplays } from '../../src/replay/run.mjs';
-import { RunOutput } from '../../src/out/records.mjs';
+import { testStage, stageText } from '../lib/stage.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
 
 const T = await treatment();
@@ -31,14 +31,15 @@ test('a run repeated with the same seeds writes byte-identical records', { skip,
   process.env.RESEARCH_SIM_HOME = home;
   const runOnce = async (id) => {
     const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath: process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS, size: 2 });
-    const out = new RunOutput('synthetic', id, { command: 'test' });
+    const wallets = ['S4', 'M8', 'CL1'].map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
+    const out = await testStage(id, wallets);
     try {
-      await runReplays(T, pool, { wallets: ['S4', 'M8', 'CL1'].map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } })), plan: testPlan({ reps: 2 }), roles: { test: 'test-largest-first' }, out });
+      await runReplays(T, pool, { wallets, plan: testPlan({ reps: 2 }), roles: { test: 'test-largest-first' }, out });
     } finally {
       out.close();
       await pool.close();
     }
-    return readFileSync(join(out.dir, 'records.jsonl'), 'utf8');
+    return stageText(out.dir);
   };
   try {
     const a = await runOnce('repeat-a');
@@ -64,14 +65,15 @@ test('cardano-js-sdk\'s replay jobs write byte-identical records for the same se
   const plan = ['observed', 'tidy-once'].map((arm) => ({ hypothesis: 'H-1', arm, variant: 'default', role: 'rrri', change: 'default', repetitions: 2 }));
   const runOnce = async (id, poolOptions) => {
     const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath: process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS, ...poolOptions });
-    const out = new RunOutput('synthetic', id, { command: 'test' });
+    const wallets = ['S1', 'M7', 'M8'].map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
+    const out = await testStage(id, wallets);
     try {
-      await runReplays(T, pool, { wallets: ['S1', 'M7', 'M8'].map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } })), plan, roles: { rrri: 'cjs-rrri' }, out, collateralRules: ['ledger', 'practice'] });
+      await runReplays(T, pool, { wallets, plan, roles: { rrri: 'cjs-rrri' }, out, collateralRules: ['ledger', 'practice'] });
     } finally {
       out.close();
       await pool.close();
     }
-    return { records: readFileSync(join(out.dir, 'records.jsonl'), 'utf8'), stats: pool.stats };
+    return { records: stageText(out.dir), stats: pool.stats };
   };
   try {
     const a = await runOnce('repeat-cjs-a', { size: 2 });

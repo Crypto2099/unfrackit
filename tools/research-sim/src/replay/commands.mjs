@@ -8,7 +8,7 @@
 //           --plan recent | peak | test
 //           [--collateral-rule ledger | practice] [--reps <n>]
 //           [--test-reps <n>] [--run-id <id>] [--workers <n>]
-//           [--analysis-freeze-tx <hash>] [--validity]
+//           [--analysis-freeze-tx <hash>] [--validity] [--machine <label>]
 //   battery --treatment <dir> [--treatment-pins <file>]
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
@@ -24,24 +24,32 @@
 // (10 when absent). A test plan runs the test method only and is never a
 // study run; it runs under every collateral rule unless --collateral-rule
 // names one. Results go to the private run
-// directory (out/records.mjs); the command prints counts only. No time limit
+// directory (out/records.mjs); the command prints counts only. A replay's run
+// directory is a stage (out/stage.mjs): each wallet's records a gzip segment
+// of their own, joined in wallet order at the end; the same command on the
+// same run ID resumes it at the wallets not done, and refuses when what
+// decides the records differs. No time limit
 // decides a result: every replay, answer and oracle call runs to completion,
 // under watchdogs that only make hung work run again (pool.mjs,
-// oracle/oracle.mjs). The worker counts change no record; run.json records
-// them with the machine (`machine`, out/host.mjs) apart from the options, and
-// the printout gives the pools' counts of watchdog stops and machine reruns
-// beside the totals. The battery's oracle stops on its work budget; the
+// oracle/oracle.mjs). The worker counts change no record; a battery's run.json
+// records them with the machine (`machine`, out/host.mjs) apart from the
+// options, a replay stage's machines/<label>.json with the label --machine
+// gives (`local` when absent), and the printout gives the pools' counts of
+// watchdog stops and machine reruns beside the totals. The battery's oracle stops on its work budget; the
 // wall-clock limit (oracle setting limit=wall-clock, kept for the oracle's
 // checks) is refused, and --limit-ms, --answer-limit-ms and --oracle-limit-ms
 // are gone (options.mjs).
 
 import { readdirSync, statSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { loadTreatment, DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { Pool, workerCount } from './pool.mjs';
 import { runReplays, runBatteries } from './run.mjs';
 import { windowPlan, testPlan, STUDY_ROLES, TEST_ROLES, batteryPlan } from '../arms/plan.mjs';
 import { RunOutput, recordsShapeName } from '../out/records.mjs';
+import { openStage, walletList, STAGE_LAYOUT } from '../out/stage.mjs';
+import { runDir } from '../history/paths.mjs';
 import { SHAPE_NAMES } from '../shapes/shapes.mjs';
 import { isHeavyName } from '../shapes/heavy.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
@@ -50,7 +58,7 @@ import { loadSource } from './source.mjs';
 import { assignPopulation, countPopulation } from '../battery/population.mjs';
 import { createBatteryOracle } from '../oracle/battery-hook.mjs';
 import { oracleSettings } from '../oracle/settings.mjs';
-import { ORACLE_LIMIT_MS_GONE, MACHINE_OPTIONS } from '../options.mjs';
+import { ORACLE_LIMIT_MS_GONE, MACHINE_OPTIONS, LOCAL_OPTIONS, machineLabel } from '../options.mjs';
 import { machineRecord } from '../out/host.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
@@ -84,7 +92,7 @@ export function shapeNamesOf(v) {
   return names;
 }
 
-function walletsOf(opts, { stream }) {
+export function walletsOf(opts, { stream }) {
   if (opts.shapes) return shapeNamesOf(opts.shapes).map((name) => ({ spec: { kind: 'shape', name, stream } }));
   const files = historyFiles(list(opts.history));
   if (!files.length) throw new Error('name the wallets: --history <file or directory> or --shapes <names|all>');
@@ -161,24 +169,61 @@ function header(command, opts, T, threads, extra) {
   };
 }
 
+// The options a replay stage's run.json records: those that change a record,
+// leaving out how the run uses the machine and where its files are.
+export function recordOptions(opts) {
+  return Object.fromEntries(Object.entries(opts).filter(([k]) => k !== '_' && !MACHINE_OPTIONS.includes(k) && !LOCAL_OPTIONS.includes(k)));
+}
+
+// The CSL build the treatment loads: its package, version and the SHA-256 of
+// each WebAssembly file beside the module, which pin the build exactly.
+export function cslBuild(T) {
+  const k = T.cslkit;
+  const wasm = {};
+  if (k.CSL_PATH) {
+    const dir = dirname(k.CSL_PATH);
+    for (const f of readdirSync(dir).sort()) if (f.endsWith('.wasm')) wasm[f] = createHash('sha256').update(readFileSync(join(dir, f))).digest('hex');
+  }
+  return { package: k.CSL_PACKAGE ?? null, version: k.CSL_VERSION ?? null, wasm };
+}
+
+// A replay stage's run.json (out/stage.mjs adds the wallet list's SHA-256):
+// what decides the records, and nothing about the machine.
+export function stageHeader(opts, T, { plan, entries }) {
+  return {
+    layout: STAGE_LAYOUT,
+    command: 'replay',
+    plan,
+    entries,
+    options: recordOptions(opts),
+    settings: SIM_SETTINGS,
+    treatmentPins: Object.fromEntries(T.pins),
+    node: process.version,
+    csl: cslBuild(T),
+    manifest: formatHashList()
+  };
+}
+
 export async function cmdReplay(opts) {
   const plan = opts.plan;
   if (!['recent', 'peak', 'test'].includes(plan)) throw new Error('--plan recent | peak | test');
+  const machine = machineLabel(opts.machine);
   const wallets = walletsOf(opts, { stream: 'synthetic' });
   const { T, pool, runId, threads } = await setup(opts, 'replay');
-  const first = loadSource(T, wallets[0].spec);
-  if (plan !== 'test' && !opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
-  if (plan === 'test' && opts.reps !== undefined) throw new Error('--reps is for the recent and peak plans; a test plan takes --test-reps');
-  const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
-  const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
-  const out = new RunOutput(first.network, runId, header('replay', opts, T, threads, { plan, entries }));
-  out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
+  let out = null;
   try {
+    const first = loadSource(T, wallets[0].spec);
+    if (plan !== 'test' && !opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
+    if (plan === 'test' && opts.reps !== undefined) throw new Error('--reps is for the recent and peak plans; a test plan takes --test-reps');
+    const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
+    const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
+    out = await openStage(runDir(first.network, runId), { header: stageHeader(opts, T, { plan, entries }), wallets: walletList(wallets), machine, workers: threads.workers });
+    out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
     const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, ...(opts.collateralRule ? { collateralRules: [opts.collateralRule] } : {}) });
     out.note({ event: 'end', totals, records: out.counts, workers: pool.stats });
     return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats }, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
-    out.close();
+    if (out) out.close();
     await pool.close();
   }
 }

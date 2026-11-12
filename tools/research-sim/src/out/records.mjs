@@ -5,7 +5,8 @@
 //
 // A run writes under
 //   ${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/sim/<network>/<run-id>/
-// (RESEARCH_SIM_HOME overrides the root), never in the repository:
+// (RESEARCH_SIM_HOME overrides the root), never in the repository. A
+// battery run (RunOutput) writes:
 //   run.json        what the run ran under: its command and plan, the
 //                   settings, the treatment's pins, the parameters, the Node
 //                   version, the analysis-freeze transaction when it was given
@@ -15,10 +16,9 @@
 //                   repeated with the same seeds writes byte-identical records
 //   log.jsonl       the run's log: start, each watchdog stop, machine rerun
 //                   or error, end
-//   spool/          while a replay run runs: each job's records, written by
-//                   the worker that ran it (out/spool.mjs), and the wallet's
-//                   segment they are committed to in job order; removed when
-//                   the run ends
+// A replay stage writes each wallet's records as a segment of its own and
+// joins them at its end (out/stage.mjs); a wallet's segment is written here
+// first (Segment), uncompressed, in its spool directory.
 // Directories are created 0700 and files 0600.
 //
 // Every record carries the key of the replay or battery spend it belongs to:
@@ -129,8 +129,10 @@ export function prepare(rec) {
 }
 
 // A line of timings.jsonl: the times of record number n, under the record's
-// kind and key.
-export const timingLine = (n, rec, times) => toJson({ n, kind: rec.kind, ...recordKey(rec), times });
+// kind and key. In a replay stage's segment, n counts within the segment and
+// the row leads with the wallet's index (walletIndex), so that the segments'
+// rows join without renumbering.
+export const timingLine = (n, rec, times, walletIndex) => toJson({ ...(walletIndex === undefined ? {} : { walletIndex }), n, kind: rec.kind, ...recordKey(rec), times });
 
 const addCounts = (to, from) => {
   for (const [k, c] of Object.entries(from)) to[k] = (to[k] || 0) + c;
@@ -155,13 +157,15 @@ function eachLine(path, fn) {
   if (carry.length) throw new Error(`${path} ends inside a line`);
 }
 
-// Records and their times, numbered on from n: written one at a time, or
-// committed from a replay job's spool (out/spool.mjs).
+// Records and their times, numbered from 1: written one at a time, or
+// committed from a replay job's spool (out/spool.mjs). walletIndex: the
+// wallet's index in a replay stage, which its timing rows carry.
 class RecordLines {
-  constructor(recordsPath, timingsPath, n = 0) {
+  constructor(recordsPath, timingsPath, walletIndex) {
     this.records = new JsonLines(recordsPath);
     this.timings = new JsonLines(timingsPath);
-    this.n = n;
+    this.walletIndex = walletIndex;
+    this.n = 0;
     this.counts = {};
   }
   // A record; its wall-clock fields (ms, at any depth) go to timings.jsonl
@@ -170,7 +174,7 @@ class RecordLines {
     const { line, times } = prepare(rec);
     const n = ++this.n;
     this.records.line(line);
-    if (Object.keys(times).length) this.timings.line(timingLine(n, rec, times));
+    if (Object.keys(times).length) this.timings.line(timingLine(n, rec, times, this.walletIndex));
     this.counts[rec.kind] = (this.counts[rec.kind] || 0) + 1;
   }
   // A job's spooled records after those written so far: its record lines as
@@ -181,12 +185,13 @@ class RecordLines {
     const base = this.n;
     const lines = this.records.append(s.records);
     if (lines !== s.count) throw new Error(`${s.records} holds ${lines} records, not the ${s.count} its job wrote`);
+    const lead = this.walletIndex === undefined ? '{' : `{"walletIndex":${this.walletIndex},`;
     eachLine(s.timings, (line) => {
       const m = /^\{"n":([1-9]\d*),/.exec(line);
       if (!m || Number(m[1]) > s.count) throw new Error(`${s.timings}: not a timing row of its job`);
-      this.timings.line(`{"n":${base + Number(m[1])},${line.slice(m[0].length)}`);
+      this.timings.line(`${lead}"n":${base + Number(m[1])},${line.slice(m[0].length)}`);
     });
-    if (s.held) this.timings.line(timingLine(base + s.held.n, { kind: s.held.kind, ...s.held.key }, s.held.times));
+    if (s.held) this.timings.line(timingLine(base + s.held.n, { kind: s.held.kind, ...s.held.key }, s.held.times, this.walletIndex));
     this.n = base + s.count;
     addCounts(this.counts, s.counts);
     unlinkSync(s.records);
@@ -198,7 +203,8 @@ class RecordLines {
   }
 }
 
-// A run's directory and its files.
+// A run's directory and its files (the battery's; a replay stage's are
+// out/stage.mjs's).
 export class RunOutput extends RecordLines {
   constructor(network, runId, header) {
     const dir = ensureDir(runDir(network, runId));
@@ -206,23 +212,6 @@ export class RunOutput extends RecordLines {
     super(join(dir, 'records.jsonl'), join(dir, 'timings.jsonl'));
     this.dir = dir;
     this.log = new JsonLines(join(dir, 'log.jsonl'));
-  }
-  // A wallet's segment in directory dir: its records, numbered on from those
-  // written so far, kept apart until adopt() appends them whole.
-  segment(dir) {
-    return new Segment(dir, this.n);
-  }
-  // A segment's records and times appended after those written so far, and
-  // its files removed. The segment must have been opened after the last
-  // record written, so the numbers follow on.
-  adopt(seg) {
-    if (seg.base !== this.n) throw new Error(`a segment opened after record ${seg.base} cannot follow record ${this.n}`);
-    seg.close();
-    this.records.append(seg.records.path);
-    this.timings.append(seg.timings.path);
-    this.n = seg.n;
-    addCounts(this.counts, seg.counts);
-    seg.remove();
   }
   note(entry) {
     this.log.write({ at: new Date().toISOString(), ...entry });
@@ -233,14 +222,17 @@ export class RunOutput extends RecordLines {
   }
 }
 
-// One wallet's records in a replay run: its jobs' spools committed in job
-// order, then its trigger records, appended to the run's when complete
-// (RunOutput.adopt).
+// One wallet's records in a replay stage, in directory dir: its jobs' spools
+// committed in job order, then its trigger records, numbered within the
+// wallet from 1, with the wallet's index in every timing row. The stage
+// compresses the two files into the wallet's segment when the wallet is
+// complete (out/stage.mjs).
 export class Segment extends RecordLines {
-  constructor(dir, base) {
+  constructor(dir, walletIndex) {
+    if (!Number.isSafeInteger(walletIndex) || walletIndex < 0) throw new TypeError('a segment needs its wallet\'s index');
     ensureDir(dir);
-    super(join(dir, 'records.jsonl'), join(dir, 'timings.jsonl'), base);
-    this.base = base;
+    super(join(dir, 'records.jsonl'), join(dir, 'timings.jsonl'), walletIndex);
+    this.dir = dir;
   }
   remove() {
     unlinkSync(this.records.path);
