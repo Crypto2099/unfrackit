@@ -3,11 +3,11 @@
 
 // Several replay wallets in flight (src/replay/run.mjs runReplays), with no
 // treatment: history files with no event, replayed by a stand-in pool that
-// runs at most its worker count of jobs at once, each after a delay, some
-// held until the test releases them. The window opens a wallet only while
-// fewer than twice the workers' jobs are queued and fewer wallets than the cap
-// are open, the pool is never handed more jobs than its workers, and jobs
-// start in (wallet, job) order. Wallets close out of order, and the stage's
+// takes at most twice its worker count of jobs at once, each after a delay,
+// some held until the test releases them. The window opens a wallet only
+// while fewer than twice the workers' jobs are queued and fewer wallets than
+// the cap are open, the pool is never handed more than twice its workers'
+// jobs, and jobs are handed in (wallet, job) order. Wallets close out of order, and the stage's
 // records, timing rows (times aside), segments and totals equal a run with
 // one wallet open at a time. A slow job in wallet 0 does not stop wallets 1
 // and 2 from running and closing. A failed job leaves the open wallets with a
@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { openStage, walletList, STAGE_LAYOUT } from '../../../src/out/stage.mjs';
 import { mergeStage } from '../../../src/out/merge.mjs';
 import { selectionOf } from '../../../src/replay/shards.mjs';
-import { spoolJob, runReplays, openWalletCap } from '../../../src/replay/run.mjs';
+import { spoolJob, runReplays, openWalletCap, poolJobCap } from '../../../src/replay/run.mjs';
 import { testPlan, expandJobs } from '../../../src/arms/plan.mjs';
 import { HISTORY_FORMAT } from '../../../src/state/history.mjs';
 import { paramsFromRow } from '../../../src/history/params.mjs';
@@ -110,8 +110,8 @@ const placeOf = (job) => {
   return [Number(m[1]), Number(m[2])];
 };
 
-// A stand-in pool of `size` workers. It refuses more jobs than its workers
-// at once (the run is to queue the rest), records the order jobs start in,
+// A stand-in pool of `size` workers. It refuses more than twice its workers'
+// jobs at once (the run is to queue the rest), records the order jobs come in,
 // answers each after a delay that puts the jobs out of order, holds a job
 // whose place `hold` names until the test releases it, and fails the job
 // `fail` names.
@@ -127,7 +127,7 @@ function standInPool({ size = 2, hold = new Map(), fail = null } = {}) {
       pool.running++;
       pool.most = Math.max(pool.most, pool.running);
       pool.order.push([wi, i]);
-      assert.ok(pool.running <= size, `the run handed the pool ${pool.running} jobs at once, over its ${size} workers`);
+      assert.ok(pool.running <= poolJobCap(size), `the run handed the pool ${pool.running} jobs at once, over twice its ${size} workers`);
       try {
         await tick((wi * 7 + i * 3) % 4);
         const held = hold.get(`${wi}/${i}`);
@@ -187,8 +187,8 @@ const machineOf = (dir, label = 'local') => JSON.parse(readFileSync(join(dir, 'm
 // Every check of the window on a run: each wallet opened in index order of
 // the wallets it ran, while fewer than twice the workers' jobs were queued
 // (the opened wallets' jobs less those handed to the pool) and fewer than
-// maxOpen wallets were open; the pool never held more jobs than its workers;
-// the jobs started in (wallet, job) order.
+// maxOpen wallets were open; the pool never held more than twice its
+// workers' jobs; the jobs were handed in (wallet, job) order.
 function assertWindow(r, pool, { maxOpen = openWalletCap(pool.size), indexes }) {
   assert.deepEqual(r.seen.opens.map((o) => o.i), indexes, 'wallets open in index order');
   r.seen.opens.forEach((o, k) => {
@@ -196,7 +196,7 @@ function assertWindow(r, pool, { maxOpen = openWalletCap(pool.size), indexes }) 
     assert.ok(queued < 2 * pool.size, `wallet ${o.i} opened with ${queued} jobs queued`);
     assert.ok(k - o.closed < maxOpen, `wallet ${o.i} opened with ${k - o.closed} wallets open`);
   });
-  assert.ok(pool.most <= pool.size);
+  assert.ok(pool.most <= poolJobCap(pool.size));
   const order = pool.order.map(([wi, i]) => wi * 1000 + i);
   assert.deepEqual(order, [...order].sort((a, b) => a - b), 'jobs start in (wallet, job) order');
   assert.equal(pool.order.length, indexes.length * JOBS);
@@ -219,6 +219,7 @@ function assertSameStage(a, b) {
 test('several wallets open at once, closed out of order, write the records, timing rows, segments and totals of a run with one wallet open at a time', withHome(async (home) => {
   assert.equal(JOBS, 9);
   assert.equal(openWalletCap(2), 4);
+  assert.equal(poolJobCap(2), 4);
   const wallets = walletsIn(home, [101, 102, 103, 104, 105, 106]);
   const one = await run('one-at-a-time', wallets, standInPool(), { maxOpen: 1 });
   assert.ok(one.seen.opens.every((o, k) => o.closed === k), 'one wallet open at a time');
@@ -240,7 +241,7 @@ test('several wallets open at once, closed out of order, write the records, timi
   assert.deepEqual(many.totals, { wallets: 6, jobs: 6 * JOBS, refused: 0, triggers: many.totals.triggers, validity: many.totals.validity });
   assert.equal(existsSync(join(many.dir, 'spool')), false);
   const window = stageLog(many.dir).find((e) => e.event === 'window');
-  assert.deepEqual([window.workers, window.queue, window.maxOpen, window.wallets], [2, 4, 4, 6]);
+  assert.deepEqual([window.workers, window.queue, window.inPool, window.maxOpen, window.wallets], [2, 4, 4, 4, 6]);
 }));
 
 test('the cap on open wallets holds while a slow job keeps a wallet open, and the window still opens wallets up to it', withHome(async (home) => {

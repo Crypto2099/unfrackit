@@ -14,7 +14,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool, MEMORY_ESTIMATE, jobEstimate, walletMemory, memoryAvailable, defaultMemoryBudget, processMemory, jobName } from '../../../src/replay/pool.mjs';
@@ -39,30 +39,77 @@ async function withPool(fn, opts = {}) {
 
 const job = (est, attempts, extra = {}) => ({ counter: counter(), est, attempts, trace: true, ...extra });
 
-test('admission: a job waits until the running jobs\' memory is freed, and a later lighter job does not pass it', () => withPool(async (pool) => {
+test('admission: a job waits until the running jobs\' memory is freed, and a later job that fits passes it', () => withPool(async (pool) => {
   const a = pool.replay(job(600, ['sleep:300']));
   const b = pool.replay(job(600, ['done']));
   const c = pool.replay(job(100, ['done']));
   const [ra, rb, rc] = await Promise.all([a, b, c]);
   assert.ok(ra.ok && rb.ok && rc.ok);
   assert.ok(rb.result.start >= ra.result.end, 'b started after a ended');
-  assert.ok(rc.result.start >= ra.result.end, 'c, which would have fitted beside a, started after b');
-  assert.equal(pool.stats.admissionWaits, 1);
-  assert.equal(pool.stats.aloneRuns, 0);
+  assert.ok(rc.result.start < ra.result.end, 'c, which fitted beside a, passed b');
+  assert.deepEqual([pool.stats.admissionWaits, pool.stats.admissionPasses, pool.stats.aloneRuns], [1, 1, 0]);
 }, { size: 3, memoryBudget: 1000 * MiB }));
+
+test('admission: a held job is passed at most once per worker, then the later jobs wait for it', () => withPool(async (pool) => {
+  // Two workers: a runs; h is held; l1 and l2 pass it in turn on the other
+  // worker; then l3 and l4 wait until h has started.
+  const a = pool.replay(job(600, ['sleep:400']));
+  const h = pool.replay(job(600, ['done']));
+  const ls = [1, 2, 3, 4].map(() => pool.replay(job(100, ['sleep:50'])));
+  const [ra, rh, ...rl] = await Promise.all([a, h, ...ls]);
+  assert.ok([ra, rh, ...rl].every((r) => r.ok));
+  assert.ok(rl[0].result.start < ra.result.end && rl[1].result.start < ra.result.end, 'l1 and l2 passed h');
+  assert.ok(rh.result.start >= ra.result.end);
+  assert.ok(rl[2].result.start >= rh.result.start && rl[3].result.start >= rh.result.start, 'l3 and l4 did not pass h');
+  assert.deepEqual([pool.stats.admissionWaits, pool.stats.admissionPasses], [1, 2]);
+}, { size: 2, memoryBudget: 1000 * MiB }));
 
 test('admission: a job above the budget runs alone once nothing else runs, the log says the machine is short, and the run goes on', () => withPool(async (pool) => {
   const notes = [];
   const y = pool.replay(job(100, ['sleep:200']));
   const x = pool.replay(job(800, ['sleep:200']), { note: (e) => notes.push(e) });
-  const z = pool.replay(job(100, ['done']));
-  const [ry, rx, rz] = await Promise.all([y, x, z]);
-  assert.ok(ry.ok && rx.ok && rz.ok);
-  assert.ok(rx.result.start >= ry.result.end, 'x waited for y');
-  assert.ok(rz.result.start >= rx.result.end, 'z waited for x, which ran alone');
+  const z = pool.replay(job(100, ['sleep:100']));
+  const after = [1, 2, 3].map(() => pool.replay(job(100, ['done'])));
+  const [ry, rx, rz, ...ra] = await Promise.all([y, x, z, ...after]);
+  assert.ok([ry, rx, rz, ...ra].every((r) => r.ok));
+  // z and one more pass x (three workers, two beside y), then nothing does:
+  // y and z end, and x runs alone before the rest.
+  assert.ok(rz.result.start < ry.result.end, 'z passed x');
+  assert.ok(rx.result.start >= ry.result.end && rx.result.start >= rz.result.end, 'x ran once nothing else ran');
+  const late = ra.filter((r) => r.result.start >= rx.result.end);
+  assert.ok(late.length >= 1, 'a job waited for x');
+  for (const r of ra) assert.ok(r.result.end <= rx.result.start || r.result.start >= rx.result.end, 'no job ran beside x');
   assert.deepEqual(notes, [{ event: 'machine short of memory', estimateBytes: 800 * MiB, budgetBytes: 500 * MiB }]);
-  assert.deepEqual([pool.stats.aloneRuns, pool.stats.admissionWaits], [1, 1]);
+  assert.equal(pool.stats.aloneRuns, 1);
+  assert.ok(pool.stats.admissionPasses <= 3);
 }, { size: 3, memoryBudget: 500 * MiB }));
+
+// The test process's child processes: the pool's workers.
+const children = () => {
+  let n = 0;
+  for (const t of readdirSync(`/proc/${process.pid}/task`)) {
+    const c = readFileSync(`/proc/${process.pid}/task/${t}/children`, 'utf8').trim();
+    if (c) n += c.split(/\s+/).length;
+  }
+  return n;
+};
+
+test('never more worker processes than workers, while jobs wait and workers are replaced after maxJobs, by a watchdog, after a machine error and after a death', { skip: !existsSync(`/proc/${process.pid}/task`) }, () => withPool(async (pool) => {
+  let most = 0;
+  const timer = setInterval(() => {
+    most = Math.max(most, children());
+  }, 1);
+  try {
+    const kinds = [['done'], ['sleep:30'], ['stall:250', 'done'], ['machine', 'done'], ['die', 'done'], ['sleep:10']];
+    const rs = await Promise.all(Array.from({ length: 18 }, (_x, k) => pool.replay(job(50, kinds[k % kinds.length]), { watchdogMs: 100 })));
+    assert.ok(rs.every((r) => r.ok));
+  } finally {
+    clearInterval(timer);
+  }
+  assert.ok(most >= 1 && most <= 2, `${most} worker processes at once, over the pool's 2`);
+  assert.ok(pool.stats.watchdogStops >= 3 && pool.stats.machineReruns >= 6, JSON.stringify(pool.stats));
+  assert.ok(pool.stats.recycled >= 1);
+}, { size: 2, maxJobs: 2 }));
 
 test('admission: idle workers are stopped, largest first, when that makes a job fit', () => withPool(async (pool) => {
   // Two workers left idle at about 200 MiB each (under the 300 MiB share).

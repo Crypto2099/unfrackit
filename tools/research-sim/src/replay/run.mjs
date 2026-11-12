@@ -135,6 +135,11 @@ const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent
 // files open.
 export const openWalletCap = (workers) => 2 * workers;
 
+// The most jobs a replay run has in the pool at once at a worker count:
+// twice the workers, so that while a job waits in the pool for memory the
+// pool's admission has later jobs that may start (replay/pool.mjs).
+export const poolJobCap = (workers) => 2 * workers;
+
 // wallets: [{ spec }], in the stage's wallet order; plan: the window's
 // entries; roles: role -> method name (a test plan's entries name role
 // 'test'); out: the stage (out/stage.mjs openStage) over the same wallets;
@@ -147,9 +152,10 @@ export const openWalletCap = (workers) => 2 * workers;
 // refused, triggers } and, with validity, their validity counts.
 //
 // Several wallets run at once. The run keeps one queue of the jobs not yet
-// started, in (wallet index, job index) order, and hands the pool a job
-// whenever fewer than pool.size of its jobs are running, so the pool never
-// holds a job waiting for a worker. It opens the next wallet it runs (in
+// handed to the pool, in (wallet index, job index) order, and hands the pool
+// a job whenever fewer than poolJobCap(pool.size) of its jobs are in the
+// pool; the pool starts them in that order but may start one ahead of
+// another that waits for memory. It opens the next wallet it runs (in
 // index order) whenever fewer than twice pool.size jobs are queued and fewer
 // than maxOpen wallets are open, so the workers are not left idle behind a
 // wallet's slowest job. A wallet closes when its last job ends: its trigger
@@ -166,13 +172,15 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
   if (!Number.isSafeInteger(maxOpen) || maxOpen < 1) throw new Error('the cap on open wallets is a positive whole number');
   const workers = pool.size;
   const todo = wallets.flatMap((_w, wi) => (out.runs(wi) ? [wi] : []));
-  if (todo.length) out.note({ event: 'window', workers, queue: 2 * workers, maxOpen, wallets: todo.length });
-  // Jobs not started, in (wallet, job) order: wallets open in index order,
-  // each appending its jobs in job order.
+  const inPool = poolJobCap(workers);
+  if (todo.length) out.note({ event: 'window', workers, queue: 2 * workers, inPool, maxOpen, wallets: todo.length });
+  // Jobs not handed to the pool, in (wallet, job) order: wallets open in
+  // index order, each appending its jobs in job order.
   const queue = [];
   // The open wallets: those with a job not ended, and those closing.
   const open = new Set();
   let nextWallet = 0;
+  // The jobs handed to the pool and not ended.
   let running = 0;
   let failure = null;
   let closing = Promise.resolve();
@@ -272,7 +280,7 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
   };
 
   const dispatch = () => {
-    while (!failure && running < workers && queue.length) {
+    while (!failure && running < inPool && queue.length) {
       const q = queue.shift();
       running++;
       pool.replay(q.job, { watchdogMs, note: (e) => out.note({ ...e, ...q.at }) }).then((r) => {

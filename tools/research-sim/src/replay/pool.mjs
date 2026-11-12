@@ -30,14 +30,18 @@
 // job the pool reads the worker's resident size (VmRSS) and its peak during
 // the job (VmHWM, reset before each job) from /proc/<pid>/status, and the
 // worker reports CSL's WebAssembly memory and V8's heap.
-//   admission  jobs start in the order they ask, a later job never ahead of
-//              an earlier one. A job starts when a worker is free (an idle
-//              one, or a new one while fewer than `size` live) and the
+//   admission  a job starts when a worker is free (an idle one, or a new one
+//              in a free place: at most `size` worker processes exist at
+//              once, counting those stopped and not yet exited) and the
 //              running jobs' charges, the idle workers' resident sizes and
 //              its own charge fit the budget; its charge is the larger of
 //              its estimate and the resident size of the idle worker it
 //              takes. Idle workers are stopped, largest first, when that
-//              makes the job fit. When nothing runs and the job alone
+//              makes the job fit. Jobs are taken in the order they asked; a
+//              job held for memory may be passed by later jobs that fit, at
+//              most `size` times, and then nothing passes it until it
+//              starts, so it cannot starve. A rerun after a worker died goes
+//              first and is never passed. When nothing runs and a job alone
 //              exceeds the budget, it runs alone, and its note says the
 //              machine is short of memory.
 //   recycling  after a job, a worker is replaced when its resident size
@@ -62,7 +66,8 @@
 // what happened, for the run's log, printout and machine record only:
 // workers started, recycled after maxJobs jobs and by size, watchdog stops,
 // machine reruns (out-of-memory reruns among them), jobs that waited for
-// memory, jobs that ran alone, and estimates raised.
+// memory, jobs started ahead of one held for memory, jobs that ran alone,
+// and estimates raised.
 
 import { fork } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -267,7 +272,7 @@ export class Pool {
     this.renewing = 0;
     this.seq = 0;
     this.closed = false;
-    this.stats = { started: 0, recycled: 0, recycledBySize: 0, watchdogStops: 0, machineReruns: 0, outOfMemoryReruns: 0, admissionWaits: 0, aloneRuns: 0, estimatesRaised: 0 };
+    this.stats = { started: 0, recycled: 0, recycledBySize: 0, watchdogStops: 0, machineReruns: 0, outOfMemoryReruns: 0, admissionWaits: 0, admissionPasses: 0, aloneRuns: 0, estimatesRaised: 0 };
   }
 
   // The resident size above which a worker is replaced after its job.
@@ -309,12 +314,24 @@ export class Pool {
     });
   }
 
-  // Stops a worker that holds no job.
+  // Stops a worker that holds no job. Its place among the `size` workers is
+  // free once it has exited.
   stop(w) {
     this.live.delete(w);
     this.idle = this.idle.filter((x) => x !== w);
     this.stopping.add(w);
-    return w.kill().then(() => this.stopping.delete(w));
+    return w.kill().then(() => {
+      this.stopping.delete(w);
+      this.pump();
+    });
+  }
+
+  // The places among the `size` workers that are taken: every live worker,
+  // every worker stopped and not yet exited, and every worker being
+  // replaced. A new worker starts only in a free place, so no more than
+  // `size` worker processes exist at once.
+  places() {
+    return this.live.size + this.stopping.size + this.renewing;
   }
 
   runningCharge() {
@@ -331,68 +348,92 @@ export class Pool {
   admit({ estimate, alone = false, front = false, fresh = false, note = () => {} }) {
     if (this.closed) return Promise.reject(new Error('the pool is closed'));
     return new Promise((resolve, reject) => {
-      const q = { estimate, alone, fresh, note, resolve, reject, waited: false };
+      const q = { estimate, alone, fresh, rerun: front, note, resolve, reject, waited: false, passes: 0 };
       if (front) this.queue.unshift(q);
       else this.queue.push(q);
       this.pump();
     });
   }
 
-  // Starts the jobs at the head of the queue while they may start.
+  // Starts the waiting jobs that may start, in the order they asked. A job
+  // held for memory may be passed by later jobs that fit, each held job at
+  // most `size` times; then nothing passes it, the running jobs drain, and it
+  // starts (alone, if it alone exceeds the budget). A rerun is never passed.
   pump() {
-    while (this.queue.length && !this.closed) {
-      const q = this.queue[0];
-      if ([...this.running].some((s) => s.alone)) break;
-      if (q.alone && this.running.size) break;
-      // The idle worker whose resident size the job's charge covers best;
-      // none for a job that needs a fresh worker.
-      const w = q.fresh ? null : this.idle.reduce((a, x) => (a === null || x.footprint > a.footprint ? x : a), null);
-      // A new worker needs a place: fewer than `size` live, or an idle
-      // worker's, stopped for it.
-      const place = w === null && this.live.size + this.renewing >= this.size;
-      if (place && !(q.fresh && this.idle.length)) break;
-      const charge = q.alone ? Math.max(this.budget, q.estimate) : Math.max(q.estimate, w ? w.footprint : 0);
-      const running = this.runningCharge();
-      if (this.running.size && running + charge > this.budget) {
+    if (this.closed) return;
+    const held = [];
+    for (let k = 0; k < this.queue.length;) {
+      if ([...this.running].some((s) => s.alone)) return;
+      if (held.some((h) => h.rerun || h.passes >= this.size)) return;
+      const q = this.queue[k];
+      const r = this.start(q);
+      if (r === 'started') {
+        this.queue.splice(k, 1);
+        if (held.length) this.stats.admissionPasses++;
+        for (const h of held) h.passes++;
+      } else if (r === 'memory') {
         if (!q.waited) {
           q.waited = true;
           this.stats.admissionWaits++;
         }
-        break;
-      }
-      // Idle workers stopped, largest first, until the job fits, and at
-      // least one when a new worker needs its place.
-      const others = this.idle.filter((x) => x !== w).sort((a, b) => b.footprint - a.footprint);
-      let idleBytes = others.reduce((a, x) => a + x.footprint, 0);
-      let free = place ? 1 : 0;
-      for (const x of others) {
-        if (!free && running + idleBytes + charge <= this.budget) break;
-        this.stop(x);
-        idleBytes -= x.footprint;
-        free = 0;
-      }
-      this.queue.shift();
-      const slot = { charge, alone: q.alone || charge > this.budget, worker: null };
-      if (slot.alone) {
-        this.stats.aloneRuns++;
-        q.note(q.alone ? { event: 'running alone', budgetBytes: this.budget } : { event: 'machine short of memory', estimateBytes: q.estimate, budgetBytes: this.budget });
-      }
-      this.running.add(slot);
-      if (w) {
-        this.idle = this.idle.filter((x) => x !== w);
-        slot.worker = w;
-        q.resolve(slot);
+        held.push(q);
+        k++;
       } else {
-        this.spawn().then((x) => {
-          slot.worker = x;
-          q.resolve(slot);
-        }, (e) => {
-          this.running.delete(slot);
-          q.reject(e);
-          this.pump();
-        });
+        // No worker for it, or it waits to run alone: no later job starts.
+        return;
       }
     }
+  }
+
+  // Starts job q when it may start now, giving it a worker; else says why
+  // not: 'memory' (its charge does not fit beside the running jobs'),
+  // 'worker' (no idle worker and no free place for a new one) or 'alone' (it
+  // waits for the running jobs to end).
+  start(q) {
+    if (q.alone && this.running.size) return 'alone';
+    // The idle worker whose resident size the job's charge covers best;
+    // none for a job that needs a fresh worker.
+    const w = q.fresh ? null : this.idle.reduce((a, x) => (a === null || x.footprint > a.footprint ? x : a), null);
+    const place = w !== null || this.places() < this.size;
+    if (!place && !(q.fresh && this.idle.length)) return 'worker';
+    const charge = q.alone ? Math.max(this.budget, q.estimate) : Math.max(q.estimate, w ? w.footprint : 0);
+    const running = this.runningCharge();
+    if (this.running.size && running + charge > this.budget) return 'memory';
+    if (!place) {
+      // A fresh worker's place: an idle worker is stopped for it, and the
+      // job starts once that worker has exited.
+      if (!this.stopping.size) this.stop(this.idle.reduce((a, x) => (x.footprint > a.footprint ? x : a)));
+      return 'worker';
+    }
+    // Idle workers stopped, largest first, until the job fits.
+    const others = this.idle.filter((x) => x !== w).sort((a, b) => b.footprint - a.footprint);
+    let idleBytes = others.reduce((a, x) => a + x.footprint, 0);
+    for (const x of others) {
+      if (running + idleBytes + charge <= this.budget) break;
+      this.stop(x);
+      idleBytes -= x.footprint;
+    }
+    const slot = { charge, alone: q.alone || charge > this.budget, worker: null };
+    if (slot.alone) {
+      this.stats.aloneRuns++;
+      q.note(q.alone ? { event: 'running alone', budgetBytes: this.budget } : { event: 'machine short of memory', estimateBytes: q.estimate, budgetBytes: this.budget });
+    }
+    this.running.add(slot);
+    if (w) {
+      this.idle = this.idle.filter((x) => x !== w);
+      slot.worker = w;
+      q.resolve(slot);
+    } else {
+      this.spawn().then((x) => {
+        slot.worker = x;
+        q.resolve(slot);
+      }, (e) => {
+        this.running.delete(slot);
+        q.reject(e);
+        this.pump();
+      });
+    }
+    return 'started';
   }
 
   // Ends a slot without returning its worker to the pool: the worker is
@@ -437,10 +478,12 @@ export class Pool {
   // Replaces a slot's worker with a fresh one, keeping its admission and
   // its place among the `size` workers.
   async renew(slot) {
+    const old = slot.worker;
     this.renewing++;
+    this.live.delete(old);
     let fresh;
     try {
-      if (this.live.has(slot.worker)) await this.stop(slot.worker);
+      await old.kill();
       fresh = this.spawn();
     } finally {
       this.renewing--;
