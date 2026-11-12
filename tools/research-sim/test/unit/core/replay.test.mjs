@@ -71,13 +71,13 @@ test('the run directory is private and the records are JSON Lines', () => {
   }
 });
 
-test('run plans: the refocused arms, the same in both windows, 96 jobs per wallet at eleven libraries', () => {
+test('run plans: the refocused arms, the same in both windows, 98 jobs per wallet at twelve libraries', () => {
   for (const w of ['recent', 'peak']) {
     const plan = mergePlan(windowPlan(w));
     const one = (role, change, variant = 'default') => plan.find((e) => e.role === role && e.change === change && e.variant === variant);
     assert.ok(plan.every((e) => e.arm === 'observed'), 'every arm replays the observed state');
     // Per library: its own change under Q1, UnFrack.It's change under Q1 and Q2.
-    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1], ['mesh-rrri', 10], ['typhon-lp', 1], ['helios-sf', 1], ['cml-lf', 1], ['cml-ri', 10]]) {
+    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1], ['mesh-rrri', 10], ['typhon-lp', 1], ['helios-sf', 1], ['cml-lf', 1], ['cml-ri', 10], ['cometa-lf', 1]]) {
       assert.equal(one(role, 'default').repetitions, reps, role);
       assert.equal(one(role, 'layout').repetitions, reps, role);
       assert.deepEqual(one(role, 'default').hypotheses, ['Q1'], role);
@@ -89,15 +89,15 @@ test('run plans: the refocused arms, the same in both windows, 96 jobs per walle
     const off = one('h12', 'default', 'absorb-off');
     assert.deepEqual([on.absorb, off.absorb, on.repetitions, off.repetitions], [true, false, 1, 1]);
     assert.deepEqual([on.hypotheses, off.hypotheses], [['Q2'], ['Q2']]);
-    assert.equal(plan.length, 24);
-    // 96 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2.
+    assert.equal(plan.length, 26);
+    // 98 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 2.
     const jobs = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: false });
-    assert.equal(jobs.length, 96);
-    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'mesh-rrri': 20, 'typhon-lp': 2, 'helios-sf': 2, 'cml-lf': 2, 'cml-ri': 20, 'unfrackit-h12': 2 });
+    assert.equal(jobs.length, 98);
+    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'mesh-rrri': 20, 'typhon-lp': 2, 'helios-sf': 2, 'cml-lf': 2, 'cml-ri': 20, 'cometa-lf': 2, 'unfrackit-h12': 2 });
     assert.ok(jobs.every((j) => j.collateral === 'none-needed'));
     // One collateral rule: a script wallet's jobs run under it alone.
     const withScripts = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
-    assert.equal(withScripts.length, 96);
+    assert.equal(withScripts.length, 98);
     assert.ok(withScripts.every((j) => j.collateral === 'practice'));
     // Every tidy arm, control and variant is gone.
     assert.ok(!plan.some((e) => e.arm !== 'observed' || e.hypotheses.some((h) => !['Q1', 'Q2'].includes(h))));

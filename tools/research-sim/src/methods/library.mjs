@@ -80,6 +80,9 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   helios helios-sf: every part, through the library's operations; the parts
 //         its types cannot hold are not replayable (methods/helios.mjs)
 //   cml   cml-lf, cml-ri: every part (methods/cml.mjs, its replay path)
+//   cometa cometa-lf: every part, through the library's operations and types
+//         where they write it and on its transaction after the build
+//         otherwise (methods/cometa.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -90,7 +93,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   lucid: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   typhon: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   helios: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  cml: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  cml: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  cometa: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
