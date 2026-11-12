@@ -4,8 +4,9 @@
 // A run directory's lock: a file `lock` holding the process ID of the
 // invocation that writes the directory. A second invocation is refused while
 // that process lives; the lock of a process that has gone (a kill) is taken
-// over. The study takes one on its run directory (study/study.mjs) and a
-// replay stage on its own (out/stage.mjs).
+// over. The study takes one on its run directory (study/study.mjs), a
+// replay stage on its own (out/stage.mjs), and merge-stage on the stage it
+// merges into (out/merge.mjs).
 
 import { openSync, writeSync, closeSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,6 +18,18 @@ function alive(pid) {
   } catch (e) {
     return e.code === 'EPERM';
   }
+}
+
+// The process ID of a running process that holds dir's lock, or null; the
+// lock is not taken (merge-stage reads its sources this way).
+export function lockHolder(dir) {
+  let pid;
+  try {
+    pid = Number(readFileSync(join(dir, 'lock'), 'utf8').trim());
+  } catch {
+    return null;
+  }
+  return Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && alive(pid) ? pid : null;
 }
 
 // Takes dir's lock and returns the function that releases it. what: the

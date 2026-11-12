@@ -9,6 +9,11 @@
 //           [--collateral-rule ledger | practice] [--reps <n>]
 //           [--test-reps <n>] [--run-id <id>] [--workers <n>]
 //           [--analysis-freeze-tx <hash>] [--validity] [--machine <label>]
+//           [--shard <k>/<n> | --wallet-indexes <file>]
+//   plan-shards (--history <file or directory>... | --shapes <names|all>)
+//           --plan recent | peak | test [--collateral-rule ...] [--reps <n>]
+//           [--test-reps <n>] [--treatment <dir> [--treatment-pins <file>]]
+//           --machines <label>[=<speed>],... --out <dir>
 //   battery --treatment <dir> [--treatment-pins <file>]
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
@@ -28,7 +33,9 @@
 // directory is a stage (out/stage.mjs): each wallet's records a gzip segment
 // of their own, joined in wallet order at the end; the same command on the
 // same run ID resumes it at the wallets not done, and refuses when what
-// decides the records differs. No time limit
+// decides the records differs. --shard or --wallet-indexes runs one
+// machine's share of the wallets (replay/shards.mjs), which plan-shards
+// plans and merge-stage (out/merge.mjs) joins. No time limit
 // decides a result: every replay, answer and oracle call runs to completion,
 // under watchdogs that only make hung work run again (pool.mjs,
 // oracle/oracle.mjs). The worker counts change no record; a battery's run.json
@@ -40,7 +47,7 @@
 // checks) is refused, and --limit-ms, --answer-limit-ms and --oracle-limit-ms
 // are gone (options.mjs).
 
-import { readdirSync, statSync, readFileSync } from 'node:fs';
+import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { loadTreatment, DEFAULT_PINS } from '../treatment/bridge.mjs';
@@ -48,8 +55,9 @@ import { Pool, workerCount } from './pool.mjs';
 import { runReplays, runBatteries } from './run.mjs';
 import { windowPlan, testPlan, STUDY_ROLES, TEST_ROLES, batteryPlan } from '../arms/plan.mjs';
 import { RunOutput, recordsShapeName } from '../out/records.mjs';
-import { openStage, walletList, STAGE_LAYOUT } from '../out/stage.mjs';
-import { runDir } from '../history/paths.mjs';
+import { openStage, walletList, walletsSha256, writeAtomic, jsonText, STAGE_LAYOUT } from '../out/stage.mjs';
+import { checkSelection, selectionOf, machinesOf, walletFacts, packShards, COST_FORMULA, WALLET_INDEXES_FORMAT } from './shards.mjs';
+import { runDir, ensureDir } from '../history/paths.mjs';
 import { SHAPE_NAMES } from '../shapes/shapes.mjs';
 import { isHeavyName } from '../shapes/heavy.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
@@ -204,28 +212,90 @@ export function stageHeader(opts, T, { plan, entries }) {
   };
 }
 
-export async function cmdReplay(opts) {
+// A replay's plan from its options, checked before anything is loaded: the
+// plan's entries, the roles its selectors play and the collateral rules
+// (the one --collateral-rule names, or every rule for a test plan without
+// it).
+export function replayPlanOf(opts) {
   const plan = opts.plan;
   if (!['recent', 'peak', 'test'].includes(plan)) throw new Error('--plan recent | peak | test');
+  if (plan !== 'test' && !opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
+  if (plan === 'test' && opts.reps !== undefined) throw new Error('--reps is for the recent and peak plans; a test plan takes --test-reps');
+  const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
+  const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
+  return { plan, entries, roles, collateralRules: opts.collateralRule ? [opts.collateralRule] : null };
+}
+
+// The replay command. A shard (--shard or --wallet-indexes) runs only its
+// wallets not done and ends without the stage's join unless every wallet is
+// done in the directory; its printout gives `ended: false` and `shard`: the
+// selection, the done indexes as ranges, their count and how many remain.
+// A stage that has ended prints its totals and runs nothing (`endedEarlier`).
+export async function cmdReplay(opts) {
+  const { plan, entries, roles, collateralRules } = replayPlanOf(opts);
   const machine = machineLabel(opts.machine);
+  checkSelection(opts);
   const wallets = walletsOf(opts, { stream: 'synthetic' });
   const { T, pool, runId, threads } = await setup(opts, 'replay');
   let out = null;
   try {
     const first = loadSource(T, wallets[0].spec);
-    if (plan !== 'test' && !opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
-    if (plan === 'test' && opts.reps !== undefined) throw new Error('--reps is for the recent and peak plans; a test plan takes --test-reps');
-    const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
-    const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
-    out = await openStage(runDir(first.network, runId), { header: stageHeader(opts, T, { plan, entries }), wallets: walletList(wallets), machine, workers: threads.workers });
-    out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null });
-    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, ...(opts.collateralRule ? { collateralRules: [opts.collateralRule] } : {}) });
-    out.note({ event: 'end', totals, records: out.counts, workers: pool.stats });
-    return { print: { runId, dir: out.dir, totals, records: out.counts, workers: pool.stats }, failed: !!(totals.validity && totals.validity.failed) };
+    const list = walletList(wallets);
+    const selection = selectionOf(opts, { plan, wallets: list });
+    out = await openStage(runDir(first.network, runId), { header: stageHeader(opts, T, { plan, entries }), wallets: list, machine, workers: threads.workers, selection });
+    out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null, selection: selection ? selection.record : null });
+    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, ...(collateralRules ? { collateralRules } : {}) });
+    out.note({ event: 'end', ended: out.ended, totals, records: out.counts, workers: pool.stats });
+    const print = { runId, dir: out.dir, ended: out.ended, ...(out.earlier ? { endedEarlier: true } : {}), ...(out.progress ? { shard: { selection: selection.record, ...out.progress } } : {}), totals, records: out.counts, workers: pool.stats };
+    return { print, ended: out.ended, failed: !!(totals.validity && totals.validity.failed) };
   } finally {
     if (out) out.close();
     await pool.close();
   }
+}
+
+// plan-shards: one wallet index file per machine (replay/shards.mjs) for the
+// replay given the same wallets and plan, written to --out as
+// <label>.json. A file already there for the same machines gains or
+// replaces this plan's entry, so one file serves a study's two replay
+// stages; one planned for other machines is refused. The shapes need the
+// treatment, to build their streams; history files do not.
+export async function cmdPlanShards(opts) {
+  const { plan, entries, roles, collateralRules } = replayPlanOf(opts);
+  const machines = machinesOf(opts.machines);
+  if (typeof opts.out !== 'string' || !opts.out) throw new Error('--out <dir> names the directory the index files are written to');
+  const wallets = walletsOf(opts, { stream: 'synthetic' });
+  let T = null;
+  if (wallets.some((w) => w.spec.kind === 'shape')) {
+    if (!opts.treatment) throw new Error('--treatment <dir> loads the shapes, whose streams the estimate counts');
+    T = await loadTreatment(opts.treatment, readFileSync(pinsPathOf(opts), 'utf8'));
+  }
+  const list = walletList(wallets);
+  const sha = walletsSha256(list);
+  const facts = wallets.map((w) => walletFacts(T, w.spec, { entries, roles, collateralRules }));
+  const packed = packShards(facts.map((f) => f.cost), machines);
+  const total = packed.reduce((a, m) => a + m.cost, 0);
+  const ideal = total / machines.reduce((a, m) => a + m.speed, 0);
+  const dir = ensureDir(resolve(opts.out));
+  const files = packed.map((m) => {
+    const path = join(dir, `${m.label}.json`);
+    let file = { format: WALLET_INDEXES_FORMAT, machine: m.label, machines: machines.map(({ label, speed }) => ({ label, speed })), costFormula: COST_FORMULA, plans: {} };
+    if (existsSync(path)) {
+      let was = null;
+      try {
+        was = JSON.parse(readFileSync(path, 'utf8'));
+      } catch {
+        // refused below
+      }
+      if (!was || was.format !== WALLET_INDEXES_FORMAT || was.machine !== m.label || JSON.stringify(was.machines) !== JSON.stringify(file.machines) || !was.plans) throw new Error(`refusing: ${path} was planned for other machines or is not a wallet index file; remove it or write to another --out`);
+      file = { ...was, costFormula: COST_FORMULA };
+    }
+    const entry = { wallets: list.length, walletsSha256: sha, indexes: m.indexes, cost: m.cost, share: total ? m.cost / total : 0, balance: ideal ? m.time / ideal : 0 };
+    file.plans = { ...file.plans, [plan]: entry };
+    return { path, file, m, entry };
+  });
+  for (const f of files) writeAtomic(f.path, jsonText(f.file));
+  return { print: { command: 'plan-shards', plan, wallets: list.length, costFormula: COST_FORMULA, out: dir, machines: files.map(({ path, m, entry }) => ({ label: m.label, speed: m.speed, wallets: m.indexes.length, share: entry.share, balance: entry.balance, file: path })) } };
 }
 
 export async function cmdBattery(opts) {

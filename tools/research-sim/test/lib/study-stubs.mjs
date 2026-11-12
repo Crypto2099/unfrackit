@@ -16,8 +16,10 @@
 // refused records whose reason is made from the command, the stage, the
 // wallet, the record's number and the options that decide the records, and
 // the stage is joined at its end. It resumes as the replay command does, at
-// the wallets the stage has not done, and pushes each wallet it runs to
-// `ran` as [stage, wallet index].
+// the wallets the stage has not done, runs only its share when given
+// --shard or --wallet-indexes (src/replay/shards.mjs), ending without the
+// join while other wallets remain, prints nothing new for a stage that has
+// ended, and pushes each wallet it runs to `ran` as [stage, wallet index].
 //
 // The collateral stand-in also writes collateral.json, whose measurement
 // gives `share` (the share under 20 ADA; 0.75 when absent, null for a
@@ -34,6 +36,7 @@ import { runDir, historyDir, ensureDir, writePrivate, writeJson } from '../../sr
 import { refuseWallets } from '../../src/history/commands.mjs';
 import { walletsOf, recordOptions } from '../../src/replay/commands.mjs';
 import { openStage, walletList } from '../../src/out/stage.mjs';
+import { selectionOf } from '../../src/replay/shards.mjs';
 import { record } from '../../src/out/records.mjs';
 import { workerCount } from '../../src/replay/pool.mjs';
 
@@ -58,10 +61,12 @@ const hang = () => {
 async function stubReplay(opts, { net, stage, hangs, ran }) {
   const wallets = walletsOf(opts, { stream: 'synthetic' });
   const decided = normalized({ ...recordOptions(opts), runId: opts.runId });
-  const out = await openStage(runDir(net, opts.runId), { header: { command: 'replay', options: decided }, wallets: walletList(wallets), machine: opts.machine, workers: workerCount(opts.workers, '--workers') });
+  const list = walletList(wallets);
+  const selection = selectionOf(opts, { plan: opts.plan, wallets: list });
+  const out = await openStage(runDir(net, opts.runId), { header: { command: 'replay', options: decided }, wallets: list, machine: opts.machine, workers: workerCount(opts.workers, '--workers'), selection });
   try {
     for (const [wi, w] of wallets.entries()) {
-      if (out.isDone(wi)) continue;
+      if (!out.runs(wi)) continue;
       ran.push([stage, wi]);
       const wallet = w.spec.kind === 'shape' ? w.spec.name : Number(basename(w.spec.path).split('.')[0]);
       const key = { wallet, window: w.spec.kind === 'shape' ? 'synthetic' : opts.plan, arm: 'observed', variant: 'default', method: 'stub', change: 'default', collateral: 'none-needed', repetition: 1 };
@@ -73,7 +78,7 @@ async function stubReplay(opts, { net, stage, hangs, ran }) {
       await out.complete(wi, seg, { wallet, totals: { jobs: 1, refused: STUB_RECORDS, triggers: 0 }, start: new Date() });
     }
     const totals = await out.finish();
-    return { print: { command: 'replay', stage, totals, records: out.counts } };
+    return { print: { command: 'replay', stage, ended: out.ended, ...(out.progress ? { shard: out.progress } : {}), totals, records: out.counts }, ended: out.ended };
   } finally {
     out.close();
   }

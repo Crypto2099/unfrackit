@@ -55,7 +55,19 @@
 // decompress to the bytes it records is kept; any other index's files (a
 // temporary file, a segment with no done file, one whose bytes do not match)
 // are deleted and the wallet runs again, and the spool is removed. A stage
-// with no run.json starts empty.
+// with no run.json starts empty. A stage that has ended (its done.json names
+// this run.json and the wallet count, and both joined files have the
+// compressed sizes it records) is not opened again: the invocation runs
+// nothing, changes no segment and prints the totals done.json holds.
+//
+// Shards. An invocation may be given a selection of the wallet indexes
+// (--shard k/n or --wallet-indexes, replay/shards.mjs), recorded in its entry
+// in machines/<label>.json; the selection is not in run.json, so every shard
+// of a stage has the same compatibility key. It runs only its indexes not
+// done. Its end joins the segments when every index from 0 to N-1 is done in
+// the directory, as an unsharded stage's does; otherwise it ends without the
+// join, noting which indexes are done and how many remain. The segments of
+// several directories are joined by out/merge.mjs.
 
 import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, readdirSync, statSync, chmodSync, openSync, readSync, writeSync, closeSync, fsyncSync, createReadStream, createWriteStream, unlinkSync } from 'node:fs';
 import { join, basename } from 'node:path';
@@ -73,12 +85,12 @@ export const STAGE_LAYOUT = 'unfrackit-research-sim replay stage 1';
 export const GZIP_LEVEL = 6;
 const KINDS = ['records', 'timings'];
 const EMPTY_SHA256 = createHash('sha256').digest('hex');
-const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const canonical = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
-const jsonText = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2) + '\n';
+export const jsonText = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2) + '\n';
 
 // A file written whole under a temporary name, flushed to disk and renamed.
-function writeAtomic(path, text) {
+export function writeAtomic(path, text) {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, text, { mode: 0o600, flush: true });
   chmodSync(tmp, 0o600);
@@ -93,6 +105,22 @@ export function walletList(wallets) {
     if (spec.kind === 'shape') return { shape: spec.name };
     throw new Error(`unknown wallet source ${spec.kind}`);
   });
+}
+
+// The SHA-256 of the wallets.json a list of entries is written as.
+export const walletsSha256 = (list) => sha256(jsonText(list));
+
+// Indexes as ranges, `0-3,5,7-9`; `none` for an empty list.
+export function indexRanges(indexes) {
+  const xs = [...indexes].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < xs.length;) {
+    let j = i;
+    while (j + 1 < xs.length && xs[j + 1] === xs[j] + 1) j++;
+    out.push(j === i ? `${xs[i]}` : `${xs[i]}-${xs[j]}`);
+    i = j + 1;
+  }
+  return out.length ? out.join(',') : 'none';
 }
 
 // How two run.json differ, as names: an option by its flag, any other field
@@ -195,7 +223,7 @@ async function sliceDigests(path, sizes) {
 
 // The files' bytes, in order, into dst (a byte copy: gzip members stay as
 // they are), flushed to disk.
-function concatFiles(paths, dst) {
+export function concatFiles(paths, dst) {
   const fd = openSync(dst, 'w', 0o600);
   const buf = Buffer.allocUnsafe(4 << 20);
   try {
@@ -224,18 +252,111 @@ function addInto(to, from) {
   return to;
 }
 
+// A segment file's path in a segments directory: kind records, timings or done.
+export const segmentPath = (segments, i, kind) => join(segments, `${i}.${kind === 'done' ? 'done.json' : `${kind}.jsonl.gz`}`);
+
+// The done record of index i in a segments directory when its segment holds
+// what the done file says under the stage whose run.json has SHA-256
+// runSha256, else the reason it does not: the done file read, its index and
+// runSha256, both segment files present, each decompressing to the SHA-256
+// and byte count it records.
+export async function checkSegment(segments, i, runSha256) {
+  let d;
+  try {
+    d = JSON.parse(readFileSync(segmentPath(segments, i, 'done'), 'utf8'));
+  } catch {
+    return { reason: 'its done file cannot be read' };
+  }
+  if (!d || d.index !== i || d.runSha256 !== runSha256) return { reason: 'its done file belongs to another stage' };
+  for (const kind of KINDS) {
+    if (!existsSync(segmentPath(segments, i, kind))) return { reason: `its ${kind} file is missing` };
+    let got;
+    try {
+      got = await gunzipDigest(segmentPath(segments, i, kind));
+    } catch (e) {
+      return { reason: `its ${kind} file cannot be decompressed (${e.code || e.message})` };
+    }
+    if (!d[kind] || got.sha256 !== d[kind].sha256 || got.bytes !== d[kind].bytes) return { reason: `its ${kind} file's decompressed bytes differ from its done file's SHA-256` };
+  }
+  return { done: d };
+}
+
+// The stage's done.json when the stage in dir has ended under the run.json
+// whose SHA-256 is runSha256 with n wallets: done.json read, naming that
+// run.json and n wallets, and both joined files present at the compressed
+// sizes it records. Else null.
+export function endedRecord(dir, runSha256, n) {
+  let d;
+  try {
+    d = JSON.parse(readFileSync(join(dir, 'done.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!d || d.runSha256 !== runSha256 || d.wallets !== n) return null;
+  for (const kind of KINDS) {
+    const p = join(dir, `${kind}.jsonl.gz`);
+    if (!d[kind] || !existsSync(p) || statSync(p).size !== d[kind].gzipBytes) return null;
+  }
+  return d;
+}
+
+// The totals and counts of done records summed: { totals: { wallets, ... },
+// counts }.
+export function sumDone(dones) {
+  const totals = { wallets: dones.length };
+  const counts = {};
+  for (const d of dones) {
+    addInto(totals, d.totals);
+    addInto(counts, d.counts);
+  }
+  return { totals, counts };
+}
+
+// The stage's end in dir: the segments of every index, in index order (dones:
+// each index's done record), joined into records.jsonl.gz and
+// timings.jsonl.gz, the joined streams decompressed and cut at the segments'
+// byte counts giving each segment's SHA-256, and done.json written last with
+// the totals and counts summed from the done records. A joined stream that
+// does not give its segments' bytes is removed and the end throws, before
+// done.json. Returns { totals, counts, records } (records: the joined
+// records stream's SHA-256, bytes, lines and compressed size).
+export async function joinStage(dir, { runSha256, dones, label }) {
+  const segments = join(dir, 'segments');
+  const joined = {};
+  for (const kind of KINDS) {
+    const dst = join(dir, `${kind}.jsonl.gz`);
+    const tmp = `${dst}.tmp`;
+    concatFiles(dones.map((_d, i) => segmentPath(segments, i, kind)), tmp);
+    const got = await sliceDigests(tmp, dones.map((d) => d[kind].bytes));
+    const bad = got.parts.findIndex((h, i) => h !== dones[i][kind].sha256);
+    if (got.short || got.over || bad !== -1) {
+      unlinkSync(tmp);
+      throw new Error(`the joined ${kind} stream does not decompress to the segments' bytes${bad !== -1 ? `: segment ${bad} differs` : got.short ? ': it ends early' : ': it runs past the last segment'}`);
+    }
+    joined[kind] = { tmp, dst, digest: { sha256: got.sha256, bytes: got.bytes, lines: got.lines, gzipBytes: statSync(tmp).size } };
+  }
+  for (const kind of KINDS) renameSync(joined[kind].tmp, joined[kind].dst);
+  const { totals, counts } = sumDone(dones);
+  writeAtomic(join(dir, 'done.json'), jsonText({ runSha256, wallets: dones.length, records: joined.records.digest, timings: joined.timings.digest, counts, totals, machine: label, end: new Date().toISOString() }));
+  return { totals, counts, records: joined.records.digest };
+}
+
 // Opens a replay stage in dir, resuming it when its run.json matches.
 // header: run.json's fields but walletsSha256; wallets: wallets.json's
 // entries (walletList); machine: the label (--machine, `local` when absent);
-// workers: this invocation's worker count. Throws, before changing anything,
-// when the stage is locked by a running process or was started under another
+// workers: this invocation's worker count; selection: null for every wallet,
+// or this invocation's share, { indexes (each below the wallet count),
+// record (what machines/<label>.json records of it) }
+// (replay/shards.mjs selectionOf). Throws, before changing anything, when
+// the stage is locked by a running process or was started under another
 // run.json.
-export async function openStage(dir, { header, wallets, machine, workers = null }) {
+export async function openStage(dir, { header, wallets, machine, workers = null, selection = null }) {
   const label = machineLabel(machine);
+  if (selection && !(Array.isArray(selection.indexes) && selection.indexes.every((i) => Number.isSafeInteger(i) && i >= 0 && i < wallets.length))) throw new Error(`a selection's indexes are wallet indexes below ${wallets.length}`);
   ensureDir(dir);
   const unlock = takeLock(dir, { what: 'replay stage' });
   try {
-    const stage = new ReplayStage(dir, { header, wallets, label, workers, unlock });
+    const stage = new ReplayStage(dir, { header, wallets, label, workers, unlock, selection });
     await stage.resume();
     return stage;
   } catch (e) {
@@ -245,11 +366,16 @@ export async function openStage(dir, { header, wallets, machine, workers = null 
 }
 
 export class ReplayStage {
-  constructor(dir, { header, wallets, label, workers, unlock }) {
+  constructor(dir, { header, wallets, label, workers, unlock, selection = null }) {
     this.dir = dir;
     this.label = label;
     this.unlock = unlock;
     this.n = wallets.length;
+    this.mine = selection ? new Set(selection.indexes) : null;
+    // Set by finish(): whether the stage ended, and, when a shard ends
+    // without the join, { done, remaining }.
+    this.ended = false;
+    this.progress = null;
     this.segments = join(dir, 'segments');
     this.spool = join(dir, 'spool');
     const walletsText = jsonText(wallets);
@@ -268,6 +394,8 @@ export class ReplayStage {
       writeAtomic(runPath, runText);
     }
     this.runSha256 = sha256(readFileSync(runPath));
+    // A stage that has ended is not opened again.
+    this.earlier = this.resumed ? endedRecord(dir, this.runSha256, this.n) : null;
     this.done = new Array(this.n).fill(null);
     this.counts = {};
     ensureDir(this.segments);
@@ -280,7 +408,7 @@ export class ReplayStage {
     } catch {
       // the first invocation under this label, or a file a kill cut short
     }
-    this.invocation = { start: new Date().toISOString(), end: null, finished: false, workers, completed: [], ...machineFacts() };
+    this.invocation = { start: new Date().toISOString(), end: null, finished: false, workers, selection: selection ? selection.record : null, completed: [], ...machineFacts() };
     this.invocations = [...invocations, this.invocation];
     this.saveMachine();
   }
@@ -294,35 +422,23 @@ export class ReplayStage {
   }
 
   path(i, kind) {
-    return join(this.segments, `${i}.${kind === 'done' ? 'done.json' : `${kind}.jsonl.gz`}`);
+    return segmentPath(this.segments, i, kind);
   }
 
   // The done record of index i when its segment holds what it says, else
   // the reason it does not.
-  async check(i) {
-    let d;
-    try {
-      d = JSON.parse(readFileSync(this.path(i, 'done'), 'utf8'));
-    } catch {
-      return { reason: 'its done file cannot be read' };
-    }
-    if (d.index !== i || d.runSha256 !== this.runSha256) return { reason: 'its done file belongs to another stage' };
-    for (const kind of KINDS) {
-      if (!existsSync(this.path(i, kind))) return { reason: `its ${kind} file is missing` };
-      let got;
-      try {
-        got = await gunzipDigest(this.path(i, kind));
-      } catch (e) {
-        return { reason: `its ${kind} file cannot be decompressed (${e.code || e.message})` };
-      }
-      if (!d[kind] || got.sha256 !== d[kind].sha256 || got.bytes !== d[kind].bytes) return { reason: `its ${kind} file's decompressed bytes differ from its done file's SHA-256` };
-    }
-    return { done: d };
+  check(i) {
+    return checkSegment(this.segments, i, this.runSha256);
   }
 
   // Keeps every index whose segment holds what its done file says; deletes
-  // every other file of the segments directory and the spool.
+  // every other file of the segments directory and the spool. A stage that
+  // has ended is left as it is.
   async resume() {
+    if (this.earlier) {
+      this.note({ event: 'stage-ended-earlier', machine: this.label, workers: this.invocation.workers, wallets: this.n });
+      return;
+    }
     const name = /^(0|[1-9]\d*)\.(records\.jsonl\.gz|timings\.jsonl\.gz|done\.json)$/;
     const indexOf = (f) => {
       const m = /^(0|[1-9]\d*)(\.|$)/.exec(f);
@@ -357,7 +473,13 @@ export class ReplayStage {
   }
 
   isDone(i) {
-    return this.done[i] !== null;
+    return this.earlier !== null || this.done[i] !== null;
+  }
+
+  // Whether this invocation runs wallet i: one it was given (every wallet
+  // when it was given no selection) and not done.
+  runs(i) {
+    return !this.isDone(i) && (this.mine === null || this.mine.has(i));
   }
 
   // Wallet i's records, written in its spool directory until complete().
@@ -396,36 +518,36 @@ export class ReplayStage {
   // and cut at the segments' byte counts must give each segment's SHA-256,
   // and done.json records the joined streams and the totals and counts
   // summed from the segments' done files. The segments are kept. Returns the
-  // totals: { wallets, ...the wallets' totals summed }.
+  // totals: { wallets, ...the wallets' totals summed }. A stage that had
+  // ended returns done.json's totals and counts. A shard (an invocation
+  // given a selection) whose directory lacks an index ends without the join:
+  // it returns the done wallets' totals summed ({ wallets: the number done,
+  // ... }) and sets progress to { done: the done indexes as ranges, count,
+  // remaining: the number of indexes not done }.
   async finish() {
+    if (this.earlier) {
+      this.counts = this.earlier.counts;
+      this.ended = true;
+      this.invocation.finished = true;
+      return this.earlier.totals;
+    }
     const missing = [];
     for (let i = 0; i < this.n; i++) if (!this.isDone(i)) missing.push(i);
-    if (missing.length) throw new Error(`refusing: the stage's end needs every wallet's segment; ${missing.length} of ${this.n} have none, the first index ${missing[0]}`);
+    if (missing.length && this.mine === null) throw new Error(`refusing: the stage's end needs every wallet's segment; ${missing.length} of ${this.n} have none, the first index ${missing[0]}`);
     rmSync(this.spool, { recursive: true, force: true });
-    const joined = {};
-    for (const kind of KINDS) {
-      const dst = join(this.dir, `${kind}.jsonl.gz`);
-      const tmp = `${dst}.tmp`;
-      concatFiles(this.done.map((_d, i) => this.path(i, kind)), tmp);
-      const got = await sliceDigests(tmp, this.done.map((d) => d[kind].bytes));
-      const bad = got.parts.findIndex((h, i) => h !== this.done[i][kind].sha256);
-      if (got.short || got.over || bad !== -1) {
-        unlinkSync(tmp);
-        throw new Error(`the joined ${kind} stream does not decompress to the segments' bytes${bad !== -1 ? `: segment ${bad} differs` : got.short ? ': it ends early' : ': it runs past the last segment'}`);
-      }
-      renameSync(tmp, dst);
-      joined[kind] = { sha256: got.sha256, bytes: got.bytes, lines: got.lines, gzipBytes: statSync(dst).size };
+    if (missing.length) {
+      const dones = this.done.filter(Boolean);
+      const { totals, counts } = sumDone(dones);
+      this.counts = counts;
+      this.progress = { done: indexRanges(this.done.flatMap((d, i) => (d ? [i] : []))), count: dones.length, remaining: missing.length };
+      this.note({ event: 'stage-part', ...this.progress, totals });
+      return totals;
     }
-    const totals = { wallets: this.n };
-    const counts = {};
-    for (const d of this.done) {
-      addInto(totals, d.totals);
-      addInto(counts, d.counts);
-    }
-    writeAtomic(join(this.dir, 'done.json'), jsonText({ runSha256: this.runSha256, wallets: this.n, records: joined.records, timings: joined.timings, counts, totals, machine: this.label, end: new Date().toISOString() }));
+    const { totals, counts, records } = await joinStage(this.dir, { runSha256: this.runSha256, dones: this.done, label: this.label });
     this.counts = counts;
+    this.ended = true;
     this.invocation.finished = true;
-    this.note({ event: 'stage-end', records: joined.records, totals });
+    this.note({ event: 'stage-end', records, totals });
     return totals;
   }
 

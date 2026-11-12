@@ -127,15 +127,16 @@ const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent
 // entries; roles: role -> method name (a test plan's entries name role
 // 'test'); out: the stage (out/stage.mjs openStage) over the same wallets;
 // watchdogMs: the replay watchdog (the pool's default when absent). A wallet
-// the stage has done is skipped. The jobs' spools are under
+// the stage has done is skipped, and so is one outside the invocation's
+// share of the wallets (out/stage.mjs runs). The jobs' spools are under
 // out.dir/spool/<wallet index>/, removed when the run ends. Returns the
-// stage's totals, every wallet's summed: { wallets, jobs, refused, triggers }
-// and, with validity, their validity counts.
+// stage's totals, every done wallet's summed: { wallets, jobs, refused,
+// triggers } and, with validity, their validity counts.
 export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false }) {
   if (wallets.length !== out.n) throw new Error(`the stage lists ${out.n} wallets, not the ${wallets.length} given`);
   try {
     for (const [wi, w] of wallets.entries()) {
-      if (out.isDone(wi)) continue;
+      if (!out.runs(wi)) continue;
       const start = new Date();
       const source = loadSource(T, w.spec);
       if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });

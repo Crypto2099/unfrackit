@@ -20,7 +20,7 @@ const WALLET_VALUES = ['wallets'];
 
 // What the study takes by use (study/study.mjs studyOptions refuses, per plan,
 // an option the plan does not use). The lists are the union of the plans.
-export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'machine']);
+export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'reps', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
 export const STUDY_DATABASE = Object.freeze(['expectNetwork', 'snapshot', 'extractionRun', 'wallets', 'wallet', 'fromStudy', 'analysisFreezeTx', 'bytes', 'immutableDir', 'immutableHost', 'set']);
 export const STUDY_PLAN_OPTIONS = Object.freeze({
   synthetic: Object.freeze([...STUDY_COMMON, 'shapes', 'collateralRule']),
@@ -33,11 +33,13 @@ export const STUDY_PLAN_OPTIONS = Object.freeze({
 export const LIVE_FIRE_RUN_OPTIONS = Object.freeze(['runId', 'extractionRun', 'purpose', 'expectNetwork', 'treatment', 'treatmentPins', 'workers', 'oracleWorkers', 'bytes', 'immutableDir', 'immutableHost', 'keepForDebug']);
 export const LIVE_FIRE_CLEANUP_OPTIONS = Object.freeze(['cleanup', 'runId', 'network']);
 
-// The options that say how a run uses the machine, never what it computes:
-// they change no record, so run.json keeps them apart from the options and a
-// study or a replay stage resumes with other values (study/study.mjs,
-// out/stage.mjs).
-export const MACHINE_OPTIONS = Object.freeze(['workers', 'oracleWorkers', 'machine']);
+// The options that say how a run uses the machine or which part of the work
+// an invocation does, never what it computes: the worker counts, the machine
+// label, a replay's share of the wallets (--shard, --wallet-indexes) and the
+// stage a study stops before. They change no record, so run.json keeps them
+// apart from the options and a study or a replay stage resumes with other
+// values (study/study.mjs, out/stage.mjs).
+export const MACHINE_OPTIONS = Object.freeze(['workers', 'oracleWorkers', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
 
 // The options that say where a replay's inputs and output are on this
 // machine: the run ID, the treatment directory and pins file, the history
@@ -56,6 +58,19 @@ export function machineLabel(v) {
   return v;
 }
 
+// A replay's shard (--shard k/n): the wallets whose index modulo n is k, with
+// 0 <= k < n. Returns { k, n }; throws naming the rule.
+export const SHARD_RULE = '--shard takes k/n, the wallets whose index modulo n is k, with 0 <= k < n';
+export function shardOf(v) {
+  const m = typeof v === 'string' ? /^(0|[1-9]\d{0,8})\/(0|[1-9]\d{0,8})$/.exec(v) : null;
+  if (!m) throw new Error(`${SHARD_RULE}, not ${JSON.stringify(v)}`);
+  const k = Number(m[1]);
+  const n = Number(m[2]);
+  if (n === 0) throw new Error(`${SHARD_RULE}: n is at least 1, not 0 in ${v}`);
+  if (k >= n) throw new Error(`${SHARD_RULE}: k is below n, not ${k} in ${v}`);
+  return { k, n };
+}
+
 // Options an earlier version took, refused by name wherever they appear.
 export const ORACLE_LIMIT_MS_GONE = 'refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets and maxProgramWork), and a call runs to completion';
 export const LIMIT_MS_GONE = 'refusing: --limit-ms is gone: no time limit decides a result; every replay runs to completion, and a watchdog only makes one that hangs run again';
@@ -65,7 +80,8 @@ const RETIRED = Object.freeze({ oracleLimitMs: ORACLE_LIMIT_MS_GONE, limitMs: LI
 const unique = (...lists) => [...new Set(lists.flat())];
 
 // Per command: `flags` take no value, `values` take one, `repeat` take one and
-// may be given more than once. A name appears in one list only.
+// may be given more than once; `positional` commands also take words that are
+// not options, in `_`. A name appears in one list only.
 export const COMMAND_OPTIONS = Object.freeze({
   hash: { flags: [], values: [], repeat: [] },
   help: { flags: [], values: [], repeat: [] },
@@ -74,7 +90,9 @@ export const COMMAND_OPTIONS = Object.freeze({
   'near-cap': { flags: ['fromStudy', 'allWallets'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   collateral: { flags: ['explain'], values: [...CONTEXT_VALUES, 'runId', 'days', 'batch'], repeat: ['set'] },
   'battery-pools': { flags: [], values: ['runId', 'network', 'historyRun'], repeat: [] },
-  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule', 'machine'], repeat: ['history'] },
+  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule', 'machine', 'shard', 'walletIndexes'], repeat: ['history'] },
+  'plan-shards': { flags: [], values: ['treatment', 'treatmentPins', 'plan', 'shapes', 'testReps', 'reps', 'collateralRule', 'machines', 'out'], repeat: ['history'] },
+  'merge-stage': { flags: [], values: ['into', 'machine'], repeat: [], positional: true },
   battery: { flags: ['oracle', 'validity'], values: ['treatment', 'treatmentPins', 'workers', 'runId', 'shapes', 'analysisFreezeTx', 'methods', 'reps', 'pools', 'oracleSettings', 'oracleWorkers'], repeat: ['history'] },
   fidelity: { flags: [], values: ['treatment', 'treatmentPins', 'analysisFreezeTx', 'runId'], repeat: ['history'] },
   study: {
@@ -96,7 +114,7 @@ const CLOSED = Object.freeze({
   fromStudy: { '*': FROM_STUDY },
   methods: { '*': ['study', 'test'] },
   bytes: { '*': BYTES },
-  plan: { replay: ['recent', 'peak', 'test'], study: ['synthetic', 'preprod', 'corpus'] },
+  plan: { replay: ['recent', 'peak', 'test'], 'plan-shards': ['recent', 'peak', 'test'], study: ['synthetic', 'preprod', 'corpus'] },
   collateralRule: { '*': ['ledger', 'practice'] }
 });
 const WINDOW = /^(recent|peak|snapshot|blocks:\d+-\d+)$/;
@@ -136,6 +154,13 @@ function checkValue(key, v, command) {
   if (key === 'window' && !WINDOW.test(v)) throw new Error(`${flagOf(key)} takes recent | peak | snapshot | blocks:<first id>-<last id>, not ${JSON.stringify(v)} for ${command}`);
   if (WHOLE.includes(key) && !(/^[1-9]\d*$/.test(v) && Number.isSafeInteger(Number(v)))) throw new Error(`${flagOf(key)} takes a positive whole number, not ${JSON.stringify(v)} for ${command}`);
   if (key === 'machine' && !MACHINE_LABEL.test(v)) throw new Error(`${MACHINE_LABEL_RULE}, not ${JSON.stringify(v)} for ${command}`);
+  if (key === 'shard') {
+    try {
+      shardOf(v);
+    } catch (e) {
+      throw new Error(`${e.message} for ${command}`);
+    }
+  }
 }
 
 // Reads a command line against the options of `command`. The result is
@@ -152,7 +177,13 @@ export function parseArgs(argv, command) {
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (!a.startsWith('--')) throw new Error(`unexpected argument ${JSON.stringify(a)} for ${command}; options start with --, and a flag takes no value`);
+    if (!a.startsWith('--')) {
+      if (spec.positional) {
+        opts._.push(a);
+        continue;
+      }
+      throw new Error(`unexpected argument ${JSON.stringify(a)} for ${command}; options start with --, and a flag takes no value`);
+    }
     const name = a.slice(2);
     const key = camelOf(name);
     if (Object.hasOwn(RETIRED, key)) throw new Error(RETIRED[key]);

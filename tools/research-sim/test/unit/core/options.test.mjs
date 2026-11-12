@@ -28,6 +28,7 @@ function sample(key, command) {
   if (key === 'window') return 'blocks:10-20';
   if (['workers', 'oracleWorkers', 'reps', 'testReps', 'days', 'batch'].includes(key)) return '3';
   if (key === 'collateralRule') return 'ledger';
+  if (key === 'shard') return '1/3';
   return 'x';
 }
 const argvOf = (key, command, spec) => (spec.flags.includes(key) ? [flagOf(key)] : [flagOf(key), sample(key, command)]);

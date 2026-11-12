@@ -8,7 +8,8 @@
 import { formatHashList } from './hash.mjs';
 import { parseArgs, cmdHistory } from './history/commands.mjs';
 import { cmdCensus, cmdNearCap, cmdCollateral, cmdBatteryPools } from './history/reports.mjs';
-import { cmdReplay, cmdBattery } from './replay/commands.mjs';
+import { cmdReplay, cmdBattery, cmdPlanShards } from './replay/commands.mjs';
+import { cmdMergeStage } from './out/merge.mjs';
 import { cmdFidelity } from './fidelity/fidelity.mjs';
 import { cmdStudy } from './study/study.mjs';
 import { cmdLiveFire } from './study/live-fire.mjs';
@@ -21,6 +22,8 @@ const COMMANDS = {
   collateral: async (o) => report(await cmdCollateral(o)),
   'battery-pools': async (o) => report(await cmdBatteryPools(o)),
   replay: async (o) => report(await cmdReplay(o)),
+  'plan-shards': async (o) => report(await cmdPlanShards(o)),
+  'merge-stage': async (o) => report(await cmdMergeStage(o)),
   battery: async (o) => report(await cmdBattery(o)),
   fidelity: async (o) => report(await cmdFidelity(o)),
   study: async (o) => report(await cmdStudy(o)),
@@ -37,6 +40,8 @@ const HELP = `research-sim <command> [options]
   collateral       the collateral measurement over the recent window
   battery-pools    the T1 amounts and T5 shares of a run's history files
   replay           a run plan's arms replayed over history files or the shapes' synthetic streams
+  plan-shards      a replay's wallets split between machines: one wallet index file per machine
+  merge-stage      the shards of one replay stage, written on several machines, joined into one stage
   battery          the standard and H-10 batteries at the snapshot over snapshot files or the shapes
   fidelity         observed spends that run no script rebuilt by the ledger kit, their minimum fees against the observed ones
   study            the study's run: a plan's stages in order under one run id, resumable

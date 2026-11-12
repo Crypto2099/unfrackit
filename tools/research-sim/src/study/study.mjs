@@ -42,11 +42,30 @@
 // whose measurement found no such transaction is refused there. In the
 // synthetic plan the rule is --collateral-rule, recorded the same way.
 // Repetitions of a library that picks at random (--reps, 10 when absent),
-// workers (--workers) and the machine label (--machine) pass to the replay
-// stages, with validity checks on every job; --analysis-freeze-tx to history
-// and replay. An option the plan does not use is refused, and so is a worker
-// count that is not a positive whole number or a machine label that is not
-// letters, digits, - and _, before any stage starts.
+// workers (--workers), the machine label (--machine) and a machine's share
+// of the wallets (--shard or --wallet-indexes) pass to the replay stages,
+// with validity checks on every job; --analysis-freeze-tx to history and
+// replay. An option the plan does not use is refused, and so is a worker
+// count that is not a positive whole number, a machine label that is not
+// letters, digits, - and _, a shard that is not k/n with 0 <= k < n, both
+// forms of share, and a --stop-before that names no stage of the plan,
+// before any stage starts.
+//
+// Split across machines. --stop-before <stage> ends the invocation before
+// that stage, so the machine that reaches the database runs the stages
+// before the replays and stops (--stop-before replay-recent). Each of the
+// other stages' end entries records its outputs: the count, bytes and a
+// SHA-256 over every file of its directory (outputsDigest). The run's
+// directory is copied to each machine, which runs the study with its share
+// (--shard or --wallet-indexes) under its own --machine label. A sharded
+// invocation runs only the replay stages: it is refused, before anything is
+// written, unless every other stage of the plan has ended in the log and
+// its directory holds the outputs its end recorded. A replay stage that a
+// shard leaves unfinished is logged as `stage-part`, not ended. Once
+// merge-stage has joined a replay stage's shards into this machine's
+// directory, the stage has ended (its done.json is valid, out/stage.mjs),
+// and the study run again, unsharded, logs its end without running a
+// wallet.
 //
 // Layout, under the private root (history/paths.mjs):
 //   <network>/<id>/study.json   the header: plan, network, stages, options
@@ -59,10 +78,13 @@
 //                               not compared on resume)
 //   <network>/<id>/log.jsonl    the study's log, appended: each invocation's
 //                               start or resume with its worker count, machine
-//                               label and machine (out/host.mjs), each stage's
-//                               start
-//                               and its end (with the stage's printout) or
-//                               error, skipped stages, the end
+//                               label, share of the wallets, stop stage and
+//                               machine (out/host.mjs), each stage's start
+//                               and its end (with the stage's printout, and
+//                               for a stage that is not a replay its outputs'
+//                               digest), part (a shard's share done) or
+//                               error, skipped stages, a stop, the end (with
+//                               the stages not ended)
 //   <network>/<id>/<stage>/     the stage's own run directory, written by its
 //                               command under run id <id>/<stage>
 //   <network>/<id>/lock         the PID of the invocation running it
@@ -71,8 +93,10 @@
 // Resume: running the same plan and run id again resumes it. The header must
 // equal the first start's in plan, network, stages, options (paths made
 // absolute), input files and code manifest, or the run is refused. The worker
-// count (--workers) and the machine label (--machine) are not compared: they
-// change no record, so a resume may use others, on this machine or another. A
+// count (--workers), the machine label (--machine), the share of the wallets
+// and the stop stage are not compared: they change no record, so a resume
+// may use others, on this machine or another. The paths the options name
+// are compared, so on another machine they are the same absolute paths. A
 // stage whose end entry is in the log is skipped. A replay stage that has not
 // ended resumes at the wallets it has not done (out/stage.mjs), its done
 // wallets' segments kept. Any other stage is rerun from its start: its
@@ -95,7 +119,7 @@ import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
 import { pickCollateralRule } from '../history/reports.mjs';
-import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel } from '../options.mjs';
+import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel, shardOf } from '../options.mjs';
 import { workerCount } from '../replay/pool.mjs';
 import { machineRecord } from '../out/host.mjs';
 import { takeLock } from '../out/lock.mjs';
@@ -147,9 +171,16 @@ export function studyOptions(opts) {
   try {
     workerCount(o.workers, '--workers');
     machineLabel(o.machine);
+    if (o.shard !== undefined) shardOf(o.shard);
   } catch (e) {
     throw new Refusal(`refusing: ${e.message}`);
   }
+  if (o.shard !== undefined && o.walletIndexes !== undefined) throw new Refusal('refusing: give --shard or --wallet-indexes, not both');
+  if (o.walletIndexes !== undefined) {
+    if (typeof o.walletIndexes !== 'string' || !o.walletIndexes) throw new Refusal('refusing: --wallet-indexes <file> names the index file plan-shards wrote for this machine');
+    o.walletIndexes = resolve(o.walletIndexes);
+  }
+  if (o.stopBefore !== undefined && !PLANS[plan].includes(o.stopBefore)) throw new Refusal(`refusing: --stop-before takes a stage of the ${plan} plan: ${PLANS[plan].join(', ')}`);
   for (const k of PATHS) {
     if (o[k] === undefined) continue;
     if (typeof o[k] !== 'string') throw new Refusal(`refusing: ${flag(k)} takes one path`);
@@ -203,6 +234,45 @@ export function collateralPick(network, runId) {
   const rule = pickCollateralRule(r.result.shareUnder20Ada);
   if (rule === null) throw new Refusal('refusing: the collateral measurement found no script-executing transaction in the recent window with all collateral inputs at key addresses, so it picks no rule; the replays need one');
   return { rule, source: COLLATERAL_SOURCE, shareUnder20Ada: r.result.shareUnder20Ada, measured: r.result.measured };
+}
+
+// Every file under dir, as the stage's end records it: the count, the bytes
+// and the SHA-256 of one line per file, `<path>\t<bytes>\t<SHA-256>\n`, in
+// the order of the paths (relative to dir, sorted per directory).
+export function outputsDigest(dir) {
+  const lines = [];
+  let bytes = 0;
+  const walk = (d, rel) => {
+    if (!existsSync(d)) return;
+    for (const f of readdirSync(d).sort()) {
+      const p = join(d, f);
+      const r = rel ? `${rel}/${f}` : f;
+      if (statSync(p).isDirectory()) walk(p, r);
+      else {
+        const b = readFileSync(p);
+        bytes += b.length;
+        lines.push(`${r}\t${b.length}\t${sha256(b)}\n`);
+      }
+    }
+  };
+  walk(dir, '');
+  return { files: lines.length, bytes, sha256: sha256(lines.join('')) };
+}
+
+// A sharded invocation runs only the replay stages: every other stage of the
+// plan must have ended in the log (done: stage -> its end entry), and its
+// directory must hold the outputs its end recorded. A Refusal otherwise.
+function checkEarlierStages(stages, done, network, runId) {
+  const earlier = stages.filter((s) => STAGE_COMMAND[s] !== 'replay');
+  const missing = earlier.filter((s) => !done.has(s));
+  if (missing.length) throw new Refusal(`refusing: a sharded study runs only its replay stages, and ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} not ended in this run's log; run the stages before the replays where the database is reachable (--stop-before replay-recent) and copy the run's directory to this machine`);
+  for (const s of earlier) {
+    const rec = done.get(s).outputs;
+    if (!rec) throw new Refusal(`refusing: the log records no digest of stage ${s}'s outputs, so a sharded study cannot check them; run the stages before the replays again`);
+    const dir = runDir(network, `${runId}/${s}`);
+    const now = outputsDigest(dir);
+    if (now.sha256 !== rec.sha256) throw new Refusal(`refusing: stage ${s}'s outputs in ${dir} differ from those its end recorded (${rec.files} files of ${rec.bytes} bytes recorded, ${now.files} files of ${now.bytes} bytes there); copy the stage's directory again from the machine that ran it`);
+  }
 }
 
 const withoutMachine = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !MACHINE_OPTIONS.includes(k)));
@@ -317,7 +387,7 @@ export function stageOptions(stage, o, network, { collateralRule = o.collateralR
   const db = pick(o, ['expectNetwork', 'snapshot', 'extractionRun', 'bytes', 'immutableDir', 'immutableHost']);
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
-  const replayOpts = { ...pick(o, ['reps', 'workers', 'machine']), validity: true };
+  const replayOpts = { ...pick(o, ['reps', 'workers', 'machine', 'shard', 'walletIndexes']), validity: true };
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':
@@ -356,19 +426,26 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     const diff = headerDifferences(was, header);
     if (diff.length) throw new Refusal(`refusing: study run ${o.runId} differs from its first start in ${diff.join(', ')}; resume it with the same options, input files and code, or start a new run id`);
   }
+  const logPath = join(dir, 'log.jsonl');
+  const ended = (entries) => new Map(entries.filter((e) => e.event === 'stage-end').map((e) => [e.stage, e]));
+  const sharded = o.shard !== undefined || o.walletIndexes !== undefined;
+  if (sharded) checkEarlierStages(header.stages, ended(StudyLog.entries(logPath)), header.network, o.runId);
   ensureDir(dir);
   const unlock = takeLock(dir, { what: 'study run', refuse: (m) => new Refusal(m) });
   const t0 = performance.now();
   try {
     if (!resuming) writeJson(headerPath, header);
-    const logPath = join(dir, 'log.jsonl');
-    const done = new Map();
-    for (const e of StudyLog.entries(logPath)) if (e.event === 'stage-end') done.set(e.stage, e);
+    const done = ended(StudyLog.entries(logPath));
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0 }) });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0 }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {
+      if (stage === o.stopBefore) {
+        log.note({ event: 'stop', before: stage });
+        say(`study ${o.runId}: stopped before ${stage}`);
+        break;
+      }
       if (done.has(stage)) {
         const e = done.get(stage);
         log.note({ event: 'stage-skipped', stage });
@@ -416,13 +493,24 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
       const print = r && r.print !== undefined ? r.print : null;
       const stageFailed = !!(r && r.failed);
       failed = failed || stageFailed;
-      log.note({ event: 'stage-end', stage, seconds, failed: stageFailed, print });
+      // A shard's replay stage ends without the join while other machines'
+      // wallets remain: its share is logged, and the stage is not ended.
+      if (r && r.ended === false) {
+        log.note({ event: 'stage-part', stage, seconds, failed: stageFailed, print });
+        say(`study ${o.runId}: ${stage}: this machine's wallets done in ${seconds.toFixed(1)} s${stageFailed ? ', with a failed check' : ''}; the stage ends once its shards are merged (merge-stage)`);
+        result.stages.push({ stage, ran: true, ended: false, seconds, failed: stageFailed, print });
+        continue;
+      }
+      const outputs = STAGE_COMMAND[stage] === 'replay' ? null : outputsDigest(runDir(header.network, `${o.runId}/${stage}`));
+      log.note({ event: 'stage-end', stage, seconds, failed: stageFailed, print, ...(outputs ? { outputs } : {}) });
+      done.set(stage, true);
       say(`study ${o.runId}: ${stage} finished in ${seconds.toFixed(1)} s${stageFailed ? ', with a failed check' : ''}`);
       result.stages.push({ stage, ran: true, seconds, failed: stageFailed, print });
     }
     const seconds = (performance.now() - t0) / 1000;
-    log.note({ event: 'end', seconds, failed });
-    return { ...result, seconds, failed, print: { command: 'study', ...result, seconds, failed } };
+    const unfinished = header.stages.filter((s) => !done.has(s));
+    log.note({ event: 'end', seconds, failed, ...(unfinished.length ? { unfinished } : {}) });
+    return { ...result, seconds, failed, unfinished, print: { command: 'study', ...result, seconds, failed, unfinished } };
   } finally {
     unlock();
   }
