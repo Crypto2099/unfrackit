@@ -28,8 +28,10 @@
 //                  label, start and end, and run.json's SHA-256
 //   machines/<label>.json
 //                  per invocation under the label: the host facts
-//                  (out/host.mjs machineFacts), the worker count, the indexes
-//                  it completed, start and end
+//                  (out/host.mjs machineFacts), the worker count, the
+//                  workers' memory budget and the pool's counts (the replay
+//                  command adds them), the indexes it completed, start and
+//                  end
 //   machines/<label>.log.jsonl
 //                  the log, appended by every invocation under the label
 //   spool/<i>/     while wallet i is open: its jobs' spools and its records
@@ -428,6 +430,14 @@ export class ReplayStage {
 
   saveMachine() {
     writeAtomic(this.machinePath, jsonText({ label: this.label, invocations: this.invocations }));
+  }
+
+  // Fields this invocation's machine record gains beside the host facts
+  // (the workers' memory budget and the pool's counts, replay/pool.mjs);
+  // an object given is written as it stands at each save.
+  machine(fields) {
+    Object.assign(this.invocation, fields);
+    this.saveMachine();
   }
 
   note(entry) {

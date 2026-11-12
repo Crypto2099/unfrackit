@@ -16,8 +16,8 @@
 // (RangeErrors with an ERR_ code, such as a buffer read past its end) are
 // the input's, not the machine's, and are recorded at once.
 //
-// A worker runs one job at a time, so recording is a flag of the thread,
-// set by the worker for each job.
+// A worker runs one job at a time, so recording is a flag of the worker's
+// process, set by the worker for each job.
 
 export class MachineError extends Error {
   constructor(cause) {

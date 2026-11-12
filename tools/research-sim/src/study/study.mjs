@@ -42,11 +42,13 @@
 // whose measurement found no such transaction is refused there. In the
 // synthetic plan the rule is --collateral-rule, recorded the same way.
 // Repetitions of a library that picks at random (--reps, 10 when absent),
-// workers (--workers), the machine label (--machine) and a machine's share
-// of the wallets (--shard or --wallet-indexes) pass to the replay stages,
+// workers (--workers), their memory budget (--memory-budget), the machine
+// label (--machine) and a machine's share of the wallets (--shard or
+// --wallet-indexes) pass to the replay stages,
 // with validity checks on every job; --analysis-freeze-tx to history and
 // replay. An option the plan does not use is refused, and so is a worker
-// count that is not a positive whole number, a machine label that is not
+// count that is not a positive whole number, a memory budget that is not a
+// positive number of GiB, a machine label that is not
 // letters, digits, - and _, a shard that is not k/n with 0 <= k < n, both
 // forms of share, and a --stop-before that names no stage of the plan,
 // before any stage starts.
@@ -69,18 +71,21 @@
 //
 // Layout, under the private root (history/paths.mjs):
 //   <network>/<id>/study.json   the header: plan, network, stages, options
-//                               but the worker count and the machine label
-//                               (paths as the first start gave them, made
-//                               absolute; not compared on resume), the input
-//                               files' SHA-256 (treatment pins, wallets,
-//                               extraction run), the code manifest (`hash`)
-//                               and its SHA-256, Node, and the collateral rule
-//                               with its source (filled in when the rule is
-//                               known; not compared on resume)
+//                               but the worker count, the memory budget and
+//                               the machine label (paths as the first start
+//                               gave them, made absolute; not compared on
+//                               resume), the input files' SHA-256 (treatment
+//                               pins, wallets, extraction run), the code
+//                               manifest (`hash`) and its SHA-256, Node, and
+//                               the collateral rule with its source (filled
+//                               in when the rule is known; not compared on
+//                               resume)
 //   <network>/<id>/log.jsonl    the study's log, appended: each invocation's
 //                               start or resume with its worker count, machine
 //                               label, share of the wallets, stop stage and
-//                               machine (out/host.mjs), each stage's start
+//                               machine (out/host.mjs, with the memory budget
+//                               given, or null for each replay stage's
+//                               default), each stage's start
 //                               and its end (with the stage's printout, and
 //                               for a stage that is not a replay its outputs'
 //                               digest), part (a shard's share done) or
@@ -94,9 +99,9 @@
 // Resume: running the same plan and run id again resumes it. The header must
 // equal the first start's in plan, network, stages, options, input files and
 // code manifest, or the run is refused. The worker count (--workers), the
-// machine label (--machine), the share of the wallets and the stop stage are
-// not compared: they change no record, so a resume may use others, on this
-// machine or another. Nor are the paths the options name (PATHS): the files
+// memory budget (--memory-budget), the machine label (--machine), the share
+// of the wallets and the stop stage are not compared: they change no record,
+// so a resume may use others, on this machine or another. Nor are the paths the options name (PATHS): the files
 // are compared by content instead, through the SHA-256 of the treatment pins
 // (which pin the treatment's files, checked when a stage loads it), the
 // wallets file and the extraction run's file (inputDigests), so on another
@@ -125,7 +130,7 @@ import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
 import { pickCollateralRule } from '../history/reports.mjs';
-import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel, shardOf } from '../options.mjs';
+import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel, shardOf, memoryBudgetOf } from '../options.mjs';
 import { workerCount } from '../replay/pool.mjs';
 import { machineRecord } from '../out/host.mjs';
 import { takeLock } from '../out/lock.mjs';
@@ -178,6 +183,7 @@ export function studyOptions(opts) {
   if (!o.treatment || o.treatment === true) throw new Refusal('refusing: --treatment <dir> names the treatment directory');
   try {
     workerCount(o.workers, '--workers');
+    memoryBudgetOf(o.memoryBudget);
     machineLabel(o.machine);
     if (o.shard !== undefined) shardOf(o.shard);
   } catch (e) {
@@ -400,7 +406,7 @@ export function stageOptions(stage, o, network, { collateralRule = o.collateralR
   const db = pick(o, ['expectNetwork', 'snapshot', 'extractionRun', 'bytes', 'immutableDir', 'immutableHost']);
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
-  const replayOpts = { ...pick(o, ['reps', 'workers', 'machine', 'shard', 'walletIndexes']), validity: true };
+  const replayOpts = { ...pick(o, ['reps', 'workers', 'memoryBudget', 'machine', 'shard', 'walletIndexes']), validity: true };
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':
@@ -452,7 +458,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     if (!resuming) writeJson(headerPath, header);
     const done = ended(StudyLog.entries(logPath));
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0 }) });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0, memoryBudgetBytes: memoryBudgetOf(o.memoryBudget) }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {

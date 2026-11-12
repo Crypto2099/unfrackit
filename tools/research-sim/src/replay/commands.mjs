@@ -8,6 +8,7 @@
 //           --plan recent | peak | test
 //           [--collateral-rule ledger | practice] [--reps <n>]
 //           [--test-reps <n>] [--run-id <id>] [--workers <n>]
+//           [--memory-budget <GiB>]
 //           [--analysis-freeze-tx <hash>] [--validity] [--machine <label>]
 //           [--shard <k>/<n> | --wallet-indexes <file>]
 //   plan-shards (--history <file or directory>... | --shapes <names|all>)
@@ -17,8 +18,8 @@
 //   battery --treatment <dir> [--treatment-pins <file>]
 //           (--history <snapshot file or directory>... | --shapes <names|all>)
 //           [--methods study | test] [--reps <n>] [--pools <file>]
-//           [--run-id <id>] [--workers <n>] [--validity]
-//           [--oracle [--oracle-workers <n>]
+//           [--run-id <id>] [--workers <n>] [--memory-budget <GiB>]
+//           [--validity] [--oracle [--oracle-workers <n>]
 //           [--oracle-settings <name>=<value>,...]]
 //
 // A history directory is read for its *.jsonl files. --shapes takes `all`
@@ -38,11 +39,13 @@
 // plans and merge-stage (out/merge.mjs) joins. No time limit
 // decides a result: every replay, answer and oracle call runs to completion,
 // under watchdogs that only make hung work run again (pool.mjs,
-// oracle/oracle.mjs). The worker counts change no record; a battery's run.json
-// records them with the machine (`machine`, out/host.mjs) apart from the
-// options, a replay stage's machines/<label>.json with the label --machine
-// gives (`local` when absent), and the printout gives the pools' counts of
-// watchdog stops and machine reruns beside the totals. The battery's oracle stops on its work budget; the
+// oracle/oracle.mjs). The worker counts and the workers' memory budget
+// (--memory-budget, by default 80% of the memory available at the start;
+// pool.mjs) change no record; a battery's run.json records them with the
+// machine (`machine`, out/host.mjs) apart from the options, a replay stage's
+// machines/<label>.json with the label --machine gives (`local` when
+// absent) and the pool's counts, and the printout gives the pools' counts
+// beside the totals. The battery's oracle stops on its work budget; the
 // wall-clock limit (oracle setting limit=wall-clock, kept for the oracle's
 // checks) is refused, and --limit-ms, --answer-limit-ms and --oracle-limit-ms
 // are gone (options.mjs).
@@ -66,7 +69,7 @@ import { loadSource } from './source.mjs';
 import { assignPopulation, countPopulation } from '../battery/population.mjs';
 import { createBatteryOracle } from '../oracle/battery-hook.mjs';
 import { oracleSettings } from '../oracle/settings.mjs';
-import { ORACLE_LIMIT_MS_GONE, MACHINE_OPTIONS, LOCAL_OPTIONS, machineLabel } from '../options.mjs';
+import { ORACLE_LIMIT_MS_GONE, MACHINE_OPTIONS, LOCAL_OPTIONS, machineLabel, memoryBudgetOf } from '../options.mjs';
 import { machineRecord } from '../out/host.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
@@ -142,14 +145,17 @@ export function workersOf(opts, command) {
   return { workers, oracleWorkers };
 }
 
+// The run's workers and their memory budget (bytes, the pool's default when
+// --memory-budget is absent), checked before anything is loaded.
 async function setup(opts, command) {
   if (!opts.treatment) throw new Error('--treatment <dir> names the treatment directory');
   const threads = workersOf(opts, command);
+  const memoryBudget = memoryBudgetOf(opts.memoryBudget);
   const pinsPath = pinsPathOf(opts);
   const T = await loadTreatment(opts.treatment, readFileSync(pinsPath, 'utf8'));
-  const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: threads.workers });
+  const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: threads.workers, memoryBudget });
   const runId = opts.runId || `${command}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  return { T, pool, pinsPath, runId, threads };
+  return { T, pool, pinsPath, runId, threads: { ...threads, memoryBudgetBytes: pool.budget } };
 }
 
 // The battery's oracle settings: the defaults with --oracle-settings over
@@ -163,7 +169,7 @@ export function batteryOracleSettings(opts) {
 }
 
 // run.json: what the run ran under, and apart from it (`machine`) the worker
-// counts and the machine, which change no record.
+// counts, the memory budget and the machine, which change no record.
 function header(command, opts, T, threads, extra) {
   return {
     command,
@@ -243,6 +249,7 @@ export async function cmdReplay(opts) {
     const list = walletList(wallets);
     const selection = selectionOf(opts, { plan, wallets: list });
     out = await openStage(runDir(first.network, runId), { header: stageHeader(opts, T, { plan, entries }), wallets: list, machine, workers: threads.workers, selection });
+    out.machine({ memoryBudgetBytes: pool.budget, pool: pool.stats });
     out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null, selection: selection ? selection.record : null });
     const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, ...(collateralRules ? { collateralRules } : {}) });
     out.note({ event: 'end', ended: out.ended, totals, records: out.counts, workers: pool.stats });

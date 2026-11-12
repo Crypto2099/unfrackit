@@ -11,7 +11,7 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COMMAND_OPTIONS, STUDY_PLAN_OPTIONS, LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS, flagOf } from '../../../src/options.mjs';
+import { COMMAND_OPTIONS, STUDY_PLAN_OPTIONS, LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS, MACHINE_OPTIONS, flagOf, memoryBudgetOf } from '../../../src/options.mjs';
 import { parseArgs as fromHistory } from '../../../src/history/commands.mjs';
 import { parseArgs } from '../../../src/options.mjs';
 
@@ -29,6 +29,7 @@ function sample(key, command) {
   if (['workers', 'oracleWorkers', 'reps', 'testReps', 'days', 'batch'].includes(key)) return '3';
   if (key === 'collateralRule') return 'ledger';
   if (key === 'shard') return '1/3';
+  if (key === 'memoryBudget') return '2.5';
   return 'x';
 }
 const argvOf = (key, command, spec) => (spec.flags.includes(key) ? [flagOf(key)] : [flagOf(key), sample(key, command)]);
@@ -164,6 +165,16 @@ test('whole-number options: positive whole numbers only', () => {
       for (const bad of ['0', '-1', '1.5', '3O', 'x', '', '01', '1e3', ' 2', '99999999999999999999']) refused([flagOf(k), bad], command, new RegExp(`${flagOf(k)} takes a positive whole number, not ${JSON.stringify(bad).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} for ${command}`));
     }
   }
+});
+
+test('--memory-budget: a positive number of GiB, for replay, battery and study, and a machine option', () => {
+  for (const command of ['replay', 'battery', 'study']) {
+    for (const v of ['16', '2.5', '.5', '0.25']) assert.equal(parseArgs(['--memory-budget', v], command).memoryBudget, v);
+    for (const bad of ['0', '0.0', '-1', 'x', '', '1e3', '1,5', '2GiB']) refused(['--memory-budget', bad], command, new RegExp(`--memory-budget takes a positive number of GiB, not ${JSON.stringify(bad).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} for ${command}`));
+  }
+  for (const command of COMMANDS.filter((c) => !['replay', 'battery', 'study'].includes(c))) refused(['--memory-budget', '4'], command, /unknown option --memory-budget/);
+  assert.ok(MACHINE_OPTIONS.includes('memoryBudget'));
+  assert.deepEqual([memoryBudgetOf(undefined), memoryBudgetOf('2'), memoryBudgetOf('0.5'), memoryBudgetOf(1.5)], [null, 2 * 1024 ** 3, 512 * 1024 ** 2, 1.5 * 1024 ** 3]);
 });
 
 test('a value never begins with --', () => {

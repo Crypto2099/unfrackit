@@ -35,9 +35,11 @@ export function hostFacts() {
 }
 
 // workers: the replay or battery workers; oracleWorkers: the battery's
-// oracle workers, when it runs the oracle.
-export function machineRecord({ workers, oracleWorkers = 0 }) {
-  return { workers, oracleWorkers, ...hostFacts() };
+// oracle workers, when it runs the oracle; memoryBudgetBytes: the workers'
+// memory budget (replay/pool.mjs), when known, or null for the pool's
+// default, chosen when each pool starts.
+export function machineRecord({ workers, oracleWorkers = 0, memoryBudgetBytes }) {
+  return { workers, oracleWorkers, ...(memoryBudgetBytes !== undefined ? { memoryBudgetBytes } : {}), ...hostFacts() };
 }
 
 // The physical cores /proc/cpuinfo lists: its distinct (physical id, core

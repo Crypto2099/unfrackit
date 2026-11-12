@@ -2,13 +2,15 @@
 // Copyright 2026 Adam K. Dean
 
 // The worker pool's watchdogs and machine reruns (src/replay/pool.mjs), over
-// a stand-in worker (test/lib/stub-pool-worker.mjs), with no treatment: a
-// watchdog stop is never a result, and the work runs again with its watchdog
-// doubled until it completes; a machine error or a dead worker makes the job
-// run again once in a fresh worker that records machine errors, and only
-// what happens there stands; any other error fails the job at once. A
-// battery resumes at the answer that was stopped, and each run is reported
-// once. Also which errors are the machine's (src/kit/machine.mjs).
+// a stand-in worker process (test/lib/stub-pool-worker.mjs), with no
+// treatment: a watchdog stop is never a result, and the work runs again with
+// its watchdog doubled until it completes; a machine error makes the job run
+// again once in a fresh worker that records machine errors, and only what
+// happens there stands; a dead worker makes it run again in a fresh worker
+// that records them, then alone, and a third death fails it; any other error
+// fails the job at once. A battery resumes at the answer that was stopped,
+// and each run is reported once. Also which errors are the machine's
+// (src/kit/machine.mjs). The pool's memory rules are in memory-pool.test.mjs.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -89,15 +91,15 @@ test('replay: a machine error runs the job again once in a fresh worker that rec
   assert.equal(pool.stats.machineReruns, 2);
 }));
 
-test('replay: a worker that dies runs the job again once; dying twice fails it', () => withPool(async (pool) => {
+test('replay: a worker that dies runs the job again in a fresh worker, then alone; a third death fails it, naming the job', () => withPool(async (pool) => {
   const r = await pool.replay({ counter: counter(), attempts: ['die', 'done'] });
   assert.deepEqual([r.ok, r.result], [true, { attempt: 2, record: true }]);
   const t = await pool.replay({ counter: counter(), attempts: ['throw', 'done'] });
   assert.deepEqual([t.ok, t.result.attempt], [true, 2]);
-  const d = await pool.replay({ counter: counter(), attempts: ['die'] });
+  const d = await pool.replay({ counter: counter(), source: { kind: 'shape', name: 'S1' }, attempts: ['die'] });
   assert.equal(d.ok, false);
-  assert.match(d.error, /exited with code 3/);
-  assert.equal(pool.stats.machineReruns, 3);
+  assert.match(d.error, /^wallet S1: its worker died three times, the last: the worker exited with code 3$/);
+  assert.deepEqual([pool.stats.machineReruns, pool.stats.outOfMemoryReruns], [4, 4]);
 }));
 
 test('replay: an error that is not the machine\'s fails the job at once, and the worker stays', () => withPool(async (pool) => {

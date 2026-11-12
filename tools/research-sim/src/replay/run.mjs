@@ -49,6 +49,7 @@ import { SHAPE_POOLS } from '../battery/battery.mjs';
 import { CONFIRMATORY_RULES } from './collateral.mjs';
 import { sumValidity } from '../kit/validity.mjs';
 import { ORACLE_SETTINGS, admitsIncumbent } from '../oracle/settings.mjs';
+import { walletMemory } from './pool.mjs';
 
 const MONTH = 30 * 86400;
 // The thresholds whose triggers are tested against the never-propose arm.
@@ -203,6 +204,8 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
     const source = loadSource(T, w.spec);
     if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
     const jobs = expandJobs(plan, { roles, needsCollateral: needsCollateral(source), ...(collateralRules ? { collateralRules } : {}) });
+    // What the pool's memory estimate reads of the wallet (pool.mjs).
+    const memory = walletMemory(source);
     const seg = out.segment(wi);
     const dir = seg.dir;
     const st = {
@@ -224,6 +227,7 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
       const key = { wallet: source.wallet, window: source.window, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
       const job = {
         source: w.spec,
+        memory,
         arm: j.arm,
         variant: j.variant,
         repetition: j.repetition,
@@ -439,7 +443,7 @@ export async function runBatteries(T, pool, { wallets, methods, out, watchdogMs,
     const keyOf = (res) => ({ wallet: source.wallet, window: 'snapshot', arm: res.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: res.method.name, change: res.opts.changePolicy, collateral: 'none-needed', repetition: res.repetition });
     const byK = new Map();
     const population = w.population || { kind: 'no-sample', batteries: { standard: true, h10: true } };
-    const job = { source: w.spec, methods, batteries: population.batteries, pools, tidySettings, validity };
+    const job = { source: w.spec, memory: walletMemory(source), methods, batteries: population.batteries, pools, tidySettings, validity };
     const r = await pool.battery(job, {
       watchdogMs,
       note: (e) => out.note({ ...e, wallet: source.wallet }),
