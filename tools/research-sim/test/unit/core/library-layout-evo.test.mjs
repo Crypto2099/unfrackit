@@ -6,8 +6,8 @@
 // change, and the simulator builds the layout change on them. L/own and
 // L/layout select the same inputs on the same state and differ only in the
 // change; a library failure is the library's; an input set that cannot fund
-// the layout change fails with class change-minimum; 'single' and 'naive' stay
-// refused.
+// the layout change fails with class change-minimum; any other change policy
+// is refused.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,10 +42,10 @@ test('evo-lf takes the treatment from the registry, and without it refuses the l
   await assert.rejects(evoMethod().build(s, it, P, layout), /layout change needs the treatment/);
 });
 
-test('single and naive stay refused, as a failure of class other with the reason', { skip }, async () => {
+test('a change policy other than default and layout is refused, as a failure of class other with the reason', { skip }, async () => {
   const s = constructState(T, [{ coin: 20n * ADA }]);
   const it = payIntent(T, [{ coin: 3n * ADA }]);
-  for (const changePolicy of ['single', 'naive']) {
+  for (const changePolicy of ['ladder']) {
     const r = await evoMethod({ T }).build(s, it, P, { changePolicy, seed: 1 });
     assert.equal(r.ok, false);
     assert.equal(r.class, CLASSES.other);
@@ -181,7 +181,7 @@ test('a replayed spend with a required signer, a Conway certificate and a donati
     replayIntent('d2', 20, { type: 'T7', fixed: { body: { 4: encArray([encArray([encUint(7), stakeCred, encUint(P.keyDeposit)]), encArray([encUint(2), stakeCred, pool])]).toString('hex') }, witnesses: { 0: witness(stakeKey) } }, implicit: { deposits: P.keyDeposit } }),
     replayIntent('d3', 30, { type: 'T1', requested: [payTo(1, 3n * ADA)], fixed: { body: { 22: encUint(ADA).toString('hex') } }, implicit: { donation: ADA } })
   ];
-  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 1000, params: P };
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 1000, params: P };
   const b = await replayEvo(source, 'layout');
   assert.deepEqual(controlsOf(source, b), []);
   for (const s of b.spends) assert.equal(s.outcome, 'built', `${s.type}: ${s.class} ${s.detail}`);

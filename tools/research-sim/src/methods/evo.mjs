@@ -11,7 +11,7 @@
 // address, the available UTxOs and the run's protocol parameters at build time
 // (BuildOptions, :475-668). Its change policies are its own ('default') and
 // UnFrack.It's layout change on the inputs the library selected ('layout',
-// layoutOnLibraryInputs below); 'single' and 'naive' are refused.
+// layoutOnLibraryInputs below); no other change policy is accepted.
 //
 // The library, at that commit:
 //   CoinSelection.ts:67-113, largestFirstSelection: every available UTxO

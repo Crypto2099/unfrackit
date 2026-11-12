@@ -95,7 +95,7 @@ function fixture({ coin = 10n * ADA, observedCoin = coin } = {}) {
   const pure = (i, c) => utxoFromOutput(H(`utxo ${i}`), 0, encodeOutput({ address: addressBytes(address), coin: c, assets: [] }, 'array'), { origin: 'deposit' });
   const utxos = [pure(1, 20n * ADA), pure(2, 30n * ADA), pure(3, 6n * ADA)];
   const events = (list) => list.map((e, i) => ({ txId: i + 1, ...e }));
-  const sourceOf = (start, list) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, changeAddressEnd: address, franken: new Set(), start, events: events(list), arrival: new Map(), windowStart: 0, windowEnd: 60 * DAY, params: src.params });
+  const sourceOf = (start, list) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, changeAddressEnd: address, franken: new Set(), start, events: events(list), windowStart: 0, windowEnd: 60 * DAY, params: src.params });
   const at = (it) => ({ kind: 'intent', intent: it });
   const consumed = (refs, t) => ({ kind: 'held-consumed', tx: H('taker'), time: { blockTime: t }, refs });
   const reorg = (refs, t) => ({ kind: 'self-reorganization', tx: H('reorg'), time: { blockTime: t }, burst: null, heldConsumed: refs, withdrawal: 0n, valueChange: { coin: 0n, assets: [] }, walletOutputs: [] });

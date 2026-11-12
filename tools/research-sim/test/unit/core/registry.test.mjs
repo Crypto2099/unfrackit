@@ -3,8 +3,9 @@
 
 // The method registry: every study baseline is made by name, with its
 // library's version and its deterministic and seeded flags; the pure-change
-// arm is not registered; the builder survey's other subjects are refused; every name a run plan uses resolves; and the test
-// plans still name only the test methods. Needs RESEARCH_SIM_TREATMENT_DIR for
+// arm is not registered; the builder survey's other subjects are refused;
+// every name a run plan uses resolves; and the test roles still name only the
+// test methods. Needs RESEARCH_SIM_TREATMENT_DIR for
 // the baselines (CSL comes through the treatment).
 
 import { test } from 'node:test';
@@ -13,7 +14,7 @@ import { makeMethod, methodNames, BASELINE_METHODS, TEST_METHODS } from '../../.
 import { choosesOwnCollateral } from '../../../src/methods/contract.mjs';
 import { CJS_VERSION } from '../../../src/methods/cjs.mjs';
 import { EVO_VERSION } from '../../../src/methods/evo.mjs';
-import { windowPlan, testPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
+import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
 const T = await treatment();
@@ -49,7 +50,7 @@ test('the builder survey\'s other subjects are not registered', () => {
   }
 });
 
-test('every method a study plan names resolves, and the test plans name only the test methods', () => {
+test('every method a study plan names resolves, and the test roles name only the test methods', () => {
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
@@ -58,7 +59,7 @@ test('every method a study plan names resolves, and the test plans name only the
   for (const n of study) assert.ok(names.has(n), n);
   assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
-  const testJobs = expandJobs(testPlan(), { roles: { ...TEST_ROLES, test: 'test-largest-first' }, needsCollateral: true });
+  const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);
   assert.deepEqual([...TEST_METHODS], ['test-largest-first', 'test-stall']);
 });

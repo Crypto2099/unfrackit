@@ -4,8 +4,8 @@
 // The replay engine: one wallet's intent stream over one window, in one arm,
 // by one method under one change policy, collateral rule and repetition.
 //
-// The arm's state starts from the window's start state, laid out by the arm
-// (arms/arms.mjs) with its plan fees charged and recorded apart. Its change
+// The arm's state starts from the window's start state, the wallet as it was
+// (arms/arms.mjs; the planner's plan fees are recorded as 0). Its change
 // address, for every method and plan, is the one the source names at each
 // event (replay/source.mjs): the change-address rule over the outputs the
 // wallet has received on the chain up to that point, the same in every arm.
@@ -29,8 +29,7 @@
 //                        deposited in every arm as one UTxO of the withdrawn
 //                        ADA at the change address in effect at it; its fee
 //                        is charged to no arm
-//   mark                 every 30 days of block time: the maintained-tidy arm
-//                        re-plans and applies any proposed plan, charged
+//   mark                 every 30 days of block time: counted
 // Every arm replays the same intents in the same order, each with its builder
 // leftovers left out (kit/replay.mjs withoutLeftovers): no method, feasibility
 // test or check sees the observed transaction's network id or an auxiliary
@@ -76,17 +75,13 @@
 //     (replay/pool.mjs), and is recorded only if it happens there too.
 // At the first spend of each parallel burst, a separate pass builds the
 // burst's intents in order from the state at its start without spending any
-// output created earlier in the burst (burst feasibility, H-5 and H-6's rescue
-// test), while the ordinary sequential replay continues for fees. At every
-// script interaction the collateral available under every rule is recorded:
-// at a spend, whether the rule would set a UTxO aside and the payment can be
+// output created earlier in the burst (burst feasibility), while the
+// ordinary sequential replay continues for fees. At every script
+// interaction the collateral available under every rule is recorded: at a
+// spend, whether the rule would set a UTxO aside and the payment can be
 // made without it (spendCollateralAvailability), so that a spend infeasible
 // for collateral counts as having none; at a forfeit, whether any UTxO is
 // eligible.
-// In the maintained-tidy arm under the decided thresholds, each plan that
-// proposes a pure-ADA-only transaction the never-propose setting would not is
-// an H-6 trigger, returned with its time for the rescue test.
-//
 // Randomness: the job's one generator (setting rng 'mulberry32'), made from
 // the job's seed when the job starts and handed to every build the job makes
 // as opts.random, in the order the engine makes them, the burst pass included
@@ -98,23 +93,23 @@
 // The engine runs the kit's checks and applies each transaction; a method
 // never sees the verdict before it returns. CSL objects the treatment leaves
 // to finalization are released by settling the heap (kit/heap.mjs) after each
-// plan and every `settleEvery` spends.
+// every `settleEvery` spends.
 
 import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap, heldOutputRefs, heldInputsFromState } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
-import { newValidity, mergeValidity, summarize } from '../kit/validity.mjs';
+import { newValidity, summarize } from '../kit/validity.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
 import { outputMinimum } from '../kit/check.mjs';
 import { changeOutputBytes, fixedInputValues, carriesCollateral, withoutLeftovers, missingRedeemers, requiredSigners } from '../kit/replay.mjs';
 import { checkResult, checkOptions, choosesOwnCollateral, NOT_REPLAYABLE } from '../methods/contract.mjs';
-import { planState, planOnly, StopPoint } from '../treatment/run.mjs';
-import { armSettings, plansAtStart, replansAtMarks, needsArrival } from '../arms/arms.mjs';
+import { planOnly, StopPoint } from '../treatment/run.mjs';
+import { checkArm } from '../arms/arms.mjs';
 import { replaySuffices } from './feasible.mjs';
 import { eligibleCollateral, collateralAvailability, checkRule, totalCollateralFor, COLLATERAL_RULES } from './collateral.mjs';
-import { spendMeasures, stateMeasures, requestedIndexes, PolicyLock } from './measure.mjs';
+import { spendMeasures, stateMeasures, requestedIndexes } from './measure.mjs';
 import { conformingShare } from './conform.mjs';
 import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
@@ -122,32 +117,7 @@ import { settle } from '../kit/heap.mjs';
 import { makeRng } from '../shapes/rng.mjs';
 import { passMachineErrors } from '../kit/machine.mjs';
 
-// The start plan is a function of the wallet's source, the planner settings
-// the arm and variant give (the repetition enters them only as a seed, for
-// random-tidy and H-2's random grouping), the arrival table, the change
-// address, the protocol parameters and the validity mode; it does not depend on the method. A worker
-// keeps the plans it has made for a source, with the validity counts they
-// added, and every later job of that wallet with the same settings takes them
-// instead of planning again. A plan is only read after it is made: its states
-// and transactions are frozen records.
-const START_PLANS = new WeakMap();
-
-function startPlan(T, source, state, params, settings, { validity, arrival }) {
-  const key = JSON.stringify([settings, arrival !== null, validity !== null, state.changeAddress], (_k, v) => (typeof v === 'bigint' ? `${v}n` : v));
-  let bySource = START_PLANS.get(source);
-  if (!bySource || bySource.params !== params) START_PLANS.set(source, (bySource = { params, plans: new Map() }));
-  let hit = bySource.plans.get(key);
-  if (!hit) {
-    const local = validity ? newValidity(T.CSL) : null;
-    hit = { plan: planState(T, state, params, settings, { arrival, validity: local ? { acc: local, at: 'plan start' } : null }), local };
-    bySource.plans.set(key, hit);
-  }
-  if (validity && hit.local) mergeValidity(validity, hit.local);
-  return hit.plan;
-}
-
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
-const MONTH = 30 * 86400;
 
 // The outcome of a script spend that has no collateral to set aside, or
 // cannot be paid without it.
@@ -193,11 +163,10 @@ function collateralFor(T, params, state, intent, rule, method) {
   return { ok: true, pool: state, collateral: null, library: true };
 }
 
-// Whether collateral is available under each rule at a script spend, for
-// H-5 and H-6: the rule would set a UTxO aside and the payment can be made
-// without it, as setAside decides. When the balance does not suffice even
-// with it (`suffices` false, infeasible by balance), a UTxO to set aside is
-// enough. null under the ledger-minimum rule when the intent has no observed
+// Whether collateral is available under each rule at a script spend: the
+// rule would set a UTxO aside and the payment can be made without it, as
+// setAside decides. When the balance does not suffice even with it
+// (`suffices` false, infeasible by balance), a UTxO to set aside is enough. null under the ledger-minimum rule when the intent has no observed
 // fee.
 export function spendCollateralAvailability(T, params, state, intent, suffices) {
   const observedFee = intent.observed ? intent.observed.fee : null;
@@ -241,24 +210,6 @@ export function fixedExtraWitnesses(intent) {
   return extra;
 }
 
-// The arrival object of every token-carrying UTxO ('policy.name' to its
-// arrival key), from the history's arrival table, for H-2's groupings.
-function arrivalMap(state, table) {
-  const m = new Map();
-  for (const u of state.utxos.values()) {
-    if (!u.assets.length) continue;
-    const o = {};
-    for (const a of u.assets) {
-      const e = table.get(`${a.policy}.${a.name}`);
-      if (e) o[`${a.policy}.${a.name}`] = e.txId;
-    }
-    m.set(u.ref, o);
-  }
-  return m;
-}
-
-const pureOnlyCount = (plan) => plan.txs.filter((t) => t.notes.includes('pure-ada-only')).length;
-
 // An event as the replay takes it: an intent's with its builder leftovers
 // left out, any other unchanged.
 const REPLAYED = new WeakMap();
@@ -284,8 +235,8 @@ export function jobOptions(opts) {
 
 // source: { wallet, window, network, stakeCred, changeAddress,
 // changeAddressEnd, franken, start [UTxO], events (each with the
-// changeAddress in effect at it), arrival (Map), windowStart (block time) }.
-// job: { key, arm, variant, repetition, method, opts, settleEvery, policyLock };
+// changeAddress in effect at it), windowStart (block time) }.
+// job: { key, arm, variant, repetition, method, opts, settleEvery };
 // opts.seed is the repetition; validity (true) adds the validity checks of
 // kit/validity.mjs on every transaction the kit passes, and the summary's
 // validity field.
@@ -295,13 +246,13 @@ export async function replay(T, params, source, job) {
   checkOptions(job.opts);
   checkRule(job.opts.collateralRule);
   const opts = jobOptions(job.opts);
-  const out = { spends: [], plans: [], bursts: [], triggers: [], summary: null };
+  const out = { spends: [], bursts: [], summary: null };
   const gap = changeAddressGap(source);
   if (gap) {
     out.refused = gap;
     return out;
   }
-  const settings = armSettings(arm, variant, repetition);
+  checkArm(arm, variant, repetition);
   let state = makeState({ network: source.network, stakeCred: source.stakeCred, changeAddress: source.changeAddress ?? null, utxos: source.start, at: { slot: null, time: source.windowStart }, franken: source.franken });
   const counts = { intents: 0, built: 0, failed: 0, infeasible: 0, infeasibleCollateral: 0, notReplayable: 0, forfeits: 0, selfReorganizations: 0, selfReorganizationsWithValue: 0, withdrawalDeposits: 0, deposits: 0, heldConsumed: 0, heldMissing: 0, heldUnmatched: 0, marks: 0, changeAddressMoves: 0, byClass: {} };
   // The change address the source names at a point of the replay.
@@ -313,60 +264,16 @@ export async function replay(T, params, source, job) {
   const fees = { spends: 0n, walletControlled: 0n, plans: 0n, forfeits: 0n };
   let withdrawn = 0n;
   const trajectory = [];
-  const lock = job.policyLock ? new PolicyLock(params) : null;
   let lastTime = source.windowStart;
   const advance = (time) => {
     if (time === null || time === undefined) return;
-    if (lock) lock.add(state, time - lastTime);
     if (time > lastTime) lastTime = time;
   };
   const rel = (time) => (time === null || time === undefined ? null : time - source.windowStart);
 
-  // Arrival keys: the history's table for the tokens held at the window
-  // start, and for a token that first arrives during the window, the id of
-  // the transaction that brought it (a deposit, or a spend's inflow or mint).
-  const arrivalTable = new Map(source.arrival || []);
-  const arrive = (assets, txId) => {
-    if (txId === null || txId === undefined) return;
-    for (const a of assets) if (!arrivalTable.has(`${a.policy}.${a.name}`)) arrivalTable.set(`${a.policy}.${a.name}`, { txId, flagged: false });
-  };
   // The validity mode (job.validity): one accumulator for the replay.
   const validity = job.validity ? newValidity(T.CSL) : null;
   const vcheck = (at) => (validity ? { acc: validity, at } : null);
-  const doPlan = async (at, time) => {
-    if (state.changeAddress === null) {
-      out.plans.push({ at, t: rel(time), txs: 0, fee: 0n, size: 0, utxosAfter: state.utxos.size, notes: [], control: null, trigger: false, noChangeAddress: true });
-      return;
-    }
-    const arrival = needsArrival(variant) ? arrivalMap(state, arrivalTable) : null;
-    const p = at === 'start'
-      ? startPlan(T, source, state, params, settings, { validity, arrival })
-      : planState(T, state, params, settings, { arrival, validity: vcheck(`plan ${at}`) });
-    let trigger = null;
-    if (arm === 'maintained-tidy' && (settings.pureAdaOnly || 'rules') === 'rules' && p.plan.txs.length) {
-      const never = planOnly(T, state, params, { ...settings, pureAdaOnly: 'never' }, { arrival });
-      const extra = pureOnlyCount(p.plan) - pureOnlyCount(never);
-      if (extra > 0) {
-        const pureFee = (pl) => sum(pl.txs.filter((t) => t.notes.includes('pure-ada-only')).map((t) => BigInt(t.fee)));
-        trigger = { at, t: rel(time), reasons: [...p.plan.pure.reasonsBefore], txs: extra, fee: pureFee(p.plan) - pureFee(never) };
-        out.triggers.push(trigger);
-      }
-    }
-    const fee = sum(p.txs.map((t) => t.fee));
-    fees.plans += fee;
-    state = p.after;
-    out.plans.push({ at, t: rel(time), txs: p.txs.length, fee, size: p.txs.reduce((s, t) => s + t.size, 0), utxosAfter: state.utxos.size, notes: [...p.plan.notes], control: p.plan.control || null, trigger: !!trigger });
-    await settle();
-  };
-
-  try {
-    if (plansAtStart(arm)) await doPlan('start', source.windowStart);
-  } catch (e) {
-    if (e instanceof StopPoint) throw e;
-    passMachineErrors(e);
-    out.refused = `the planner refuses the start plan: ${e.message}`;
-    return out;
-  }
   const start = stateMeasures(state, params);
   trajectory.push(start.largestValueBytes);
   // The five state measures a record carries after it, under the same names
@@ -391,7 +298,6 @@ export async function replay(T, params, source, job) {
     if (e.kind === 'deposit') {
       advance(e.time && e.time.blockTime);
       state = addUtxos(state, e.utxos);
-      arrive(e.utxos.flatMap((u) => u.assets), e.txId);
       counts.deposits++;
       continue;
     }
@@ -419,15 +325,6 @@ export async function replay(T, params, source, job) {
     if (e.kind === 'mark') {
       advance(e.blockTime);
       counts.marks++;
-      if (replansAtMarks(arm)) {
-        try {
-          await doPlan(`mark ${e.n}`, e.blockTime);
-        } catch (err) {
-          if (err instanceof StopPoint) throw err;
-          passMachineErrors(err);
-          out.plans.push({ at: `mark ${e.n}`, t: rel(e.blockTime), refused: err.message });
-        }
-      }
       continue;
     }
     // An intent, its held fixed inputs as the arm holds them.
@@ -487,7 +384,6 @@ export async function replay(T, params, source, job) {
     } else {
       const before = state;
       state = r.state;
-      arrive([...intent.requested.filter((o) => o.wallet).flatMap((o) => o.assets), ...intent.implicit.mint], e.txId);
       counts.built++;
       counts.heldUnmatched += r.heldUnmatched;
       const fee = sum(r.txs.map((t) => t.fee));
@@ -522,20 +418,18 @@ export async function replay(T, params, source, job) {
   follow(source.changeAddressEnd);
 
   const end = stateMeasures(state, params);
-  // Conformity of the end state to the arm's layout, before any restoring
-  // plan. The share (replay/conform.mjs) is the token UTxOs that break none of
-  // the treatment's output rules at the arm's planner settings (the defaults
-  // for the arms that run at them), with and without the coin rule; it does
-  // not depend on the planner accepting the state. Beside it, whether the
-  // planner, at the arm's settings, would propose a plan for the state.
-  const own = !(arm === 'naive-tidy' || arm === 'random-tidy' || arm === 'observed');
-  const share = conformingShare(T, state, params, own ? settings : {});
+  // Conformity of the end state to the treatment's layout. The share
+  // (replay/conform.mjs) is the token UTxOs that break none of the
+  // treatment's output rules at the planner's default settings, with and
+  // without the coin rule; it does not depend on the planner accepting the
+  // state. Beside it, whether the planner would propose a plan for the state.
+  const share = conformingShare(T, state, params, {});
   // A state with no change address yet holds no spendable UTxO: no plan.
   let conformity;
   if (state.changeAddress === null) conformity = { proposes: false, txs: 0, fee: 0n, noChangeAddress: true, ...share };
   else {
     try {
-      const p = planOnly(T, state, params, own ? settings : {}, { arrival: own && needsArrival(variant) ? arrivalMap(state, arrivalTable) : null });
+      const p = planOnly(T, state, params, {});
       conformity = { proposes: p.txs.length > 0, txs: p.txs.length, fee: sum(p.txs.map((t) => BigInt(t.fee))), ...share };
     } catch (e) {
       passMachineErrors(e);
@@ -549,7 +443,7 @@ export async function replay(T, params, source, job) {
     withdrawn,
     failuresPer100: attempted ? (100 * counts.failed) / attempted : null,
     bursts: { parallel: out.bursts.length, feasible: out.bursts.filter((b) => b.feasible).length },
-    triggers: out.triggers.length,
+    triggers: 0,
     start: { t: 0, ...start },
     end,
     // The end state is the state after the wallet's 1,000th window
@@ -557,7 +451,7 @@ export async function replay(T, params, source, job) {
     capped: !!source.capped,
     trajectory,
     conformity,
-    policies: lock ? lock.result() : null,
+    policies: null,
     ...(validity ? { validity: summarize(validity) } : {}),
     ms: performance.now() - t0
   };

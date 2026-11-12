@@ -16,8 +16,8 @@
 //            RandomImproveMultiAsset, csl.mjs), whose runs cannot be
 //            repeated
 //
-//   opts     { seed, changePolicy ('default' | 'layout' | 'single' |
-//            'naive'), collateralRule, absorb, collateral, random }
+//   opts     { seed, changePolicy ('default' | 'layout'),
+//            collateralRule, absorb, collateral, random }
 //            collateral: for a replayed script spend, the UTxO the engine set
 //            aside under the arm's rule (replay/engine.mjs setAside); the
 //            state the method is given does not hold it, and the
@@ -50,7 +50,7 @@
 
 import { CLASSES } from '../kit/check.mjs';
 
-export const CHANGE_OPTIONS = Object.freeze(['default', 'layout', 'single', 'naive']);
+export const CHANGE_OPTIONS = Object.freeze(['default', 'layout']);
 export const NOT_REPLAYABLE = 'not-replayable';
 export const RESULT_CLASSES = Object.freeze(new Set([...Object.values(CLASSES), NOT_REPLAYABLE]));
 

@@ -4,11 +4,11 @@
 // The conforming share (src/replay/conform.mjs):
 //   - the inputs a verdict needs from the simulator's state (Value bytes,
 //     minimum coin) equal what the treatment computes with CSL, on every UTxO
-//     of the 21 shapes at their start and after the tidy-once plan, and the
+//     of the 21 shapes at their start and after the planner's plan, and the
 //     counts equal the treatment's walletLayoutReport;
 //   - the class map equals the plan's classMap wherever the planner returns
 //     a plan;
-//   - after the tidy-once plan every counted UTxO conforms under the plan's
+//   - after the planner's plan every counted UTxO conforms under the plan's
 //     own settings (the outputs that do not are named);
 //   - the observed layout of a fragmented shape is below 1;
 //   - a hand-built UTxO that breaks one rule at a time is counted
@@ -44,7 +44,7 @@ function treatmentCount(state, settings, classMap) {
   return T.conform.walletLayoutReport(wallet, { settings: T.planner.mergeSettings(settings), classMap, layout: [], params: tp }, tp);
 }
 
-test('the share equals the treatment\'s own count on every shape, at the start and after the tidy-once plan, and the class map equals the plan\'s', { skip, timeout: 30 * 60 * 1000 }, async () => {
+test('the share equals the treatment\'s own count on every shape, at the start and after the planner\'s plan, and the class map equals the plan\'s', { skip, timeout: 30 * 60 * 1000 }, async () => {
   const seen = { states: 0, utxos: 0, bytesChecked: 0, minChecked: 0, plansCompared: 0, tidyNonConforming: [], tidyTokenUtxos: 0 };
   for (const name of SHAPE_NAMES) {
     await settle();
@@ -86,7 +86,7 @@ test('the share equals the treatment\'s own count on every shape, at the start a
   assert.equal(seen.states, 2 * SHAPE_NAMES.length);
 });
 
-test('after the tidy-once plan every counted UTxO conforms under the plan\'s own settings, except the outputs a plan deliberately leaves off the layout', { skip, timeout: 30 * 60 * 1000 }, async () => {
+test('after the planner\'s plan every counted UTxO conforms under the plan\'s own settings, except the outputs a plan deliberately leaves off the layout', { skip, timeout: 30 * 60 * 1000 }, async () => {
   const off = [];
   let counted = 0;
   for (const name of SHAPE_NAMES) {

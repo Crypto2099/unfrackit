@@ -246,12 +246,5 @@ export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
   events.push({ kind: 'mark', n: 2, blockTime: 60 * DAY });
   intent(70 * DAY, 'T1', [payOut(params, ext(8), 100n * ADA, [])]);
 
-  // Arrival keys for H-2's groupings, as fixed test values: each token's key
-  // is the position, in the shape's generated order, of the first UTxO that
-  // holds it.
-  const arrival = new Map();
-  shape.order.forEach((ref, i) => {
-    for (const a of state.utxos.get(ref).assets) if (!arrival.has(key(a))) arrival.set(key(a), { txId: i, flagged: false });
-  });
-  return { events, windowEnd: 75 * DAY, arrival };
+  return { events, windowEnd: 75 * DAY };
 }

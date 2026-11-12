@@ -9,8 +9,8 @@
 // under every settings variant; and a set of payments (test/lib/payments.mjs
 // paymentSet: ADA payments, one NFT and shares of the ADA balance, on the
 // observed layout and on the tidy layout) by the H-12 rule with absorption on
-// and off and by the test method under the layout-preserving, single and
-// naive change policies. A transaction the
+// and off and by the test method under the layout-preserving change policy.
+// A transaction the
 // treatment builds that fails either its own checks or the kit's stops the
 // run (treatment/run.mjs StopPoint), so reaching the end means none did.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
@@ -38,7 +38,7 @@ const P = SYNTHETIC_PARAMS;
 test('every transaction built on the 21 shapes meets the kit\'s checks, and every negative control is caught for its own reason', { skip, timeout: 60 * 60 * 1000 }, async (t) => {
   const h12 = T && h12Method(T);
   const tm = T && testLargestMethod(T);
-  const methods = T ? [[h12, { changePolicy: 'default', absorb: true }, 'h12-on'], [h12, { changePolicy: 'default', absorb: false }, 'h12-off'], [tm, { changePolicy: 'layout' }, 'test-layout'], [tm, { changePolicy: 'single' }, 'test-single'], [tm, { changePolicy: 'naive' }, 'test-naive']] : [];
+  const methods = T ? [[h12, { changePolicy: 'default', absorb: true }, 'h12-on'], [h12, { changePolicy: 'default', absorb: false }, 'h12-off'], [tm, { changePolicy: 'layout' }, 'test-layout']] : [];
   const counts = { plans: 0, planTxs: 0, spends: 0, built: 0, chains: 0, failures: {}, kitFailures: 0, unsettled: {}, raised: {}, txs: { plan: 0, 'chain-plan': 0, payment: 0, kit: 0 }, aboveMinimum: { plan: 0, 'chain-plan': 0, payment: 0, kit: 0 }, controls: 0, suffices: 0, sufficesErrors: {} };
   const bad = [];
   const control = (state, bytes, form) => {

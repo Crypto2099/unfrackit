@@ -169,7 +169,7 @@ test('payments carrying a network id and an empty auxiliary data replay without 
     intentOf('d4', 40, { body: { 15: '00' }, fixedBytes: 2 }),
     intentOf('d5', 50, { body: { 15: '00' }, auxiliaryData: hexOf(MESSAGE), fixedBytes: 2 + 35 + MESSAGE.length - 1 })
   ];
-  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 100, params: P };
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 100, params: P };
   const run = (method) => replay(T, P, source, { arm: 'observed', variant: 'default', repetition: 1, method, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25, keepTx: true });
   const tlf = makeMethod(T, 'test-largest-first');
   for (const method of [tlf, cjsMethod(T), cslMethod(T, { strategy: 'lf' }), evoMethod()]) {

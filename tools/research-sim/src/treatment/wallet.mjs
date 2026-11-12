@@ -56,10 +56,7 @@ const AGREE = {
 // so a state's decoded wallet is kept per order and reused.
 const DECODED = new WeakMap();
 
-// `arrival`: for H-2's arrival groupings, a Map from ref to the UTxO's arrival
-// object ('policy.name' to its arrival key), as the planner reads it.
-export function treatmentWallet(T, state, { refs = null, arrival = null } = {}) {
-  if (arrival) return decodeState(T, state, refs, arrival);
+export function treatmentWallet(T, state, { refs = null } = {}) {
   let byOrder = DECODED.get(state);
   if (!byOrder) {
     byOrder = new Map();
@@ -68,13 +65,13 @@ export function treatmentWallet(T, state, { refs = null, arrival = null } = {}) 
   const key = refs ? refs.join(' ') : '';
   let w = byOrder.get(key);
   if (!w) {
-    w = decodeState(T, state, refs, null);
+    w = decodeState(T, state, refs);
     byOrder.set(key, w);
   }
   return w;
 }
 
-function decodeState(T, state, refs, arrival) {
+function decodeState(T, state, refs) {
   const list = refs ? refs.map((r) => {
     const u = state.utxos.get(r);
     if (!u) throw new Error(`treatment wallet: ${r} is not in the state`);
@@ -95,7 +92,6 @@ function decodeState(T, state, refs, arrival) {
     } else if (!AGREE[u.held].includes(pu.held)) {
       throw new Error(`treatment wallet: ${u.ref} is held (${u.held}), the treatment reads ${pu.held}`);
     }
-    if (arrival && arrival.has(u.ref)) pu.arrival = arrival.get(u.ref);
   });
   return { wallet: { utxoJson, utxoHex, changeAddress: changeAddressObject(T, state.changeAddress) }, utxos };
 }

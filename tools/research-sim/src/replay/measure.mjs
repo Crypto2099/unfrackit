@@ -186,31 +186,3 @@ export function tokenLedger(state, params) {
   }
   return { utxos, coin, minimum };
 }
-
-// H-3's per-window part: each policy's share of the minimum ADA of the outputs
-// holding it, shared pro rata by the policy's bytes in mixed outputs,
-// integrated over block time. add(state, seconds) accrues the state's shares
-// for that long; result() gives each policy's time average.
-export class PolicyLock {
-  constructor(params) {
-    this.params = params;
-    this.acc = new Map();
-    this.seconds = 0;
-  }
-  add(state, seconds) {
-    if (seconds <= 0) return;
-    this.seconds += seconds;
-    for (const u of state.utxos.values()) {
-      if (!u.assets.length) continue;
-      const min = utxoMinimum(this.params, u);
-      const pols = [...new Set(u.assets.map((a) => a.policy))];
-      const parts = pols.map((p) => ({ p, b: BigInt(bytesOf(u, (a) => a.policy === p)) }));
-      const total = parts.reduce((s, x) => s + x.b, 0n);
-      for (const { p, b } of parts) this.acc.set(p, (this.acc.get(p) || 0n) + (min * b * BigInt(Math.round(seconds))) / total);
-    }
-  }
-  result() {
-    if (!this.seconds) return [];
-    return [...this.acc].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([policy, x]) => ({ policy, lockedAda: x / BigInt(Math.round(this.seconds)) }));
-  }
-}

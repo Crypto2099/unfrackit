@@ -46,7 +46,7 @@ function fixture() {
   const invalid = intents.find((it) => it.type === 'T6' && it.invalid);
   const address = src.changeAddress;
   const pure = (i, coin) => utxoFromOutput(blake2b256(Buffer.from(`collateral aside ${i}`)).toString('hex'), 0, encodeOutput({ address: addressBytes(address), coin, assets: [] }, 'array'), { origin: 'deposit' });
-  const sourceOf = (utxos, list) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, changeAddressEnd: address, franken: new Set(), start: utxos, events: list.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 100 * DAY, params: src.params });
+  const sourceOf = (utxos, list) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, changeAddressEnd: address, franken: new Set(), start: utxos, events: list.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 100 * DAY, params: src.params });
   const stateOf = (utxos) => makeState({ network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, utxos });
   return { src, t6, invalid, pure, sourceOf, stateOf, P: src.params };
 }

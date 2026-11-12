@@ -27,13 +27,13 @@ import { selectionOf, checkSelection, machinesOf, packShards, walletCost, WALLET
 import { cmdPlanShards } from '../../../src/replay/commands.mjs';
 import { shardOf, parseArgs } from '../../../src/options.mjs';
 import { spoolJob, runReplays } from '../../../src/replay/run.mjs';
-import { testPlan } from '../../../src/arms/plan.mjs';
+import { windowPlan, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { HISTORY_FORMAT } from '../../../src/state/history.mjs';
 import { paramsFromRow } from '../../../src/history/params.mjs';
 import { runDir } from '../../../src/history/paths.mjs';
 import { stageText, stageLog } from '../../lib/stage.mjs';
 
-const HEADER = Object.freeze({ layout: STAGE_LAYOUT, command: 'replay', plan: 'test', options: { plan: 'test', testReps: '1' }, node: process.version, csl: { package: 'csl', version: '17.0.0', wasm: {} }, manifest: 'stand-in manifest\n' });
+const HEADER = Object.freeze({ layout: STAGE_LAYOUT, command: 'replay', plan: 'peak', options: { plan: 'peak', reps: '1' }, node: process.version, csl: { package: 'csl', version: '17.0.0', wasm: {} }, manifest: 'stand-in manifest\n' });
 const SHAPES = ['S1', 'S8', 'M1', 'CL1', 'E2'];
 const shapes = (names = SHAPES) => names.map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
 
@@ -53,7 +53,7 @@ function withHome(fn) {
 }
 
 // A stage over the shapes; selection from --shard or --wallet-indexes.
-function open(runId, { wallets = shapes(), header = HEADER, machine, workers = 2, shard, walletIndexes, plan = 'test' } = {}) {
+function open(runId, { wallets = shapes(), header = HEADER, machine, workers = 2, shard, walletIndexes, plan = 'peak' } = {}) {
   const list = walletList(wallets);
   const selection = selectionOf({ ...(shard !== undefined ? { shard } : {}), ...(walletIndexes !== undefined ? { walletIndexes } : {}) }, { plan, wallets: list });
   return openStage(runDir('synthetic', runId), { header, wallets: list, machine, workers, selection });
@@ -99,12 +99,12 @@ test('--shard k/n: the indexes modulo n equal to k; k out of range, n of 0, and 
   assert.equal(parseArgs(['--shard', '0/2'], 'study').shard, '0/2');
   assert.throws(() => parseArgs(['--shard', '0/2'], 'census'), /unknown option --shard for census/);
   const list = walletList(shapes([...SHAPES, 'S2', 'S3', 'S4']));
-  assert.deepEqual(selectionOf({ shard: '1/3' }, { plan: 'test', wallets: list }), { indexes: [1, 4, 7], record: { shard: '1/3', wallets: 3 } });
-  assert.deepEqual(selectionOf({ shard: '0/1' }, { plan: 'test', wallets: list }).indexes, [0, 1, 2, 3, 4, 5, 6, 7]);
-  assert.deepEqual(selectionOf({ shard: '9/10' }, { plan: 'test', wallets: list }).indexes, [], 'a shard beyond the wallets runs none');
-  assert.equal(selectionOf({}, { plan: 'test', wallets: list }), null);
+  assert.deepEqual(selectionOf({ shard: '1/3' }, { plan: 'peak', wallets: list }), { indexes: [1, 4, 7], record: { shard: '1/3', wallets: 3 } });
+  assert.deepEqual(selectionOf({ shard: '0/1' }, { plan: 'peak', wallets: list }).indexes, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(selectionOf({ shard: '9/10' }, { plan: 'peak', wallets: list }).indexes, [], 'a shard beyond the wallets runs none');
+  assert.equal(selectionOf({}, { plan: 'peak', wallets: list }), null);
   assert.throws(() => checkSelection({ shard: '0/2', walletIndexes: 'x.json' }), /give --shard or --wallet-indexes, not both/);
-  assert.throws(() => selectionOf({ shard: '0/2', walletIndexes: 'x.json' }, { plan: 'test', wallets: list }), /not both/);
+  assert.throws(() => selectionOf({ shard: '0/2', walletIndexes: 'x.json' }, { plan: 'peak', wallets: list }), /not both/);
 }));
 
 test('a shard ends without the join, noting the done indexes and how many remain, and records its share; the stage ends when every index is done', withHome(async () => {
@@ -215,7 +215,7 @@ test('plan-shards writes one index file per machine, every index in exactly one,
   // Wallet 104 is the heaviest by far; the others differ in UTxOs and events.
   const sizes = { 101: { utxos: 10, marks: 2 }, 102: { utxos: 400, marks: 5 }, 103: { utxos: 50, marks: 1 }, 104: { utxos: 3000, marks: 20, endUtxos: 3500 }, 105: { utxos: 900, marks: 3 }, 106: { utxos: 5, marks: 0 } };
   for (const [w, s] of Object.entries(sizes)) historyFile(files, Number(w), s);
-  const opts = (out, extra = {}) => ({ plan: 'test', testReps: '1', history: files, machines: 'spare=1,laptop=0.6', out, ...extra });
+  const opts = (out, extra = {}) => ({ plan: 'peak', reps: '1', collateralRule: 'ledger', history: files, machines: 'spare=1,laptop=0.6', out, ...extra });
   const r = await cmdPlanShards(opts(join(home, 'idx-a')));
   await cmdPlanShards(opts(join(home, 'idx-b')));
   for (const label of ['spare', 'laptop']) assert.equal(readFileSync(join(home, 'idx-a', `${label}.json`), 'utf8'), readFileSync(join(home, 'idx-b', `${label}.json`), 'utf8'), `${label}: deterministic`);
@@ -226,28 +226,28 @@ test('plan-shards writes one index file per machine, every index in exactly one,
   const laptop = read('laptop');
   assert.equal(spare.format, WALLET_INDEXES_FORMAT);
   assert.deepEqual(spare.machines, [{ label: 'spare', speed: 1 }, { label: 'laptop', speed: 0.6 }]);
-  assert.deepEqual([spare.plans.test.wallets, spare.plans.test.walletsSha256], [6, walletsSha256(list)]);
-  assert.deepEqual([...spare.plans.test.indexes, ...laptop.plans.test.indexes].sort(), [0, 1, 2, 3, 4, 5], 'every index in exactly one file');
-  assert.ok(spare.plans.test.indexes.includes(3), 'the heaviest wallet first, to the fastest machine');
-  assert.ok(Math.abs(spare.plans.test.share + laptop.plans.test.share - 1) < 1e-12);
-  assert.deepEqual(r.print.machines.map((m) => [m.label, m.wallets]), [['spare', spare.plans.test.indexes.length], ['laptop', laptop.plans.test.indexes.length]]);
+  assert.deepEqual([spare.plans.peak.wallets, spare.plans.peak.walletsSha256], [6, walletsSha256(list)]);
+  assert.deepEqual([...spare.plans.peak.indexes, ...laptop.plans.peak.indexes].sort(), [0, 1, 2, 3, 4, 5], 'every index in exactly one file');
+  assert.ok(spare.plans.peak.indexes.includes(3), 'the heaviest wallet first, to the fastest machine');
+  assert.ok(Math.abs(spare.plans.peak.share + laptop.plans.peak.share - 1) < 1e-12);
+  assert.deepEqual(r.print.machines.map((m) => [m.label, m.wallets]), [['spare', spare.plans.peak.indexes.length], ['laptop', laptop.plans.peak.indexes.length]]);
   // A replay reads its machine's indexes, and records the file.
-  const sel = selectionOf({ walletIndexes: join(home, 'idx-a', 'laptop.json') }, { plan: 'test', wallets: list });
-  assert.deepEqual(sel.indexes, laptop.plans.test.indexes);
-  assert.deepEqual([sel.record.walletIndexes, sel.record.plannedFor, sel.record.wallets], ['laptop.json', 'laptop', laptop.plans.test.indexes.length]);
+  const sel = selectionOf({ walletIndexes: join(home, 'idx-a', 'laptop.json') }, { plan: 'peak', wallets: list });
+  assert.deepEqual(sel.indexes, laptop.plans.peak.indexes);
+  assert.deepEqual([sel.record.walletIndexes, sel.record.plannedFor, sel.record.wallets], ['laptop.json', 'laptop', laptop.plans.peak.indexes.length]);
   assert.match(sel.record.sha256, /^[0-9a-f]{64}$/);
   // Another plan, another wallet list, a file that is not one: refused.
   assert.throws(() => selectionOf({ walletIndexes: join(home, 'idx-a', 'laptop.json') }, { plan: 'recent', wallets: list }), /holds no indexes for the recent plan/);
-  assert.throws(() => selectionOf({ walletIndexes: join(home, 'idx-a', 'laptop.json') }, { plan: 'test', wallets: list.slice(1) }), /was planned for another wallet list \(6 wallets against this run's 5/);
+  assert.throws(() => selectionOf({ walletIndexes: join(home, 'idx-a', 'laptop.json') }, { plan: 'peak', wallets: list.slice(1) }), /was planned for another wallet list \(6 wallets against this run's 5/);
   writeFileSync(join(home, 'not-one.json'), '{"plans":{}}');
-  assert.throws(() => selectionOf({ walletIndexes: join(home, 'not-one.json') }, { plan: 'test', wallets: list }), /is not a wallet index file/);
-  assert.throws(() => selectionOf({ walletIndexes: join(home, 'missing.json') }, { plan: 'test', wallets: list }), /cannot be read as a wallet index file \(ENOENT\)/);
+  assert.throws(() => selectionOf({ walletIndexes: join(home, 'not-one.json') }, { plan: 'peak', wallets: list }), /is not a wallet index file/);
+  assert.throws(() => selectionOf({ walletIndexes: join(home, 'missing.json') }, { plan: 'peak', wallets: list }), /cannot be read as a wallet index file \(ENOENT\)/);
   // A second plan joins the same files; other machines' files are refused.
-  await cmdPlanShards(opts(join(home, 'idx-a'), { plan: 'recent', testReps: undefined, collateralRule: 'ledger', reps: '2' }));
-  assert.deepEqual(Object.keys(read('spare').plans).sort(), ['recent', 'test']);
-  assert.deepEqual(read('spare').plans.test, spare.plans.test, 'the other plan\'s entry is kept');
+  await cmdPlanShards(opts(join(home, 'idx-a'), { plan: 'recent', reps: '2' }));
+  assert.deepEqual(Object.keys(read('spare').plans).sort(), ['peak', 'recent']);
+  assert.deepEqual(read('spare').plans.peak, spare.plans.peak, 'the other plan\'s entry is kept');
   await assert.rejects(cmdPlanShards(opts(join(home, 'idx-a'), { machines: 'spare=1,laptop=0.5' })), /was planned for other machines/);
-  await assert.rejects(cmdPlanShards(opts(join(home, 'idx-c'), { plan: 'recent', testReps: undefined })), /--collateral-rule ledger \| practice/);
+  await assert.rejects(cmdPlanShards(opts(join(home, 'idx-c'), { plan: 'recent', collateralRule: undefined })), /--collateral-rule ledger \| practice/);
   await assert.rejects(cmdPlanShards({ ...opts(join(home, 'idx-d')), history: undefined, shapes: 'S1' }), /--treatment <dir> loads the shapes/);
 }));
 
@@ -305,8 +305,8 @@ test('merge-stage refuses another run.json, another wallet list, a damaged segme
     assert.deepEqual(sources.map((s) => snapshot(s)), before, 'the sources are unchanged');
   };
   // Another option, and another wallet list, name the fields.
-  const other = await runStage('r-other', { shard: '1/2', machine: 'laptop', header: { ...HEADER, options: { ...HEADER.options, testReps: '2' } } });
-  await refuse([other.dir], /source .*r-other's run\.json differs from the target .*r-a's in --test-reps; only shards of one stage are merged/);
+  const other = await runStage('r-other', { shard: '1/2', machine: 'laptop', header: { ...HEADER, options: { ...HEADER.options, reps: '2' } } });
+  await refuse([other.dir], /source .*r-other's run\.json differs from the target .*r-a's in --reps; only shards of one stage are merged/);
   const node = await runStage('r-node', { shard: '1/2', machine: 'laptop', header: { ...HEADER, node: 'v24.0.0' } });
   await refuse([node.dir], /differs from .* in the Node version/);
   const wl = await runStage('r-wallets', { shard: '1/2', machine: 'laptop', wallets: shapes([...SHAPES].reverse()) });
@@ -393,13 +393,13 @@ test('runReplays as two shards in two directories, merged, writes the records an
   mkdirSync(files);
   const wallets = [201, 202, 203, 204, 205].map((w) => ({ spec: { kind: 'history', path: historyFile(files, w), analysisFreezeTx: null } }));
   const list = walletList(wallets);
-  const plan = testPlan({ reps: 1 }).filter((e) => e.hypothesis === 'H-1');
-  const header = { ...HEADER, plan: 'test' };
+  const plan = windowPlan('peak', { reps: 1 });
+  const header = { ...HEADER, plan: 'peak' };
   const run = async (runId, opts = {}) => {
     const pool = standInPool();
-    const out = await openStage(runDir('preprod', runId), { header, wallets: list, workers: pool.size, machine: opts.machine, selection: selectionOf(opts, { plan: 'test', wallets: list }) });
+    const out = await openStage(runDir('preprod', runId), { header, wallets: list, workers: pool.size, machine: opts.machine, selection: selectionOf(opts, { plan: 'peak', wallets: list }) });
     try {
-      const totals = await runReplays(null, pool, { wallets, plan, roles: { test: 'test-largest-first' }, out });
+      const totals = await runReplays(null, pool, { wallets, plan, roles: TEST_ROLES, out });
       return { totals, ended: out.ended, progress: out.progress, dir: out.dir };
     } finally {
       out.close();

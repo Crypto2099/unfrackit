@@ -6,7 +6,7 @@
 // checks, a set of payments (the H-12 rule with absorption on and the test
 // method with the layout-preserving change, each followed by the plan after
 // it), and a replay of the shape's synthetic stream in the
-// maintained-tidy arm. Each is reported as a diagnostic; the test asserts
+// observed arm. Each is reported as a diagnostic; the test asserts
 // only that memory stops growing once the heap is settled: over ten further
 // replays, the last five add at most 64 MiB of resident memory.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
@@ -66,8 +66,8 @@ test('a plan, a set of payments and a replay on M2, M3 and E1, with memory', { s
     row.payments = { runs: per.length, totalS: Math.round((performance.now() - t1) / 100) / 10, medianMs: Math.round(median(per)) };
     await settle();
     const t2 = performance.now();
-    const r = await replay(T, src.params, src, { arm: 'maintained-tidy', variant: 'default', repetition: 1, method: test, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25 });
-    row.replay = { intents: r.summary.counts.intents, plans: r.plans.length, s: Math.round((performance.now() - t2) / 100) / 10 };
+    const r = await replay(T, src.params, src, { arm: 'observed', variant: 'default', repetition: 1, method: test, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25 });
+    row.replay = { intents: r.summary.counts.intents, s: Math.round((performance.now() - t2) / 100) / 10 };
     row.after = mem();
     rows.push(row);
     t.diagnostic(JSON.stringify(row));
@@ -76,7 +76,7 @@ test('a plan, a set of payments and a replay on M2, M3 and E1, with memory', { s
   const src = loadSource(T, { kind: 'shape', name: 'M3', stream: 'synthetic' });
   const rss = [];
   for (let i = 0; i < 10; i++) {
-    await replay(T, src.params, src, { arm: 'maintained-tidy', variant: 'default', repetition: 1, method: test, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25 });
+    await replay(T, src.params, src, { arm: 'observed', variant: 'default', repetition: 1, method: test, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25 });
     await settle();
     rss.push(mem().rss);
   }

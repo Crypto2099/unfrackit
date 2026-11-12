@@ -21,8 +21,7 @@
 // the `time -v` figure of the queue's job; the timer inside the job adds the
 // peaks seen between intents.
 //
-// queue: the probe's twelve jobs, three wallets by the four heaviest job
-// kinds, one process each, under /usr/bin/time -v.
+// queue: the probe's twelve jobs, three wallets by the four job kinds, one process each, under /usr/bin/time -v.
 //
 // summary: one table row per job from its time file and its RESULT line.
 
@@ -36,13 +35,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // Cheapest first within a kind, for the same reason.
 export const WALLETS = Object.freeze(['H20E01', 'H3E6', 'H20E05']);
 
-// The four heaviest job kinds, cheapest first, so that a stopped probe has
-// the most readings.
+// The four methods the study replays most heavily, each on the observed arm,
+// cheapest first, so that a stopped probe has the most readings.
 export const KINDS = Object.freeze([
   { id: 'csl-lf-observed', method: 'csl-lf', arm: 'observed', variant: 'default' },
-  { id: 'cjs-rrri-maintained-tidy', method: 'cjs-rrri', arm: 'maintained-tidy', variant: 'default' },
-  { id: 'cjs-rrri-tidy-once-byte-optimal', method: 'cjs-rrri', arm: 'tidy-once', variant: 'byte-optimal' },
-  { id: 'evo-lf-observed', method: 'evo-lf', arm: 'observed', variant: 'default' }
+  { id: 'cjs-rrri-observed', method: 'cjs-rrri', arm: 'observed', variant: 'default' },
+  { id: 'evo-lf-observed', method: 'evo-lf', arm: 'observed', variant: 'default' },
+  { id: 'csl-ri-observed', method: 'csl-ri', arm: 'observed', variant: 'default' }
 ]);
 
 // Caps per job, in minutes: a job that passes its cap is stopped and the
@@ -103,7 +102,7 @@ async function job(a) {
     return x;
   };
   const timer = setInterval(sample, 50);
-  const job = { arm: a.arm, variant: a.variant, repetition: 1, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25, policyLock: false, validity: false };
+  const job = { arm: a.arm, variant: a.variant, repetition: 1, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25, validity: false };
   const x = await replay(T, source.params, source, { ...job, method });
   clearInterval(timer);
   const end = sample();

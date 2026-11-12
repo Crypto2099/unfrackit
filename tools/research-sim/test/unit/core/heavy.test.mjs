@@ -195,14 +195,14 @@ test('the heavy probe\'s queue: twelve distinct jobs the queue runner accepts, e
     assert.deepEqual(v.errors, []);
     assert.equal(q.jobs.length, WALLETS.length * KINDS.length);
     assert.equal(new Set(q.jobs.map((j) => j.id)).size, q.jobs.length);
-    assert.deepEqual([...new Set(KINDS.map((k) => `${k.method}/${k.arm}/${k.variant}`))].sort(), ['cjs-rrri/maintained-tidy/default', 'cjs-rrri/tidy-once/byte-optimal', 'csl-lf/observed/default', 'evo-lf/observed/default']);
+    assert.deepEqual([...new Set(KINDS.map((k) => `${k.method}/${k.arm}/${k.variant}`))].sort(), ['cjs-rrri/observed/default', 'csl-lf/observed/default', 'csl-ri/observed/default', 'evo-lf/observed/default']);
     for (const j of q.jobs) {
       assert.deepEqual(j.argv.slice(0, 2), ['/usr/bin/time', '-v']);
       assert.ok(j.argv.includes('scripts/heavy-probe.mjs') && j.argv.includes('job'));
     }
     // The cheapest kind first, so a stopped probe has the most readings.
     assert.equal(q.jobs[0].id, 'H20E01-csl-lf-observed');
-    assert.equal(q.jobs.at(-1).id, 'H20E05-evo-lf-observed');
+    assert.equal(q.jobs.at(-1).id, 'H20E05-csl-ri-observed');
     // The summary reads a time file and a RESULT line.
     const id = 'H20E01-csl-lf-observed';
     mkdirSync(join(dir, 'out', 'time'), { recursive: true });

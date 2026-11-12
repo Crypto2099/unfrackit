@@ -43,5 +43,5 @@ test('the machine record: the worker count and the host, for the timings only', 
 });
 
 test('the replay command refuses before anything is loaded', async () => {
-  await assert.rejects(cmdReplay({ treatment: '/nonexistent', shapes: 'S1', plan: 'test', workers: 'two' }), /--workers takes a positive whole number/);
+  await assert.rejects(cmdReplay({ treatment: '/nonexistent', shapes: 'S1', plan: 'recent', collateralRule: 'ledger', workers: 'two' }), /--workers takes a positive whole number/);
 });

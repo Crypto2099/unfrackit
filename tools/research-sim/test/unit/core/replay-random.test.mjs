@@ -64,10 +64,10 @@ test('a job\'s builds draw one stream, the burst pass in its place', { skip }, a
   }
 });
 
-test('jobs with one seed in different arms start from the same values, and seeds differ', { skip }, async () => {
+test('jobs with one seed start from the same values, and seeds differ', { skip }, async () => {
   const source = loadSource(T, { kind: 'shape', name: 'S4', stream: 'synthetic' });
   const draws = {};
-  for (const arm of ['observed', 'tidy-once', 'maintained-tidy']) {
+  for (const arm of ['observed']) {
     for (const seed of [1, 2]) {
       const { m, builds } = recording();
       await run(source, m, arm, seed);
@@ -76,7 +76,7 @@ test('jobs with one seed in different arms start from the same values, and seeds
   }
   for (const seed of [1, 2]) {
     const want = stream(seed, 1)[0];
-    for (const arm of ['observed', 'tidy-once', 'maintained-tidy']) {
+    for (const arm of ['observed']) {
       const d = draws[`${arm} ${seed}`];
       assert.equal(d[0], want, `${arm}, seed ${seed}`);
       assert.deepEqual(d, stream(seed, d.length));

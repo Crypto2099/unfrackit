@@ -3,7 +3,7 @@
 
 // A replay's wallet, from its history file or a synthetic shape:
 //   { wallet, window, network, stakeCred, changeAddress, changeAddressEnd,
-//     franken, start, events, arrival, windowStart, windowEnd, params,
+//     franken, start, events, windowStart, windowEnd, params,
 //     analysisFreezeTx, capped }
 // `wallet` is db-sync's stake-credential id or the shape's name; `window` the
 // history's frame ('recent', 'peak', or a test frame), 'snapshot' for a
@@ -50,7 +50,6 @@ export function loadSource(T, spec) {
       franken: h.franken,
       start: h.start,
       events: h.events,
-      arrival: h.arrival,
       windowStart: w ? Number(w.first.time) : null,
       windowEnd: w ? Number(w.endTime !== undefined ? w.endTime : w.last.time) : null,
       params: h.params,
@@ -73,7 +72,6 @@ export function loadSource(T, spec) {
       franken: new Set(),
       start: [...s.state.utxos.values()],
       events: stream.events,
-      arrival: stream.arrival || new Map(),
       windowStart: 0,
       windowEnd: stream.windowEnd,
       params: SYNTHETIC_PARAMS,

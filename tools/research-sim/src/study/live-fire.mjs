@@ -65,7 +65,7 @@ import { LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS } from '../options.mjs
 import { readPick, readLog, appendEntry, sanitizeError, redactCommand, unclosedStarts, keptRun, isSimRunId, SIM_GATE, SIM_LIVE_FIRE_START, SIM_LIVE_FIRE, KEPT } from './checklog.mjs';
 
 export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak', 'replay-recent', 'replay-peak']);
-// One repetition of every arm, variant and random selector: each code path a
+// One repetition of every library and random selector: each code path a
 // study run takes runs at least once, and a run over ten mainnet wallets ends
 // in hours at most.
 export const LIVE_FIRE_REPS = Object.freeze({ reps: 1 });

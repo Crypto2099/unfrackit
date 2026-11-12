@@ -59,13 +59,11 @@ export const SIM_SETTINGS = Object.freeze({
   collateralChoice: 'smallest',
   // Where the in-burst constraint applies. 'separate': only in a separate
   // pass at each parallel burst, from the state at its start, for burst
-  // feasibility and H-6's rescue test; the sequential replay continues for
-  // fees.
+  // feasibility; the sequential replay continues for fees.
   burstPass: 'separate',
-  // What H-3's replay records per policy. 'per-spend-and-window': per spend
-  // and policy, the bytes and fee of the policy's tokens recreated in change;
-  // per window, the time-averaged minimum ADA of the outputs holding it,
-  // shared pro rata by its bytes in mixed outputs.
+  // What the replay records per policy. 'per-spend-and-window': per spend
+  // and policy, the bytes and fee of the policy's tokens recreated in change.
+  // The wallet-arm record's per-window `policies` field is null.
   policyRecord: 'per-spend-and-window',
   // Minimum and value bytes of UTxOs already held. 'ledger': value bytes by
   // the ledger's re-serialization of the Value, the minimum by CSL on the
@@ -73,8 +71,7 @@ export const SIM_SETTINGS = Object.freeze({
   heldBytes: 'ledger',
   // The order in which a wallet's UTxOs are given to the treatment.
   // 'ref': transaction id bytes, then output index, ascending, the ledger's
-  // UTxO order and the order the naive-tidy control is decided to take. The
-  // planner's plans depend on this order where coins tie.
+  // UTxO order. The planner's plans depend on this order where coins tie.
   treatmentOrder: 'ref',
   // Held UTxOs and the treatment. 'flagged': they are given to the planner
   // and the H-12 rule marked held, which neither ever spends, so that asset

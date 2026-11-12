@@ -4,10 +4,9 @@
 #
 # The heavy probe: twelve replay jobs, one process each, on three heavy
 # synthetic wallets (H20E01: 20,000 UTxOs and 100 events; H20E05: 20,000 and
-# 500; H3E6: 3,000 and 6,000) under the four heaviest job kinds (csl-lf
-# observed, cjs-rrri maintained-tidy, cjs-rrri tidy-once byte-optimal, evo-lf
-# observed). Together they separate the memory and time a UTxO costs from
-# what an event costs.
+# 500; H3E6: 3,000 and 6,000) under four job kinds, all on the observed arm
+# (csl-lf, cjs-rrri, evo-lf, csl-ri). Together they separate the memory and
+# time a UTxO costs from what an event costs.
 #
 #   scripts/heavy-probe.sh <queue dir> [--resume]
 #

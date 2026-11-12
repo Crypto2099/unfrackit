@@ -24,8 +24,8 @@
 // Every record carries the key of the replay spend it belongs to:
 //   wallet      db-sync's stake-credential id (an integer), or a shape's name
 //   window      'recent', 'peak', 'snapshot', or 'synthetic'
-//   arm         the starting layout and its maintenance
-//   variant     the planner settings varied from the decided defaults, by name
+//   arm         'observed', the wallet as it was
+//   variant     'default', or 'absorb-on' or 'absorb-off' for UnFrack.It's H-12 rule
 //   method      the selector, by name and version
 //   change      the change policy
 //   collateral  the arm's collateral rule
@@ -42,7 +42,7 @@ import { join } from 'node:path';
 import { openSync, readSync, closeSync, unlinkSync } from 'node:fs';
 import { runDir, ensureDir, writeJson, JsonLines, toJson } from '../history/paths.mjs';
 
-export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'refused']);
+export const RECORD_KINDS = Object.freeze(['spend', 'burst', 'wallet-arm', 'refused']);
 export const KEY_FIELDS = Object.freeze(['wallet', 'window', 'arm', 'variant', 'method', 'change', 'collateral', 'repetition']);
 
 const BECH32_ADDR = /(addr|addr_test|stake|stake_test)1[02-9ac-hj-np-z]{20,}/;
@@ -222,8 +222,7 @@ export class RunOutput extends RecordLines {
 }
 
 // One wallet's records in a replay stage, in directory dir: its jobs' spools
-// committed in job order, then its trigger records, numbered within the
-// wallet from 1, with the wallet's index in every timing row. The stage
+// committed in job order, numbered within the wallet from 1, with the wallet's index in every timing row. The stage
 // compresses the two files into the wallet's segment when the wallet is
 // complete (out/stage.mjs).
 export class Segment extends RecordLines {

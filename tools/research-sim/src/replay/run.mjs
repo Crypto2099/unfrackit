@@ -2,8 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 // A run: a plan's jobs over a set of wallets through the worker pool, the
-// engine's output written as records (out/records.mjs), and the joins that
-// need two arms (H-6's rescue test).
+// engine's output written as records (out/records.mjs).
 //
 // A replay run is a stage (out/stage.mjs) that writes each wallet's records
 // whole as a segment of its own. For each wallet the stage has not done: its
@@ -16,8 +15,7 @@
 // done once every job of the wallet has completed. So a wallet's records are
 // those of one thread writing every job in turn, whatever order the jobs end
 // in, and the parent holds no wallet's records: of a job it keeps only
-// whether it was refused, its validity summary and, for a maintained-tidy
-// job, what H-6's join reads. Several wallets are open at once (runReplays),
+// whether it was refused and its validity summary. Several wallets are open at once (runReplays),
 // so a wallet's slowest job does not leave the other workers idle, and
 // wallets are done in any order. Every job runs to completion: a job the
 // pool's watchdog stops, or one a machine error ends, runs again
@@ -29,65 +27,16 @@
 // the wallets not done. When every wallet is done the stage joins the
 // segments in wallet order.
 //
-// H-6's rescue test: each trigger of a maintained-tidy arm under the decided or
-// an alternative threshold is followed for 30 days of block time; it rescues
-// when, at a script interaction, the never-propose arm (same selector, change
-// policy, collateral rule and repetition) has no eligible collateral under a
-// confirmatory rule and the rule's arm has, or a parallel burst is infeasible
-// in the never-propose arm and feasible in the rule's arm. The outcome is
-// recorded under each confirmatory collateral rule, since the collateral
-// measurement chooses which one is confirmatory.
-
 import { rmSync } from 'node:fs';
 import { record } from '../out/records.mjs';
 import { spoolPaths, spoolRecords, Frontier } from '../out/spool.mjs';
 import { loadSource } from './source.mjs';
 import { expandJobs } from '../arms/plan.mjs';
-import { CONFIRMATORY_RULES } from './collateral.mjs';
 import { sumValidity } from '../kit/validity.mjs';
 import { walletMemory } from './pool.mjs';
 
-const MONTH = 30 * 86400;
-// The thresholds whose triggers are tested against the never-propose arm.
-const H6_RULES = new Set(['default', 'dust-1', 'band-3-6', 'band-5-20']);
-
-export function rescueOutcomes(rule, never) {
-  return rule.triggers.map((tr) => {
-    const within = (t) => t !== null && t > tr.t && t <= tr.t + MONTH;
-    const rescue = {};
-    for (const cr of CONFIRMATORY_RULES) {
-      let rescued = false;
-      for (const s of rule.spends) {
-        if (!within(s.t) || !s.collateralAvailable) continue;
-        const ns = never.spends.find((x) => x.intent === s.intent);
-        if (ns && ns.collateralAvailable && ns.collateralAvailable[cr] === false && s.collateralAvailable[cr] === true) rescued = true;
-      }
-      for (const b of rule.bursts) {
-        if (!within(b.t)) continue;
-        const nb = never.bursts.find((x) => x.id === b.id);
-        if (nb && !nb.feasible && b.feasible) rescued = true;
-      }
-      rescue[cr] = rescued;
-    }
-    return { ...tr, rescue };
-  });
-}
-
-// What H-6's join (rescueOutcomes) reads of a maintained-tidy job: its
-// triggers whole, its spends at a script interaction (those with
-// collateralAvailable) by time, intent and availability, and its bursts by
-// time, id and feasibility. A job names each intent once, so leaving out the
-// spends without collateralAvailable changes no outcome.
-export function rescueFields(x) {
-  return {
-    triggers: x.triggers,
-    spends: x.spends.filter((s) => s.collateralAvailable).map(({ t, intent, collateralAvailable }) => ({ t, intent, collateralAvailable })),
-    bursts: x.bursts.map(({ t, id, feasible }) => ({ t, id, feasible }))
-  };
-}
-
 // The records of one replay job's result x, in the order a run writes them:
-// its refusal, or its plans, spends, bursts and wallet-arm record. The
+// its refusal, or its spends, bursts and wallet-arm record. The
 // wallet-arm's ms is the attempt's time, which the parent measures: it is
 // written here as 0, in the position the time takes, and the parent sets it
 // in the timing row (spoolJob holds that row back).
@@ -97,7 +46,6 @@ export function* jobRecords(x, { key, hypotheses, opts = {} }) {
     yield record('refused', key, { reason: x.refused });
     return;
   }
-  for (const p of x.plans) yield record('plan', key, p);
   for (const s of x.spends) yield record('spend', key, s);
   for (const b of x.bursts) yield record('burst', key, b);
   yield record('wallet-arm', key, { hypotheses, methodVersion: x.method.version, ...(absorb !== undefined ? { absorb } : {}), ...x.summary, ms: 0 });
@@ -106,11 +54,11 @@ export function* jobRecords(x, { key, hypotheses, opts = {} }) {
 // What a worker answers for a replay job (replay/worker.mjs): the job's
 // records written to its spool (job.spool), with the wallet-arm's timing row
 // held back, and what the parent reads besides: whether the job was refused,
-// its validity summary, and H-6's fields of a maintained-tidy job.
+// its validity summary.
 export function spoolJob(x, job) {
   const spooled = spoolRecords(job.spool, jobRecords(x, job), { hold: (rec) => rec.kind === 'wallet-arm' });
   if (x.refused) return { refused: true, spooled };
-  return { refused: false, validity: x.summary.validity || null, rescue: job.arm === 'maintained-tidy' ? rescueFields(x) : null, spooled };
+  return { refused: false, validity: x.summary.validity || null, spooled };
 }
 
 // The options a replay job gives its method (checked by the engine): the seed
@@ -145,7 +93,7 @@ export const poolJobCap = (workers) => 2 * workers;
 // invocation's share of the wallets (out/stage.mjs runs). The jobs' spools
 // are under out.dir/spool/<wallet index>/, removed when the run ends.
 // Returns the stage's totals, every done wallet's summed: { wallets, jobs,
-// refused, triggers } and, with validity, their validity counts.
+// refused } and, with validity, their validity counts.
 //
 // Several wallets run at once. The run keeps one queue of the jobs not yet
 // handed to the pool, in (wallet index, job index) order, and hands the pool
@@ -217,10 +165,8 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
       wallet: source.wallet,
       start,
       seg,
-      totals: { jobs: 0, refused: 0, triggers: 0 },
+      totals: { jobs: 0, refused: 0 },
       validities: [],
-      // H-6's fields of each maintained-tidy job that was not refused, by job.
-      rescue: new Array(jobs.length).fill(null),
       frontier: new Frontier(jobs.length, (_i, spooled) => seg.commit(spooled)),
       left: jobs.length,
       closing: false,
@@ -238,7 +184,6 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
         method: { name: j.method, options: methodOptions[j.method] || {} },
         opts: replayJobOpts(j),
         settleEvery,
-        policyLock: j.policyLock,
         validity,
         key,
         hypotheses: j.hypotheses,
@@ -268,7 +213,6 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
         st.validities.push(x.validity);
         noteValidity(out, key, x.validity);
       }
-      if (x.rescue) st.rescue[i] = { key, ...x.rescue };
     }
     if (x.spooled.held) x.spooled.held.times.ms = r.ms;
     st.frontier.done(i, x.spooled);
@@ -295,24 +239,14 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
     }
   };
 
-  // A wallet whose jobs have all ended: H-6's rescue test, per
-  // maintained-tidy rule arm against its never-propose twin, in job order;
-  // then the stage completes its segment, after the closes before it.
+  // A wallet whose jobs have all ended: the stage completes its segment,
+  // after the closes before it.
   const close = (st) => {
     st.closing = true;
     let ready = false;
     try {
       if (!st.frontier.complete) throw new Error('a job of the wallet was not committed');
-      const twins = new Map(st.rescue.filter(Boolean).map((r) => [JSON.stringify(r.key), r]));
-      for (const res of st.rescue) {
-        if (!res || !res.triggers.length) continue;
-        const twin = H6_RULES.has(res.key.variant) ? twins.get(JSON.stringify({ ...res.key, variant: 'never-propose' })) : null;
-        const outcomes = twin ? rescueOutcomes(res, twin) : res.triggers.map((t) => ({ ...t, rescue: null }));
-        for (const t of outcomes) st.seg.write(record('trigger', res.key, t));
-        st.totals.triggers += outcomes.length;
-      }
       if (validity) st.totals.validity = sumValidity(st.validities);
-      st.rescue = null;
       st.validities = null;
       ready = true;
     } catch (e) {

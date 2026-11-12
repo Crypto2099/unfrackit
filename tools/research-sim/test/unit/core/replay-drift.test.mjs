@@ -31,7 +31,7 @@ function fixture() {
   const address = src.changeAddress;
   const pure = (i, coin) => utxoFromOutput(blake2b256(Buffer.from(`drift ${i}`)).toString('hex'), 0, encodeOutput({ address: addressBytes(address), coin, assets: [] }, 'array'), { origin: 'deposit' });
   const stateOf = (utxos) => makeState({ network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, utxos });
-  const sourceOf = (utxos, list) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, changeAddressEnd: address, franken: new Set(), start: utxos, events: list.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 100 * DAY, params: src.params });
+  const sourceOf = (utxos, list) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: src.stakeCred, changeAddress: address, changeAddressEnd: address, franken: new Set(), start: utxos, events: list.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 100 * DAY, params: src.params });
   return { src, t6, invalid, pure, stateOf, sourceOf, P: src.params };
 }
 

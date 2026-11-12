@@ -25,16 +25,16 @@ import { openStage, walletList, STAGE_LAYOUT } from '../../../src/out/stage.mjs'
 import { mergeStage } from '../../../src/out/merge.mjs';
 import { selectionOf } from '../../../src/replay/shards.mjs';
 import { spoolJob, runReplays, openWalletCap, poolJobCap } from '../../../src/replay/run.mjs';
-import { testPlan, expandJobs } from '../../../src/arms/plan.mjs';
+import { windowPlan, expandJobs, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { HISTORY_FORMAT } from '../../../src/state/history.mjs';
 import { paramsFromRow } from '../../../src/history/params.mjs';
 import { runDir } from '../../../src/history/paths.mjs';
 import { stageText, stageLog } from '../../lib/stage.mjs';
 
-const HEADER = Object.freeze({ layout: STAGE_LAYOUT, command: 'replay', plan: 'test', options: { plan: 'test', testReps: '1', validity: true }, node: process.version, csl: { package: 'csl', version: '17.0.0', wasm: { 'a.wasm': 'ab'.repeat(32) } }, manifest: 'stand-in manifest\n' });
-// H-1's arms and H-6's maintained-tidy twins, so that the trigger join runs.
-const PLAN = testPlan({ reps: 1 }).filter((e) => ['H-1', 'H-6'].includes(e.hypothesis));
-const ROLES = { test: 'test-largest-first' };
+const HEADER = Object.freeze({ layout: STAGE_LAYOUT, command: 'replay', plan: 'recent', options: { plan: 'recent', reps: '1', validity: true }, node: process.version, csl: { package: 'csl', version: '17.0.0', wasm: { 'a.wasm': 'ab'.repeat(32) } }, manifest: 'stand-in manifest\n' });
+// The recent plan at one repetition, every role played by the test method.
+const PLAN = windowPlan('recent', { reps: 1 });
+const ROLES = TEST_ROLES;
 const JOBS = expandJobs(PLAN, { roles: ROLES, needsCollateral: false }).length;
 
 function withHome(fn) {
@@ -72,18 +72,15 @@ function walletsIn(home, ids) {
   return ids.map((w) => ({ spec: { kind: 'history', path: historyFile(files, w), analysisFreezeTx: null } }));
 }
 
-// An engine result as a worker has it: a plan, two spends, a burst, a
-// trigger in a maintained-tidy arm unless it is the never-propose twin.
+// An engine result as a worker has it: two spends and a burst.
 function engineResult(arm, variant, repetition) {
-  const never = variant === 'never-propose';
+  const never = repetition % 2 === 0;
   return {
-    plans: [{ at: 'start', t: 0, txs: 1, fee: 170000n + BigInt(repetition), notes: [], control: null, trigger: false }],
     spends: [
       { intent: 0, type: 'T1', t: 10, burst: null, outcome: 'built', fee: 170000n, ms: 2.5 },
       { intent: 1, type: 'T4', t: 40, burst: null, collateralAvailable: { ledger: true, practice: !never }, outcome: 'built', fee: 400000n, ms: 9 }
     ],
     bursts: [{ id: 'b1', t: 50, feasible: !never, txs: 2 }],
-    triggers: arm === 'maintained-tidy' && !never ? [{ at: 'mark 1', t: 30, reasons: ['pure-ada-count'], txs: 1, fee: 1000n }] : [],
     summary: { counts: { intents: 2 }, fees: { spends: 570000n }, validity: { txs: 3, cslRead: 3, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 3, size: 3, value: 3, witnesses: 3 }, notApplicable: { fee: 0, value: 0 }, failed: 0 }, ms: 12.5 },
     method: { name: 'test-largest-first', version: 'test-1', deterministic: true }
   };
@@ -149,7 +146,7 @@ function standInPool({ size = 2, hold = new Map(), fail = null } = {}) {
 // whose close, once it starts, waits for the gate.
 async function openWatched(runId, wallets, pool, { machine, shard, hold = null } = {}) {
   const list = walletList(wallets);
-  const out = await openStage(runDir('preprod', runId), { header: HEADER, wallets: list, workers: pool.size, machine, selection: selectionOf(shard ? { shard } : {}, { plan: 'test', wallets: list }) });
+  const out = await openStage(runDir('preprod', runId), { header: HEADER, wallets: list, workers: pool.size, machine, selection: selectionOf(shard ? { shard } : {}, { plan: 'recent', wallets: list }) });
   const seen = { opens: [], closes: [] };
   const segment = out.segment.bind(out);
   out.segment = (i) => {
@@ -217,7 +214,7 @@ function assertSameStage(a, b) {
 }
 
 test('several wallets open at once, closed out of order, write the records, timing rows, segments and totals of a run with one wallet open at a time', withHome(async (home) => {
-  assert.equal(JOBS, 9);
+  assert.equal(JOBS, 10);
   assert.equal(openWalletCap(2), 4);
   assert.equal(poolJobCap(2), 4);
   const wallets = walletsIn(home, [101, 102, 103, 104, 105, 106]);
@@ -237,8 +234,7 @@ test('several wallets open at once, closed out of order, write the records, timi
   assert.ok(completed.indexOf(0) > completed.indexOf(3));
   assert.ok(Math.max(...many.seen.opens.map((o, k) => k + 1 - o.closed)) >= 3, 'several wallets open at once');
   assertSameStage(many, one);
-  assert.ok(many.totals.triggers > 0, 'the trigger join ran');
-  assert.deepEqual(many.totals, { wallets: 6, jobs: 6 * JOBS, refused: 0, triggers: many.totals.triggers, validity: many.totals.validity });
+  assert.deepEqual(many.totals, { wallets: 6, jobs: 6 * JOBS, refused: 0, validity: many.totals.validity });
   assert.equal(existsSync(join(many.dir, 'spool')), false);
   const window = stageLog(many.dir).find((e) => e.event === 'window');
   assert.deepEqual([window.workers, window.queue, window.inPool, window.maxOpen, window.wallets], [2, 4, 4, 4, 6]);

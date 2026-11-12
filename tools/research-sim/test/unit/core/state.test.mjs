@@ -161,7 +161,6 @@ test('a history file reads into parameters, the start state, events and intents'
   assert.equal(it.observed.protocolMajor, 10);
   assert.equal(it.observed.walletWitnesses.length, 1);
   assert.deepEqual(it.derived, { poolDeposits: '500000000' });
-  assert.equal(h.arrival.get(`${POL}.4e4654`).txId, 17);
   // Every record's creating transaction id is kept. The change address
   // starts at the header's latest output before the window at a key payment
   // credential and a base address (here the start state's T1#10 at A1, over

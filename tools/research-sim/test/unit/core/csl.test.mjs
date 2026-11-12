@@ -32,7 +32,7 @@ import { h12Method, h12Request } from '../../../src/methods/h12.mjs';
 import { spreadFungible } from '../../../src/shapes/streams.mjs';
 import { paymentIntent, nftHoldings, adaShareIntent } from '../../lib/payments.mjs';
 import { recipientAddress, RECIPIENT_STAKE } from '../../../src/kit/recipients.mjs';
-import { spendable, cmpRef } from '../../../src/state/state.mjs';
+import { spendable } from '../../../src/state/state.mjs';
 import { settle } from '../../../src/kit/heap.mjs';
 import { withoutOneWitness } from '../../lib/txcbor.mjs';
 import { negativeControls, EXPECTED } from '../../lib/controls.mjs';
@@ -265,7 +265,7 @@ test('negative controls on every form: a plan transaction, a chain\'s planner tr
   await settle();
 });
 
-test('the change policies: layout groups by class and policy, naive mixes classes, single holds everything', { skip }, () => {
+test('the layout change policy groups by class and policy, and refuses inputs that cannot fund the change', { skip }, () => {
   const s = shapeState(T, 'S6').state;
   const spend = spendable(s);
   const ft = spend.filter((u) => u.assets.length && u.assets[0].qty > 1n).slice(0, 2);
@@ -287,19 +287,7 @@ test('the change policies: layout groups by class and policy, naive mixes classe
     assert.equal(kinds.size, 1, 'classes are not mixed');
   }
   assert.equal(layout.filter((o) => !o.assets.length).length, 1, 'one pure-ADA change output');
-  const naive = outs('naive');
-  assert.equal(naive.filter((o) => o.assets.length).length, 1, 'naive packs both classes into one output');
-  const single = outs('single');
-  assert.equal(single.length, 1);
-  assert.equal(single[0].assets.length, new Set(inputs.flatMap((u) => u.assets.map((x) => `${x.policy}.${x.name}`))).size);
-  // The single output over the value-size limit, and inputs that cannot fund
-  // the change.
-  const m1 = shapeState(T, 'M1').state;
-  const big = spendable(m1).filter((u) => u.assets.length);
-  const sixNft = spend.filter((u) => u.assets.length && u.assets[0].qty === 1n).slice(0, 1);
-  const mixed = { ...m1, utxos: new Map([...m1.utxos, ...sixNft.map((u) => [u.ref, u])].sort((x, y) => cmpRef(x[0], y[0]))) };
-  const over = buildWithChange(T, { state: mixed, params: P, inputs: [...big, ...sixNft, ...spendable(m1).filter((u) => !u.assets.length)], intent, policy: 'single' });
-  assert.equal(over.class, CLASSES.valueSize);
+  // Inputs that cannot fund the change.
   const big200 = paymentIntent(T, s, P, { id: 'ada-payment', coin: 200000000n });
   const short = buildWithChange(T, { state: s, params: P, inputs: nft.slice(0, 1), intent: big200, policy: 'layout' });
   assert.equal(short.class, CLASSES.changeMinimum);

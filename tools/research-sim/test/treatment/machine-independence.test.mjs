@@ -10,10 +10,8 @@
 // it run again to completion.
 // The three write the same records, byte for byte once the unseeded
 // selector's (csl-ri) are set aside; theirs are compared by key and count,
-// where those are fixed (the jobs, and one spend record per intent; their
-// plans and triggers follow their draws). The replay plan is the H-1 arms,
-// H-7's evo-lf and H-6's default and never-propose thresholds (so the trigger
-// join runs) under the ledger collateral rule.
+// where those are fixed (the jobs, and one spend record per intent). The
+// replay plan is the study's recent plan under the ledger collateral rule.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
 
 import { test } from 'node:test';
@@ -86,11 +84,6 @@ async function runWay(way, runId, go, { wallets = null } = {}) {
   }
 }
 
-// The totals but the replays' trigger count, which counts the unseeded
-// selectors' triggers too, and those follow their draws; the seeded methods'
-// triggers are compared as records.
-const fixedTotals = ({ triggers: _triggers, ...rest }) => rest;
-
 function assertSame(runs, countedKinds) {
   const [a, ...rest] = runs.map((r) => split(r.records, countedKinds));
   assert.ok(a.seeded.length > 100, `${a.seeded.length} seeded records`);
@@ -100,7 +93,7 @@ function assertSame(runs, countedKinds) {
     const at = b.seeded.findIndex((l, j) => l !== a.seeded[j]);
     assert.equal(at, -1, `${WAYS[i + 1].name}: the first record that differs is number ${at}`);
     assert.deepEqual(b.unseeded, a.unseeded, `${WAYS[i + 1].name}: the unseeded selectors' keys and counts`);
-    assert.deepEqual(fixedTotals(runs[i + 1].totals), fixedTotals(runs[0].totals), `${WAYS[i + 1].name}: totals`);
+    assert.deepEqual(runs[i + 1].totals, runs[0].totals, `${WAYS[i + 1].name}: totals`);
   });
 }
 
@@ -108,12 +101,8 @@ test('replays: one worker, a fresh worker per job, and a watchdog stop write the
   const wallets = SHAPES.map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
   const first = wallets.map((w) => loadSource(T, w.spec).events.find((e) => e.kind === 'intent').intent.id);
   const plan = [
-    // The study's refocused arms, one repetition each, and the tidy arms of
-    // the engine (H-1's, and H-6's default and never-propose twins, so that the
-    // trigger join runs): the engine still replays them.
+    // The study's arms, one repetition each, and the stalling test method.
     ...windowPlan('recent', { reps: 1 }),
-    ...['observed', 'tidy-once', 'maintained-tidy'].flatMap((arm) => ['lf', 'ri', 'rrri'].map((role) => ({ hypothesis: 'H-1', arm, variant: 'default', role, change: 'default', repetitions: 1 }))),
-    ...['default', 'never-propose'].flatMap((variant) => ['rrri', 'lf'].map((role) => ({ hypothesis: 'H-6', arm: 'maintained-tidy', variant, role, change: 'default', repetitions: 1 }))),
     { hypothesis: 'test', arm: 'observed', variant: 'default', role: 'stall', change: 'default', repetitions: 1 }
   ];
   const opts = { wallets, plan, roles: { ...STUDY_ROLES, stall: 'test-stall' }, methodOptions: { 'test-stall': { stallMs: STALL_MS, only: first } }, collateralRules: ['ledger'] };
@@ -126,6 +115,5 @@ test('replays: one worker, a fresh worker per job, and a watchdog stop write the
   assert.deepEqual([runs[0].stats.watchdogStops, runs[1].stats.watchdogStops], [0, 0]);
   assert.deepEqual([...new Set(runs[2].log.filter((e) => e.event === 'watchdog stop' && e.method === 'test-stall').map((e) => e.wallet))].sort(), stalled);
   assert.ok(runs[1].stats.started >= runs[1].totals.jobs, 'a fresh worker per job');
-  assert.ok(runs[0].records.some((l) => l.includes('"kind":"trigger"')), 'the trigger join ran');
   assertSame(runs, ['wallet-arm', 'spend']);
 }));

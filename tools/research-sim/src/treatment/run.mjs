@@ -71,19 +71,18 @@ function kitAgree(state, params, txs, treatmentPass, what, validity = null, kit 
 
 // The planner's plan for a state without building it (planner2.mjs plan's
 // return value), for comparing two settings on one state.
-export function planOnly(T, state, params, settings = {}, { ladder, refs, arrival } = {}) {
+export function planOnly(T, state, params, settings = {}, { ladder, refs } = {}) {
   const tp = treatmentParams(T, params);
-  const { utxos } = treatmentWallet(T, state, { refs, arrival });
+  const { utxos } = treatmentWallet(T, state, { refs });
   const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
   return T.planner.plan(utxos, settings, tp, adapter, ladder === undefined ? {} : { ladder });
 }
 
 // The planner's plan for a state. options: { ladder } as planner2.mjs plan
-// takes it; refs: the order (state order by default); arrival: as
-// treatmentWallet takes it; validity: { acc, at } as kit/apply.mjs takes it.
-export function planState(T, state, params, settings = {}, { ladder, refs, arrival, validity = null } = {}) {
+// takes it; refs: the order (state order by default); validity: { acc, at } as kit/apply.mjs takes it.
+export function planState(T, state, params, settings = {}, { ladder, refs, validity = null } = {}) {
   const tp = treatmentParams(T, params);
-  const { wallet, utxos } = treatmentWallet(T, state, { refs, arrival });
+  const { wallet, utxos } = treatmentWallet(T, state, { refs });
   const adapter = adapterFor(T, state.changeAddress, tp, 'plan');
   const plan = T.planner.plan(utxos, settings, tp, adapter, ladder === undefined ? {} : { ladder });
   if (!plan.txs.length) return { plan, txs: [], after: state, treatmentChecks: [], kitChecks: [] };

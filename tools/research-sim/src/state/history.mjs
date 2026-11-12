@@ -76,13 +76,10 @@ export function readHistory(text, { analysisFreezeTx = null } = {}) {
   for (const k of Object.keys(counts)) {
     if (end.counts && end.counts[k] !== undefined && end.counts[k] !== counts[k]) throw new Error(`history file: ${counts[k]} ${k} events, the end record says ${end.counts[k]}`);
   }
-  // The arrival table, as the planner's arrival grouping reads it: each
-  // asset's arrival key is db-sync's integer id of its arrival transaction.
-  const arrival = new Map((header.arrival || []).map((a) => [`${a.policy}.${a.name}`, { txId: a.txId, flagged: !!a.flagged }]));
   const before = latestKeyBaseOf(header, start, created);
   const change = annotateChangeAddresses(before, events, franken);
   const stakeCred = change.end === null ? null : parseAddress(addressBytes(change.end)).stake;
-  return { header, params, franken, start, events, end, arrival, created, changeAddress: change.start, changeAddressEnd: change.end, stakeCred, analysisFreezeTx };
+  return { header, params, franken, start, events, end, created, changeAddress: change.start, changeAddressEnd: change.end, stakeCred, analysisFreezeTx };
 }
 
 // The header's latest output before the window at a key payment credential

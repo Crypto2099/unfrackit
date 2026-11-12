@@ -48,8 +48,6 @@
 import { spendable, cmpRef } from '../state/state.mjs';
 
 export const COLLATERAL_RULES = Object.freeze(['ledger', 'practice', 'ledger-minimum', 'token-bearing']);
-// The two confirmatory candidates; the collateral measurement chooses one.
-export const CONFIRMATORY_RULES = Object.freeze(['ledger', 'practice']);
 
 const ADA = 1000000n;
 const byCoin = (a, b) => (a.coin < b.coin ? -1 : a.coin > b.coin ? 1 : cmpRef(a.ref, b.ref));

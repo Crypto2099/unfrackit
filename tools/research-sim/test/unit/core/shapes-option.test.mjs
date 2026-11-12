@@ -33,6 +33,6 @@ test('a name the generator does not make, or one too long for a record, is refus
 });
 
 test('the commands refuse a bad name before they load the treatment', async () => {
-  await assert.rejects(cmdReplay({ treatment: '/nonexistent', plan: 'test', shapes: 'H20E005' }), /a record names a shape in at most six characters/);
-  await assert.rejects(cmdReplay({ treatment: '/nonexistent', plan: 'test', shapes: 'S1,H99E1' }), /unknown shape H99E1/);
+  await assert.rejects(cmdReplay({ treatment: '/nonexistent', plan: 'recent', collateralRule: 'ledger', shapes: 'H20E005' }), /a record names a shape in at most six characters/);
+  await assert.rejects(cmdReplay({ treatment: '/nonexistent', plan: 'recent', collateralRule: 'ledger', shapes: 'S1,H99E1' }), /unknown shape H99E1/);
 });

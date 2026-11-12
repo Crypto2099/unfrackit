@@ -26,13 +26,13 @@ import { openStage, walletList, runDifferences, gunzipDigest, STAGE_LAYOUT } fro
 import { runDir } from '../../../src/history/paths.mjs';
 import { machineLabel, parseArgs } from '../../../src/options.mjs';
 import { spoolJob, runReplays } from '../../../src/replay/run.mjs';
-import { testPlan } from '../../../src/arms/plan.mjs';
+import { windowPlan, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { HISTORY_FORMAT } from '../../../src/state/history.mjs';
 import { paramsFromRow } from '../../../src/history/params.mjs';
 import { stageText, stageLog } from '../../lib/stage.mjs';
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
-const HEADER = Object.freeze({ layout: STAGE_LAYOUT, command: 'replay', plan: 'test', options: { plan: 'test', testReps: '1' }, node: process.version, csl: { package: 'csl', version: '17.0.0', wasm: { 'a.wasm': 'ab'.repeat(32) } }, manifest: 'stand-in manifest\n' });
+const HEADER = Object.freeze({ layout: STAGE_LAYOUT, command: 'replay', plan: 'recent', options: { plan: 'recent', reps: '1' }, node: process.version, csl: { package: 'csl', version: '17.0.0', wasm: { 'a.wasm': 'ab'.repeat(32) } }, manifest: 'stand-in manifest\n' });
 const SHAPES = ['S1', 'S8', 'M1', 'CL1', 'E2'];
 const shapes = (names = SHAPES) => names.map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
 
@@ -70,7 +70,7 @@ async function writeWallet(stage, i, { stopAfter = null } = {}) {
     }
     seg.write(rec);
   }
-  return stage.complete(i, seg, { wallet: SHAPES[i], totals: { jobs: 1, refused: 0, triggers: 0, validity: { txs: recs.length, failed: 0 } }, start: new Date() });
+  return stage.complete(i, seg, { wallet: SHAPES[i], totals: { jobs: 1, refused: 0, validity: { txs: recs.length, failed: 0 } }, start: new Date() });
 }
 
 async function whole(runId, opts) {
@@ -111,7 +111,7 @@ test('the stage\'s layout: the wallet list, run.json, a segment and done file pe
   const all = gunzipSync(readFileSync(join(dir, 'records.jsonl.gz')));
   assert.deepEqual(end.records, { sha256: sha256(all), bytes: all.length, lines: 3 + 4 + 5 + 6 + 7, gzipBytes: statSync(join(dir, 'records.jsonl.gz')).size });
   assert.deepEqual(end.counts, { spend: 25 });
-  assert.deepEqual(end.totals, { wallets: 5, jobs: 5, refused: 0, triggers: 0, validity: { txs: 25, failed: 0 } });
+  assert.deepEqual(end.totals, { wallets: 5, jobs: 5, refused: 0, validity: { txs: 25, failed: 0 } });
   assert.deepEqual(totals, end.totals);
   assert.deepEqual(counts, end.counts);
   assert.equal(end.runSha256, runSha256);
@@ -202,7 +202,7 @@ test('a resume refuses another run.json, naming what differs, and changes nothin
   };
   await refuse({ header: { ...HEADER, node: 'v24.0.0' } }, /it differs in the Node version\. Resume it/);
   await refuse({ header: { ...HEADER, csl: { ...HEADER.csl, wasm: { 'a.wasm': 'cd'.repeat(32) } } } }, /differs in the CSL build/);
-  await refuse({ header: { ...HEADER, options: { ...HEADER.options, testReps: '2', validity: true } } }, /differs in --test-reps, --validity/);
+  await refuse({ header: { ...HEADER, options: { ...HEADER.options, reps: '2', validity: true } } }, /differs in --reps, --validity/);
   await refuse({ header: { ...HEADER, manifest: 'another\n' } }, /differs in the code manifest/);
   await refuse({ wallets: shapes([...SHAPES].reverse()) }, /differs in the wallet list/);
   await refuse({ header: { ...HEADER, node: 'v25.0.0', manifest: 'another\n' } }, /differs in the Node version, the code manifest/);
@@ -288,25 +288,22 @@ function historyFile(dir, wallet) {
   return path;
 }
 
-// An engine result as a worker has it: a plan, two spends, a burst, a
-// trigger in a maintained-tidy arm unless it is the never-propose twin.
+// An engine result as a worker has it: two spends and a burst.
 function engineResult(arm, variant, repetition) {
-  const never = variant === 'never-propose';
+  const never = repetition % 2 === 0;
   return {
-    plans: [{ at: 'start', t: 0, txs: 1, fee: 170000n + BigInt(repetition), notes: [], control: null, trigger: false }],
     spends: [
       { intent: 0, type: 'T1', t: 10, burst: null, outcome: 'built', fee: 170000n, ms: 2.5 },
       { intent: 1, type: 'T4', t: 40, burst: null, collateralAvailable: { ledger: true, practice: !never }, outcome: 'built', fee: 400000n, ms: 9 }
     ],
     bursts: [{ id: 'b1', t: 50, feasible: !never, txs: 2 }],
-    triggers: arm === 'maintained-tidy' && !never ? [{ at: 'mark 1', t: 30, reasons: ['pure-ada-count'], txs: 1, fee: 1000n }] : [],
     summary: { counts: { intents: 2 }, fees: { spends: 570000n }, validity: { txs: 3, cslRead: 3, cslOutputBytes: 0, cslReencoded: 0, controls: { fee: 3, size: 3, value: 3, witnesses: 3 }, notApplicable: { fee: 0, value: 0 }, failed: 0 }, ms: 12.5 },
     method: { name: 'test-largest-first', version: 'test-1', deterministic: true }
   };
 }
 
 // A stand-in pool: answers each job after a delay that puts the jobs out of
-// order; failAt names a wallet whose fourth job fails.
+// order; failAt names a wallet whose last job fails.
 function standInPool({ failAt = null } = {}) {
   let started = 0;
   return {
@@ -315,7 +312,7 @@ function standInPool({ failAt = null } = {}) {
     async replay(job) {
       const n = started++;
       await new Promise((resolve) => setTimeout(resolve, (n * 7) % 5));
-      if (job.key.wallet === failAt && job.spool.records.endsWith('/3.records.jsonl')) return { ok: false, error: 'stand-in failure', stop: false, ms: 1 };
+      if (job.key.wallet === failAt && job.spool.records.endsWith('/9.records.jsonl')) return { ok: false, error: 'stand-in failure', stop: false, ms: 1 };
       return { ok: true, result: spoolJob(engineResult(job.arm, job.variant, job.repetition), job), ms: 5 + (n % 3) };
     }
   };
@@ -325,9 +322,9 @@ test('runReplays stopped by a failed job and resumed writes the records, timing 
   const files = join(home, 'histories');
   mkdirSync(files);
   const wallets = [101, 102, 103].map((w) => ({ spec: { kind: 'history', path: historyFile(files, w), analysisFreezeTx: null } }));
-  const plan = testPlan({ reps: 1 }).filter((e) => ['H-1', 'H-5', 'H-6'].includes(e.hypothesis));
-  const opts = { wallets, plan, roles: { test: 'test-largest-first' }, validity: true };
-  const header = { ...HEADER, plan: 'test', options: { plan: 'test', testReps: '1', validity: true } };
+  const plan = windowPlan('recent', { reps: 1 });
+  const opts = { wallets, plan, roles: TEST_ROLES, validity: true };
+  const header = { ...HEADER, plan: 'recent', options: { plan: 'recent', reps: '1', validity: true } };
   const run = async (runId, pool) => {
     const out = await openStage(runDir('preprod', runId), { header, wallets: walletList(wallets), workers: pool.size });
     try {
@@ -344,8 +341,7 @@ test('runReplays stopped by a failed job and resumed writes the records, timing 
   const resumed = await run('stopped', standInPool());
   assert.deepEqual(resumed.totals, ref.totals);
   assert.deepEqual(resumed.counts, ref.counts);
-  assert.ok(ref.totals.triggers > 0, 'the trigger join ran');
-  assert.deepEqual(Object.keys(ref.totals), ['wallets', 'jobs', 'refused', 'triggers', 'validity']);
+  assert.deepEqual(Object.keys(ref.totals), ['wallets', 'jobs', 'refused', 'validity']);
   assert.equal(ref.totals.wallets, 3);
   assert.equal(stageText(resumed.dir), stageText(ref.dir));
   assert.equal(stageText(resumed.dir, 'timings').replace(/"ms":\d+(\.\d+)?/g, '"ms":0'), stageText(ref.dir, 'timings').replace(/"ms":\d+(\.\d+)?/g, '"ms":0'));

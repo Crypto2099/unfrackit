@@ -4,7 +4,7 @@
 // The validity mode (`--validity`) of the replay engine on synthetic shapes:
 //   - every transaction the kit passes is counted, CSL reads each one, and
 //     each of the four negative controls is caught by its own check;
-//   - the mode changes nothing else: the replay's spends, plans, bursts and
+//   - the mode changes nothing else: the replay's spends, bursts and
 //     summary are equal with and without it once the summary's validity field
 //     and the wall-clock fields are removed;
 //   - a transaction checked against a state it does not spend from is a
@@ -28,7 +28,7 @@ test('the validity mode counts every transaction, CSL reads them, the controls a
   const method = makeMethod(T, 'test-largest-first');
   for (const name of ['S1', 'CL1']) {
     const src = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
-    const job = { arm: 'maintained-tidy', variant: 'default', repetition: 1, method, opts: { seed: 1, changePolicy: 'layout', collateralRule: 'ledger' }, settleEvery: 25 };
+    const job = { arm: 'observed', variant: 'default', repetition: 1, method, opts: { seed: 1, changePolicy: 'layout', collateralRule: 'ledger' }, settleEvery: 25 };
     const off = await replay(T, src.params, src, job);
     const on = await replay(T, src.params, src, { ...job, validity: true });
     assert.equal(strip(on), strip(off), `${name}: the validity mode changed a field`);

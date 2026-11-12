@@ -302,7 +302,7 @@ test('CSL replays a Plutus spend and a Plutus mint by reference script, a burn, 
   const intents = [t6, t8mint, burnIntent, dereg, donation, reg, field6, field15, shelleyReg];
   // A pure-ADA UTxO eligible as collateral under the ledger rule.
   const collateralUtxo = utxoFromOutput(hash32('csl collateral'), 0, outputBytes(T, { address: state.changeAddress, coin: 6n * ADA, assets: [] }), { origin: 'deposit' });
-  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values(), tokenUtxo, collateralUtxo], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 90, params: P };
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values(), tokenUtxo, collateralUtxo], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 90, params: P };
   const out = {};
   for (const [strategy, pure] of VARIANTS) {
     for (const changePolicy of ['default', 'layout']) {
@@ -384,7 +384,7 @@ test('CSL writes a spend\'s reference inputs sorted by transaction id and index,
   });
   const intent = replayIntent('d1', 10, { type: 'T1', requested: [payTo(0, 2n * ADA)], fixed: { referenceInputs: refs } });
   const other = replayIntent('d2', 20, { type: 'T1', requested: [payTo(1, 2n * ADA)] });
-  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: [intent, other].map((x, i) => ({ kind: 'intent', txId: i + 1, intent: x })), arrival: new Map(), windowStart: 0, windowEnd: 30, params: P };
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: [intent, other].map((x, i) => ({ kind: 'intent', txId: i + 1, intent: x })), windowStart: 0, windowEnd: 30, params: P };
   const built = [];
   for (let i = 0; i < 6; i++) {
     const r = await replayCsl(source, { strategy: 'lf', pure: i % 2 === 1 });

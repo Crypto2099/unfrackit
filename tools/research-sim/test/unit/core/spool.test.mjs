@@ -7,8 +7,7 @@
 // order the jobs end in; the frontier commits in job order; the commit
 // refuses a spool that does not match its job; a worker's answer for a job
 // (spoolJob) commits to the records and times the run wrote from the job's
-// whole result before, and H-6's fields give the same rescue outcomes as the
-// whole results. With the treatment, runReplays through two workers writes
+// whole result before. With the treatment, runReplays through two workers writes
 // the records of an in-thread replay of every job written in job order.
 
 import { test } from 'node:test';
@@ -19,7 +18,7 @@ import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { record, prepare, timingLine, RunOutput, Segment } from '../../../src/out/records.mjs';
 import { spoolPaths, spoolRecords, Frontier } from '../../../src/out/spool.mjs';
-import { rescueOutcomes, rescueFields, spoolJob, runReplays } from '../../../src/replay/run.mjs';
+import { spoolJob, runReplays, replayJobOpts } from '../../../src/replay/run.mjs';
 import { treatment, skip, TREATMENT_DIR } from '../../lib/treatment.mjs';
 import { testStage, stageText } from '../../lib/stage.mjs';
 
@@ -48,9 +47,9 @@ const segmentIn = (name, walletIndex = 3) => new Segment(join(process.env.RESEAR
 // Three jobs' records: times at the top, nested and in arrays, BigInt,
 // free text to scrub, and a last record whose time the run sets.
 const JOBS = [
-  [record('plan', key(), { at: 'start', fee: 170000n, notes: ['pure-ada-only'] }), record('spend', key(), { intent: 0, outcome: 'built', fee: 180000n, ms: 1.25 }), record('wallet-arm', key(), { counts: { built: 1 }, inner: { ms: 7.5 }, ms: 0 })],
-  [record('refused', key({ arm: 'tidy-once' }), { reason: `no change address near ${'ab'.repeat(32)}` })],
-  [record('spend', key({ arm: 'maintained-tidy' }), { intent: 0, outcome: 'failed', detail: 'x', ms: 3 }), record('burst', key({ arm: 'maintained-tidy' }), { id: 'b1', feasible: true, passes: [{ ms: 2 }, { ms: 4 }] }), record('wallet-arm', key({ arm: 'maintained-tidy' }), { counts: {}, ms: 0 })]
+  [record('burst', key(), { id: 'b0', t: 5 * DAY, feasible: false, txs: 1 }), record('spend', key(), { intent: 0, outcome: 'built', fee: 180000n, ms: 1.25 }), record('wallet-arm', key(), { counts: { built: 1 }, inner: { ms: 7.5 }, ms: 0 })],
+  [record('refused', key({ variant: 'absorb-on' }), { reason: `no change address near ${'ab'.repeat(32)}` })],
+  [record('spend', key({ variant: 'absorb-off' }), { intent: 0, outcome: 'failed', detail: 'x', ms: 3 }), record('burst', key({ variant: 'absorb-off' }), { id: 'b1', feasible: true, passes: [{ ms: 2 }, { ms: 4 }] }), record('wallet-arm', key({ variant: 'absorb-off' }), { counts: {}, ms: 0 })]
 ];
 const ATTEMPT_MS = [11.5, null, 22.25];
 const isArm = (rec) => rec.kind === 'wallet-arm';
@@ -79,11 +78,11 @@ test('a segment numbers its records from 1 and leads each timing row with the wa
 }));
 
 test('spooled jobs committed in job order to a segment write the bytes write() writes, whatever order they end in', withHome(async () => {
-  const trigger = record('trigger', key({ arm: 'maintained-tidy' }), { at: 'mark 1', t: 30 * DAY, fee: 1000n, rescue: null });
+  const last = record('burst', key({ variant: 'absorb-off' }), { id: 'b9', t: 30 * DAY, feasible: true, txs: 2 });
   // Written one at a time, each wallet-arm with its attempt's time.
   const a = segmentIn('direct');
   JOBS.forEach((recs, j) => recs.forEach((rec) => a.write(isArm(rec) ? { ...rec, ms: ATTEMPT_MS[j] } : rec)));
-  a.write(trigger);
+  a.write(last);
   a.close();
   for (const order of [[2, 0, 1], [1, 2, 0], [0, 1, 2]]) {
     const b = segmentIn(`spooled-${order.join('')}`);
@@ -99,7 +98,7 @@ test('spooled jobs committed in job order to a segment write the bytes write() w
     }
     assert.deepEqual(committed, [0, 1, 2]);
     assert.ok(frontier.complete);
-    b.write(trigger);
+    b.write(last);
     b.close();
     assert.deepEqual(readdirSync(b.dir).sort(), ['records.jsonl', 'timings.jsonl'], 'the spool files are removed');
     assert.deepEqual(files(b), files(a), `jobs ending in order ${order}`);
@@ -159,31 +158,29 @@ test('a commit refuses a spool that is not its job\'s', withHome(async () => {
   seg.close();
 }));
 
-// An engine result as the worker has it, for a maintained-tidy job: spends
-// with and without collateral availability, a burst, a trigger.
+// An engine result as the worker has it: spends with and without collateral
+// availability and a burst.
 function engineResult(variant) {
-  const never = variant === 'never-propose';
+  const never = variant === 'absorb-off';
   return {
-    plans: [{ at: 'start', t: 0, txs: 1, fee: 170000n, notes: [], control: null, trigger: false }],
     spends: [
       { intent: 0, type: 'T1', t: 10 * DAY, burst: null, outcome: 'built', fee: 170000n, ms: 2.5 },
       { intent: 1, type: 'T4', t: 40 * DAY, burst: null, collateralAvailable: { ledger: true, practice: !never }, outcome: 'built', fee: 400000n, ms: 9 },
       { intent: 2, type: 'T4', t: 45 * DAY, burst: null, collateralAvailable: { ledger: !never, practice: false }, outcome: 'infeasible', reason: 'coin' }
     ],
     bursts: [{ id: 'b1', t: 50 * DAY, feasible: !never, txs: 2 }],
-    triggers: never ? [] : [{ at: 'mark 1', t: 30 * DAY, reasons: ['pure-ada-count'], txs: 1, fee: 1000n }],
     summary: { counts: { intents: 3 }, fees: { spends: 570000n }, validity: { checked: 2, failed: 0, failures: [] }, ms: 123.5 },
     method: { name: 'test-largest-first', version: 'test-1', deterministic: true }
   };
 }
 
-test('a worker\'s answer commits to the records the run wrote from the whole result, and H-6\'s fields give the same rescue outcomes', withHome(async () => {
+test('a worker\'s answer commits to the records the run wrote from the whole result', withHome(async () => {
   const jobs = [
-    { arm: 'maintained-tidy', variant: 'default', x: engineResult('default'), ms: 40.5 },
-    { arm: 'maintained-tidy', variant: 'never-propose', x: engineResult('never-propose'), ms: 41 },
-    { arm: 'observed', variant: 'default', x: engineResult('default'), ms: 12 },
-    { arm: 'tidy-once', variant: 'default', x: { refused: 'the planner refuses the start plan: no', plans: [], spends: [], bursts: [], triggers: [], summary: null }, ms: 3 }
-  ].map((j) => ({ ...j, key: key({ arm: j.arm, variant: j.variant }), hypotheses: ['H-6'] }));
+    { variant: 'absorb-on', x: engineResult('absorb-on'), ms: 40.5 },
+    { variant: 'absorb-off', x: engineResult('absorb-off'), ms: 41 },
+    { variant: 'default', x: engineResult('default'), ms: 12 },
+    { variant: 'default', x: { refused: 'no change address', spends: [], bursts: [], summary: null }, ms: 3 }
+  ].map((j) => ({ ...j, arm: 'observed', key: key({ variant: j.variant }), hypotheses: ['Q2'] }));
   // The run before: every record built in the parent from the whole result.
   const a = segmentIn('whole');
   for (const j of jobs) {
@@ -192,7 +189,6 @@ test('a worker\'s answer commits to the records the run wrote from the whole res
       a.write(record('refused', j.key, { reason: x.refused }));
       continue;
     }
-    for (const p of x.plans) a.write(record('plan', j.key, p));
     for (const s of x.spends) a.write(record('spend', j.key, s));
     for (const b of x.bursts) a.write(record('burst', j.key, b));
     a.write(record('wallet-arm', j.key, { hypotheses: j.hypotheses, methodVersion: x.method.version, ...x.summary, ms: j.ms }));
@@ -209,53 +205,34 @@ test('a worker\'s answer commits to the records the run wrote from the whole res
   assert.deepEqual(files(b), files(a));
   assert.deepEqual(answers.map((ans) => ans.refused), [false, false, false, true]);
   assert.deepEqual(answers[0].validity, jobs[0].x.summary.validity);
-  assert.equal(answers[2].rescue, null, 'only a maintained-tidy job answers with H-6\'s fields');
-  assert.deepEqual(answers[0].rescue.spends.map((s) => s.intent), [1, 2], 'only the spends at a script interaction');
-  assert.deepEqual(Object.keys(answers[0].rescue.spends[0]), ['t', 'intent', 'collateralAvailable']);
-  assert.deepEqual(Object.keys(answers[0].rescue.bursts[0]), ['t', 'id', 'feasible']);
-  const whole = rescueOutcomes(jobs[0].x, jobs[1].x);
-  assert.deepEqual(rescueOutcomes(answers[0].rescue, answers[1].rescue), whole);
-  assert.deepEqual(rescueOutcomes(rescueFields(jobs[0].x), rescueFields(jobs[1].x)), whole);
-  assert.deepEqual(whole[0].rescue, { ledger: true, practice: true });
 }));
 
 const T = await treatment();
 
 // The run before this change, in one thread: each job replayed in turn, its
-// records built from the whole result in job order, then the trigger join,
-// each wallet's in a segment of its own; the segments' files joined in
+// records built from the whole result in job order, each wallet's in a segment of its own; the segments' files joined in
 // wallet order.
 async function inThread(wallets, plan, roles, collateralRules) {
   const { loadSource } = await import('../../../src/replay/source.mjs');
   const { expandJobs } = await import('../../../src/arms/plan.mjs');
   const { replay } = await import('../../../src/replay/engine.mjs');
   const { makeMethod } = await import('../../../src/methods/registry.mjs');
-  const H6_RULES = new Set(['default', 'dust-1', 'band-3-6', 'band-5-20']);
   const joined = { records: '', timings: '' };
   for (const [wi, w] of wallets.entries()) {
     const out = segmentIn(`in-thread-${wi}`, wi);
     const source = loadSource(T, w.spec);
     const needs = source.events.some((e) => e.kind === 'intent' && e.intent.collateral.required);
-    const results = [];
     for (const j of expandJobs(plan, { roles, needsCollateral: needs, collateralRules })) {
       const k = { wallet: source.wallet, window: source.window, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
       const method = makeMethod(T, j.method, {});
-      const x = await replay(T, source.params, source, { arm: j.arm, variant: j.variant, repetition: j.repetition, method, opts: { seed: j.repetition, changePolicy: j.change, collateralRule: j.collateral === 'none-needed' ? 'ledger' : j.collateral }, settleEvery: 25, policyLock: j.policyLock, validity: false });
+      const x = await replay(T, source.params, source, { arm: j.arm, variant: j.variant, repetition: j.repetition, method, opts: replayJobOpts(j), settleEvery: 25, validity: false });
       if (x.refused) {
         out.write(record('refused', k, { reason: x.refused }));
         continue;
       }
-      results.push({ key: k, x });
-      for (const p of x.plans) out.write(record('plan', k, p));
       for (const s of x.spends) out.write(record('spend', k, s));
       for (const b of x.bursts) out.write(record('burst', k, b));
-      out.write(record('wallet-arm', k, { hypotheses: j.hypotheses, methodVersion: method.version, ...x.summary, ms: 1 }));
-    }
-    const byKey = new Map(results.map((r) => [JSON.stringify(r.key), r]));
-    for (const { key: k, x } of results) {
-      if (k.arm !== 'maintained-tidy' || !x.triggers.length) continue;
-      const twin = H6_RULES.has(k.variant) ? byKey.get(JSON.stringify({ ...k, variant: 'never-propose' })) : null;
-      for (const t of twin ? rescueOutcomes(x, twin.x) : x.triggers.map((tr) => ({ ...tr, rescue: null }))) out.write(record('trigger', k, t));
+      out.write(record('wallet-arm', k, { hypotheses: j.hypotheses, methodVersion: method.version, ...(j.absorb !== undefined ? { absorb: j.absorb } : {}), ...x.summary, ms: 1 }));
     }
     out.close();
     const f = files(out);
@@ -274,38 +251,35 @@ const timeless = (text) => text.split('\n').filter(Boolean).map((l) => {
 
 test('runReplays through two workers writes the records of every job replayed in one thread in job order', { skip, timeout: 5 * 60 * 1000 }, withHome(async () => {
   const { Pool } = await import('../../../src/replay/pool.mjs');
-  const { testPlan } = await import('../../../src/arms/plan.mjs');
+  const { windowPlan, TEST_ROLES } = await import('../../../src/arms/plan.mjs');
   const { DEFAULT_PINS } = await import('../../../src/treatment/bridge.mjs');
   const wallets = ['S1', 'CL1'].map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
-  const plan = testPlan({ reps: 1 }).filter((e) => e.hypothesis === 'H-1' || e.hypothesis === 'H-6');
-  const roles = { test: 'test-largest-first' };
+  const plan = windowPlan('recent', { reps: 1 });
+  const roles = TEST_ROLES;
   const collateralRules = ['ledger', 'practice'];
   const ref = await inThread(wallets, plan, roles, collateralRules);
   // Two workers, each replaced after three jobs, so jobs end out of order.
   const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath: process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS, size: 2, maxJobs: 3 });
   const out = await testStage('spooled', wallets);
-  let totals;
   try {
-    totals = await runReplays(T, pool, { wallets, plan, roles, out, collateralRules });
+    await runReplays(T, pool, { wallets, plan, roles, out, collateralRules });
   } finally {
     out.close();
     await pool.close();
   }
   const a = ref;
   const b = { records: stageText(out.dir), timings: stageText(out.dir, 'timings') };
-  assert.ok(totals.triggers > 0, 'the trigger join ran');
-  assert.ok(b.records.includes('"rescue":{"ledger":'), 'a trigger met its never-propose twin');
   assert.equal(b.records, a.records);
   assert.deepEqual(timeless(b.timings), timeless(a.timings));
   assert.equal(existsSync(join(out.dir, 'spool')), false, 'the spool is removed');
 }));
 
 test('a failed job stops the run and drops its wallet\'s segment: only whole wallets are done, the stage has no end, and the spool is removed', { skip }, withHome(async () => {
-  const { testPlan } = await import('../../../src/arms/plan.mjs');
+  const { windowPlan, TEST_ROLES } = await import('../../../src/arms/plan.mjs');
   const wallets = ['S1', 'CL1'].map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
-  const plan = testPlan({ reps: 1 }).filter((e) => e.hypothesis === 'H-1' || e.hypothesis === 'H-6');
+  const plan = windowPlan('recent', { reps: 1 });
   // A stand-in pool: each job answers with an engine result after a delay
-  // that puts the jobs out of order; CL1's fourth job fails after others of
+  // that puts the jobs out of order; CL1's last job fails after others of
   // CL1 have been committed.
   let started = 0;
   const pool = {
@@ -313,7 +287,7 @@ test('a failed job stops the run and drops its wallet\'s segment: only whole wal
     async replay(job) {
       const n = started++;
       await new Promise((resolve) => setTimeout(resolve, (n * 7) % 5));
-      if (job.key.wallet === 'CL1' && job.spool.records.endsWith('/3.records.jsonl')) {
+      if (job.key.wallet === 'CL1' && job.spool.records.endsWith('/9.records.jsonl')) {
         await new Promise((resolve) => setTimeout(resolve, 20));
         return { ok: false, error: 'stand-in failure', stop: false, ms: 1 };
       }
@@ -322,7 +296,7 @@ test('a failed job stops the run and drops its wallet\'s segment: only whole wal
   };
   const out = await testStage('failed', wallets);
   try {
-    await assert.rejects(runReplays(T, pool, { wallets, plan, roles: { test: 'test-largest-first' }, out }), /replay failed: stand-in failure/);
+    await assert.rejects(runReplays(T, pool, { wallets, plan, roles: TEST_ROLES, out }), /replay failed: stand-in failure/);
   } finally {
     out.close();
   }

@@ -6,8 +6,8 @@
 // into jobs, one per (wallet, arm, variant, selector, change policy,
 // absorption setting, collateral rule, repetition).
 //
-// Selectors are named by role, so that a plan is the study's for the
-// libraries and a test plan for the test method:
+// Selectors are named by role; the study's roles name the libraries, and the
+// test roles map every role to the test method:
 //   lf      cardano-serialization-lib Largest-First (deterministic)
 //   ri      cardano-serialization-lib random selection
 //   rrri    cardano-js-sdk round-robin Random-Improve, seeded
@@ -39,13 +39,6 @@ export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cj
 export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', h12: 'test-largest-first' });
 const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'h12']);
 
-const H1 = { arms: ['observed', 'tidy-once', 'maintained-tidy'], controls: ['naive-tidy', 'random-tidy'] };
-const H2 = ['default', 'grouping-arrival', 'grouping-policy-arrival', 'grouping-random', 'byte-optimal'];
-const H3 = ['bundle-1', 'bundle-5', 'bundle-10', 'bundle-30', 'bundle-60', 'bundle-cap'];
-const H4 = ['default', 'isolation-asset', 'isolation-policy'];
-const H5 = ['R0', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6'];
-const H6 = ['default', 'never-propose', 'dust-1', 'band-3-6', 'band-5-20'];
-
 export const LIBRARY_ROLES = Object.freeze(['lf', 'ri', 'rrri', 'evo']);
 export const RANDOM_REPETITIONS = 10;
 
@@ -75,7 +68,6 @@ export function mergePlan(entries) {
     if (!x) m.set(k, { ...e, hypotheses: [e.hypothesis] });
     else {
       x.repetitions = Math.max(x.repetitions, e.repetitions);
-      x.policyLock = x.policyLock || e.policyLock;
       if (!x.hypotheses.includes(e.hypothesis)) x.hypotheses.push(e.hypothesis);
     }
   }
@@ -90,26 +82,9 @@ export function expandJobs(entries, { roles, needsCollateral, collateralRules = 
     const rules = needsCollateral ? collateralRules : ['none-needed'];
     for (const collateral of rules) {
       for (let rep = 1; rep <= e.repetitions; rep++) {
-        jobs.push({ hypotheses: e.hypotheses, arm: e.arm, variant: e.variant, role: e.role, method: roles[e.role], change: e.change, ...(e.absorb !== undefined ? { absorb: e.absorb } : {}), collateral, repetition: rep, policyLock: !!e.policyLock });
+        jobs.push({ hypotheses: e.hypotheses, arm: e.arm, variant: e.variant, role: e.role, method: roles[e.role], change: e.change, ...(e.absorb !== undefined ? { absorb: e.absorb } : {}), collateral, repetition: rep });
       }
     }
   }
   return jobs;
-}
-
-// The engine's test plan (never a study plan): every starting layout and
-// every variant on the arm its hypothesis replays, the change policies on the
-// tidy-once arm, all under one method, `reps` repetitions each (the random
-// control and the random grouping change with the repetition).
-export function testPlan({ reps = 2 } = {}) {
-  const out = [];
-  const add = (hypothesis, arm, variant, change = 'default', extra = {}) => out.push({ hypothesis, arm, variant, role: 'test', change, repetitions: reps, ...extra });
-  for (const arm of [...H1.arms, ...H1.controls]) add('H-1', arm, 'default');
-  for (const v of H2.slice(1)) add('H-2', 'tidy-once', v);
-  for (const v of H3) add('H-3', 'tidy-once', v, 'default', { policyLock: true });
-  for (const v of H4.slice(1)) add('H-4', 'tidy-once', v);
-  for (const v of H5) add('H-5', 'maintained-tidy', v);
-  for (const v of H6.slice(1)) add('H-6', 'maintained-tidy', v);
-  for (const change of ['single', 'naive']) add('H-11', 'tidy-once', 'default', change);
-  return out;
 }

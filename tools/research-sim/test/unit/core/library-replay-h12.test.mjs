@@ -152,7 +152,7 @@ const payTo = (i, coin) => {
   const address = recipientAddress('synthetic', 300 + i);
   return { cbor: outputBytes(T, { address, coin, assets: [] }).toString('hex'), address, coin, assets: [], datum: null, scriptRef: null, raised: null, wallet: false, scriptPayment: false, index: null, from: null, inflow: false };
 };
-const sourceOf = (state, events, end = 50) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: events.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: end, params: P });
+const sourceOf = (state, events, end = 50) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: events.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: end, params: P });
 
 test('the H-12 rule replays a burn, a deregistration with a withdrawal and no requested output, and a donation, and finds a body field the kit cannot write not replayable', { skip }, async () => {
   const state = shapeState(T, 'S8').state;

@@ -337,14 +337,5 @@ export function heavyStream(T, shape, params) {
     if (!done) intent(t, 'T1', [payOut(params, ext(pay++), BigInt(rng.int(2, 20)) * ADA, [])]);
   }
 
-  // Arrival keys for H-2's groupings: the position, in the wallet's generated
-  // order, of the first UTxO that holds the token.
-  const arrival = new Map();
-  shape.order.forEach((r, i) => {
-    for (const a of state.utxos.get(r).assets) {
-      const k = `${a.policy}.${a.name}`;
-      if (!arrival.has(k)) arrival.set(k, { txId: i, flagged: false });
-    }
-  });
-  return { events, windowEnd: span, arrival };
+  return { events, windowEnd: span };
 }

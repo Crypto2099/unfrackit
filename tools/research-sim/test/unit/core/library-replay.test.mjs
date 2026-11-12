@@ -154,7 +154,7 @@ test('cardano-js-sdk replays the synthetic streams\' script spends, certificates
     const source = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
     const intents = source.events.filter((e) => e.kind === 'intent').map((e) => e.intent);
     for (const rule of ['ledger', 'token-bearing']) {
-      for (const changePolicy of ['default', 'layout', 'single', 'naive']) {
+      for (const changePolicy of ['default', 'layout']) {
         const r = await replayCjs(source, { rule, changePolicy });
         assert.equal(r.refused, undefined);
         const o = tally(r);
@@ -248,9 +248,9 @@ test('cardano-js-sdk replays a burn, a deregistration with a withdrawal and a do
     replayIntent('b4', 40, { type: 'T7', requested: [payTo(2, 2n * ADA)], fixed: { body: { 6: encArray([encMap([]), encUint(0)]).toString('hex') } } })
   ];
   for (const it of intents) if (it.fixed) it.fixed.fixedBytes = 0;
-  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 50, params: P };
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 50, params: P };
   const out = {};
-  for (const changePolicy of ['default', 'layout', 'single', 'naive']) {
+  for (const changePolicy of ['default', 'layout']) {
     const r = await replayCjs(source, { changePolicy });
     const o = tally(r);
     out[changePolicy] = o;

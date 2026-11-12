@@ -99,8 +99,8 @@ export const COMMAND_OPTIONS = Object.freeze({
   census: { flags: ['fromStudy', 'allWallets', 'explain'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   'near-cap': { flags: ['fromStudy', 'allWallets'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   collateral: { flags: ['explain'], values: [...CONTEXT_VALUES, 'runId', 'days', 'batch'], repeat: ['set'] },
-  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'memoryBudget', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule', 'machine', 'shard', 'walletIndexes'], repeat: ['history'] },
-  'plan-shards': { flags: [], values: ['treatment', 'treatmentPins', 'plan', 'shapes', 'testReps', 'reps', 'collateralRule', 'machines', 'out'], repeat: ['history'] },
+  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'memoryBudget', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'reps', 'collateralRule', 'machine', 'shard', 'walletIndexes'], repeat: ['history'] },
+  'plan-shards': { flags: [], values: ['treatment', 'treatmentPins', 'plan', 'shapes', 'reps', 'collateralRule', 'machines', 'out'], repeat: ['history'] },
   'merge-stage': { flags: [], values: ['into', 'machine'], repeat: [], positional: true },
   fidelity: { flags: [], values: ['treatment', 'treatmentPins', 'analysisFreezeTx', 'runId'], repeat: ['history'] },
   study: {
@@ -121,11 +121,11 @@ const FROM_STUDY = ['random', 'all'];
 const CLOSED = Object.freeze({
   fromStudy: { '*': FROM_STUDY },
   bytes: { '*': BYTES },
-  plan: { replay: ['recent', 'peak', 'test'], 'plan-shards': ['recent', 'peak', 'test'], study: ['synthetic', 'preprod', 'corpus'] },
+  plan: { replay: ['recent', 'peak'], 'plan-shards': ['recent', 'peak'], study: ['synthetic', 'preprod', 'corpus'] },
   collateralRule: { '*': ['ledger', 'practice'] }
 });
 const WINDOW = /^(recent|peak|snapshot|blocks:\d+-\d+)$/;
-const WHOLE = ['workers', 'reps', 'testReps', 'days', 'batch'];
+const WHOLE = ['workers', 'reps', 'days', 'batch'];
 
 export const flagOf = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 const camelOf = (s) => s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());

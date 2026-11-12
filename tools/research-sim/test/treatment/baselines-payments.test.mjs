@@ -4,7 +4,7 @@
 // Every baseline on every payment of the 21 synthetic shapes (the set of
 // test/lib/payments.mjs paymentSet on the observed layout and on the tidy
 // layout), at its default change and, for csl-lf, csl-ri and cjs-rrri, under
-// each simulator-owned change policy: every transaction an adapter builds
+// the simulator-owned layout change policy: every transaction an adapter builds
 // either meets the ledger kit's checks or fails one with its class, every
 // refusal carries a class, and the kit's four negative controls are caught on
 // every built transaction in the library's own encoding. A transaction whose
@@ -51,7 +51,7 @@ test('every baseline on the payments of the 21 shapes', { skip, timeout: 3 * 60 
   const configs = [
     [lf, 'default'], [ri, 'default'], [cslMethod(T, { strategy: 'lf', preferPureChange: true }), 'default'], [cslMethod(T, { strategy: 'ri', preferPureChange: true }), 'default'],
     [cjsMethod(T), 'default'], [evoMethod(), 'default'],
-    ...['layout', 'single', 'naive'].flatMap((p) => [[lf, p], [ri, p], [cjsMethod(T), p]])
+    ...['layout'].flatMap((p) => [[lf, p], [ri, p], [cjsMethod(T), p]])
   ];
   const label = ([m, p]) => (p === 'default' ? m.name : `${m.name}/${p}`);
   const summary = { spends: 0, unsettled: 0, configs: {}, others: [], kitFailures: [], feeUnderMinimum: [], controls: { checked: 0, bad: [] }, cjs: { selections: 0, feeEqual: 0, feeUnder: [], feeOver: [], bundles: 0, bundleAgree: 0, bundleDisagree: [] }, timing: {}, memory: {} };

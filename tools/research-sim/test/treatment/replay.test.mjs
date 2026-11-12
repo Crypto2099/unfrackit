@@ -2,8 +2,8 @@
 // Copyright 2026 Adam K. Dean
 
 // The replay engine on the synthetic intent streams (shapes/streams.mjs) of
-// the 21 shapes, under every arm and variant the planner expresses (the test
-// plan, arms/plan.mjs) with the test method:
+// the 21 shapes, under every entry of the study's replay plan (arms/plan.mjs
+// windowPlan, every role played by the test method):
 //   - every replayed transaction meets the kit's checks (no kit failure on an
 //     answer), CSL reads it, and the four negative controls are caught on it
 //     for their own reasons; CSL's re-serialization has the transaction's
@@ -13,8 +13,7 @@
 //     cslOutputBytes), and the transactions it re-encodes are counted
 //     (cslReencoded);
 //   - events land where they belong: the deposits before the spends that use
-//     them, held consumption, the two 30-day marks, the maintained-tidy arm's
-//     re-plans at exactly those marks and no other arm's, the burst pass, the
+//     them, held consumption, the two 30-day marks, the burst pass, the
 //     forfeit and the two self-reorganizations counted, the reward withdrawal
 //     of one deposited at the change address the stream names at it and held
 //     by the next spend's state;
@@ -31,7 +30,7 @@ import { SHAPE_NAMES } from '../../src/shapes/shapes.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
 import { replay, fixedExtraWitnesses, withdrawalDeposit } from '../../src/replay/engine.mjs';
 import { makeMethod } from '../../src/methods/registry.mjs';
-import { testPlan, mergePlan } from '../../src/arms/plan.mjs';
+import { windowPlan, mergePlan } from '../../src/arms/plan.mjs';
 import { fixedResolver } from '../../src/kit/apply.mjs';
 import { inspectTx } from '../../src/kit/inspect.mjs';
 import { parseAddress, addressBytes } from '../../src/history/address.mjs';
@@ -40,7 +39,6 @@ import { requestedIndexes } from '../../src/replay/measure.mjs';
 import { settle } from '../../src/kit/heap.mjs';
 
 const T = await treatment();
-const DAY = 86400;
 
 // An output by what it holds: address, coin, assets as a set, datum and script
 // reference.
@@ -52,10 +50,10 @@ const content = (o) => JSON.stringify({
   scriptRef: o.scriptRef
 }, (_, v) => (typeof v === 'bigint' ? `${v}n` : v && v.type === 'Buffer' ? Buffer.from(v.data).toString('hex') : v));
 
-test('the synthetic streams replay under every arm the planner expresses, every transaction checked, every event in place', { skip, timeout: 3 * 3600 * 1000 }, async (t) => {
+test('the synthetic streams replay under every entry of the study\'s plan, every transaction checked, every event in place', { skip, timeout: 3 * 3600 * 1000 }, async (t) => {
   const method = makeMethod(T, 'test-largest-first');
-  const entries = mergePlan(testPlan({ reps: 1 }));
-  const counts = { shapes: 0, replays: 0, refused: {}, outcomes: {}, classes: {}, kitFailures: 0, txs: 0, controls: 0, plans: { start: 0, marks: 0 }, bursts: { passes: 0, feasible: 0 }, forfeits: 0, triggers: 0, collateralRecorded: 0 };
+  const entries = mergePlan(windowPlan('recent', { reps: 1 }));
+  const counts = { shapes: 0, replays: 0, refused: {}, outcomes: {}, classes: {}, kitFailures: 0, txs: 0, controls: 0, bursts: { passes: 0, feasible: 0 }, forfeits: 0, collateralRecorded: 0 };
   const bad = [];
   for (const name of SHAPE_NAMES) {
     const src = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
@@ -63,7 +61,7 @@ test('the synthetic streams replay under every arm the planner expresses, every 
     for (const e of entries) {
       await settle();
       for (const collateralRule of ['ledger', 'practice']) {
-        const r = await replay(T, src.params, src, { arm: e.arm, variant: e.variant, repetition: 1, method, opts: { seed: 1, changePolicy: e.change, collateralRule }, settleEvery: 25, policyLock: e.policyLock, keepTx: true });
+        const r = await replay(T, src.params, src, { arm: e.arm, variant: e.variant, repetition: 1, method, opts: { seed: 1, changePolicy: e.change, collateralRule, ...(e.absorb !== undefined ? { absorb: e.absorb } : {}) }, settleEvery: 25, keepTx: true });
         counts.replays++;
         if (r.refused) {
           counts.refused[r.refused.slice(0, 60)] = (counts.refused[r.refused.slice(0, 60)] || 0) + 1;
@@ -86,17 +84,8 @@ test('the synthetic streams replay under every arm the planner expresses, every 
         if (s.heldConsumed + s.heldMissing !== 1) bad.push(`${label}: the held UTxO is consumed ${s.heldConsumed} times and missing ${s.heldMissing}`);
         const ts = r.spends.map((x) => x.t);
         if (ts.some((x, i) => i && x < ts[i - 1])) bad.push(`${label}: spends out of order`);
-        const atMarks = r.plans.filter((p) => p.at.startsWith('mark')).map((p) => p.t);
-        if (e.arm === 'maintained-tidy') {
-          if (atMarks.join() !== [30 * DAY, 60 * DAY].join()) bad.push(`${label}: re-plans at ${atMarks.join()}`);
-        } else if (atMarks.length) bad.push(`${label}: an arm other than maintained-tidy re-planned`);
-        const starts = r.plans.filter((p) => p.at === 'start').length;
-        if ((e.arm === 'observed') !== (starts === 0)) bad.push(`${label}: ${starts} start plans`);
-        counts.plans.start += starts;
-        counts.plans.marks += atMarks.length;
         counts.bursts.passes += r.bursts.length;
         counts.bursts.feasible += r.bursts.filter((b) => b.feasible).length;
-        counts.triggers += r.triggers.length;
         if (r.bursts.length !== 1 || r.bursts[0].spends !== 2) bad.push(`${label}: burst passes ${JSON.stringify(r.bursts)}`);
         for (const x of r.spends) {
           counts.outcomes[x.outcome] = (counts.outcomes[x.outcome] || 0) + 1;

@@ -12,7 +12,7 @@
 // history file or a synthetic shape), and answers with plain data. A replay
 // job's records are built here and written to the job's spool (job.spool,
 // out/spool.mjs); its answer is what replay/run.mjs's spoolJob returns: the
-// spool's counts, the refusal, the validity summary and H-6's fields, never
+// spool's counts, the refusal and the validity summary, never
 // the records themselves. Messages:
 //   in   { id, task: 'replay', job, recordMachineErrors }
 //   out  { event: 'ready' }  the treatment is loaded

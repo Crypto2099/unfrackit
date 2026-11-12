@@ -25,7 +25,7 @@ function sample(key, command) {
   if (key === 'fromStudy') return 'random';
   if (key === 'bytes') return 'tx_cbor';
   if (key === 'window') return 'blocks:10-20';
-  if (['workers', 'reps', 'testReps', 'days', 'batch'].includes(key)) return '3';
+  if (['workers', 'reps', 'days', 'batch'].includes(key)) return '3';
   if (key === 'collateralRule') return 'ledger';
   if (key === 'shard') return '1/3';
   if (key === 'memoryBudget') return '2.5';
@@ -81,7 +81,7 @@ test('hash and help take no option', () => {
 
 test('an unknown option: a near miss is suggested, and an = is explained', () => {
   refused(['--run-id', 'x', '--from-studdy'], 'census', /unknown option --from-studdy for census; did you mean --from-study\?$/);
-  refused(['--test-rep', '1'], 'replay', /unknown option --test-rep for replay; did you mean --test-reps\?/);
+  refused(['--rpes', '1'], 'replay', /unknown option --rpes for replay; did you mean --reps\?/);
   refused(['--rep', '1'], 'replay', /unknown option --rep for replay; did you mean --reps\?/);
   refused(['--workers=4'], 'replay', /unknown option --workers=4 for replay; did you mean --workers\?; write the option and its value as two words$/);
   refused(['--set=a=1'], 'history', /write the option and its value as two words/);
@@ -144,8 +144,11 @@ test('closed values: bytes, plan and window', () => {
     for (const r of ['ledger', 'practice']) assert.equal(parseArgs(['--collateral-rule', r], c).collateralRule, r);
     refused(['--collateral-rule', 'ledger-minimum'], c, /--collateral-rule takes ledger \| practice/);
   }
-  for (const p of ['recent', 'peak', 'test']) assert.equal(parseArgs(['--plan', p], 'replay').plan, p);
-  refused(['--plan', 'synthetic'], 'replay', /--plan takes recent \| peak \| test, not "synthetic" for replay/);
+  for (const p of ['recent', 'peak']) assert.equal(parseArgs(['--plan', p], 'replay').plan, p);
+  refused(['--plan', 'synthetic'], 'replay', /--plan takes recent \| peak, not "synthetic" for replay/);
+  refused(['--plan', 'test'], 'replay', /--plan takes recent \| peak, not "test" for replay/);
+  refused(['--plan', 'test'], 'plan-shards', /--plan takes recent \| peak, not "test" for plan-shards/);
+  refused(['--test-reps', '2'], 'replay', /unknown option --test-reps for replay/);
   for (const p of ['synthetic', 'preprod', 'corpus']) assert.equal(parseArgs(['--plan', p], 'study').plan, p);
   refused(['--plan', 'recent'], 'study', /--plan takes synthetic \| preprod \| corpus, not "recent" for study/);
   for (const w of ['recent', 'peak', 'snapshot', 'blocks:1-2']) assert.equal(parseArgs(['--window', w], 'history').window, w);
@@ -153,7 +156,7 @@ test('closed values: bytes, plan and window', () => {
 });
 
 test('whole-number options: positive whole numbers only', () => {
-  const byCommand = { replay: ['workers', 'testReps', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'reps'], 'live-fire': ['workers'] };
+  const byCommand = { replay: ['workers', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'reps'], 'live-fire': ['workers'] };
   for (const [command, keys] of Object.entries(byCommand)) {
     for (const k of keys) {
       assert.equal(parseArgs([flagOf(k), '12'], command)[k], '12');

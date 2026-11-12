@@ -2,7 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 // The replay's parts: output records and their guard, run plans, collateral
-// eligibility, H-6's rescue join, and, with the treatment, the replay
+// eligibility and, with the treatment, the replay
 // assembler against CSL's assembly, spend-redeemer re-indexing, collateral
 // and its witness, the negative controls on replayed transactions, and a
 // required signer at a wallet key the selection does not spend, replayed by
@@ -14,11 +14,10 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { record, assertClean, scrubText, RunOutput, IdentifierInRecord } from '../../../src/out/records.mjs';
-import { windowPlan, mergePlan, expandJobs, testPlan, STUDY_ROLES } from '../../../src/arms/plan.mjs';
+import { windowPlan, mergePlan, expandJobs, STUDY_ROLES } from '../../../src/arms/plan.mjs';
 import { replayJobOpts } from '../../../src/replay/run.mjs';
-import { armSettings, VARIANTS } from '../../../src/arms/arms.mjs';
+import { BASE_ARMS, VARIANTS, checkArm } from '../../../src/arms/arms.mjs';
 import { eligibleCollateral, collateralAvailability, totalCollateralFor } from '../../../src/replay/collateral.mjs';
-import { rescueOutcomes } from '../../../src/replay/run.mjs';
 import { makeState, cmpRef } from '../../../src/state/state.mjs';
 import { utxoFromCbor, addressTextOf } from '../../../src/state/utxo.mjs';
 import { unspentOutput, encodeOutput } from '../../../src/history/output.mjs';
@@ -106,7 +105,6 @@ test('run plans: the refocused arms, the same in both windows, 46 jobs per walle
   assert.equal(windowPlan('recent', { reps: 3 }).filter((e) => e.role === 'lf' && e.change === 'default')[0].repetitions, 1);
   assert.throws(() => windowPlan('recent', { reps: 0 }), /positive whole number/);
   assert.throws(() => windowPlan('snapshot'), /no replay plan/);
-  assert.ok(testPlan().length > 20);
 });
 
 test('run plans: L/own and L/layout of one repetition draw the same seed; the rule\'s jobs carry the absorption setting and differ in their keys', () => {
@@ -129,17 +127,13 @@ test('run plans: L/own and L/layout of one repetition draw the same seed; the ru
   assert.equal(replayJobOpts({ repetition: 4, change: 'layout', collateral: 'none-needed' }).collateralRule, 'ledger');
 });
 
-test('arm settings: variants, controls and seeds', () => {
-  assert.deepEqual(armSettings('tidy-once', 'grouping-random', 7), { grouping: 'random', groupingSeed: 7 });
-  assert.deepEqual(armSettings('random-tidy', 'default', 3), { control: 'random', controlSeed: 3 });
-  assert.deepEqual(armSettings('naive-tidy', 'default', 3), { control: 'naive' });
-  assert.deepEqual(armSettings('maintained-tidy', 'R6', 1), { reserve: { rule: 'none' }, rollupLovelace: false, pureAdaOnly: 'never' });
-  assert.equal(armSettings('tidy-once', 'bundle-cap', 1).bundleSize, Infinity);
-  assert.throws(() => armSettings('naive-tidy', 'R1', 1), /default settings only/);
-  assert.throws(() => armSettings('tidy-once', 'nope', 1), /unknown variant/);
-  assert.throws(() => armSettings('tidy-once', 'default', 0), /numbered from 1/);
-  assert.deepEqual([armSettings('observed', 'absorb-on', 1), armSettings('observed', 'absorb-off', 1)], [{}, {}]);
-  assert.equal(Object.keys(VARIANTS).length, 26);
+test('arm checks: only the observed arm, its three variants and repetitions from 1', () => {
+  assert.deepEqual([...BASE_ARMS], ['observed']);
+  assert.deepEqual([...VARIANTS], ['default', 'absorb-on', 'absorb-off']);
+  for (const v of VARIANTS) checkArm('observed', v, 1);
+  for (const arm of ['tidy-once', 'maintained-tidy', 'naive-tidy', 'random-tidy']) assert.throws(() => checkArm(arm, 'default', 1), /unknown arm/);
+  assert.throws(() => checkArm('observed', 'bundle-5', 1), /unknown variant/);
+  assert.throws(() => checkArm('observed', 'default', 0), /numbered from 1/);
 });
 
 test('collateral eligibility under each rule, smallest first', () => {
@@ -153,22 +147,6 @@ test('collateral eligibility under each rule, smallest first', () => {
   assert.deepEqual(collateralAvailability(s, P), { ledger: true, practice: true, 'ledger-minimum': null, 'token-bearing': true });
   assert.equal(totalCollateralFor(P, 200001n), 300002n);
   assert.equal(totalCollateralFor(P, 200000n), 300000n);
-});
-
-test('H-6\'s rescue: a trigger rescues when the never-propose arm cannot serve a script spend or a burst within 30 days', () => {
-  const DAY = 86400;
-  const rule = {
-    triggers: [{ at: 'mark 1', t: 30 * DAY }, { at: 'mark 2', t: 60 * DAY }],
-    spends: [{ intent: 4, t: 40 * DAY, collateralAvailable: { ledger: true, practice: true } }, { intent: 9, t: 95 * DAY, collateralAvailable: { ledger: true, practice: true } }],
-    bursts: [{ id: 'b2', t: 70 * DAY, feasible: true }]
-  };
-  const never = {
-    spends: [{ intent: 4, t: 40 * DAY, collateralAvailable: { ledger: true, practice: false } }, { intent: 9, t: 95 * DAY, collateralAvailable: { ledger: false, practice: false } }],
-    bursts: [{ id: 'b2', t: 70 * DAY, feasible: false }]
-  };
-  const r = rescueOutcomes(rule, never);
-  assert.deepEqual(r[0].rescue, { ledger: false, practice: true });
-  assert.deepEqual(r[1].rescue, { ledger: true, practice: true }, 'the burst rescues under both rules; intent 9 is past 30 days');
 });
 
 const T = await treatment();
@@ -293,7 +271,7 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
     derived: null,
     meta: null
   };
-  const sourceOf = (start) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start, events: [{ kind: 'intent', txId: 1, intent }], arrival: new Map(), windowStart: 0, windowEnd: 20, params: SP });
+  const sourceOf = (start) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start, events: [{ kind: 'intent', txId: 1, intent }], windowStart: 0, windowEnd: 20, params: SP });
   const LARGEST_FIRST = new Set(['csl-lf', 'evo-lf', 'test-largest-first']);
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);

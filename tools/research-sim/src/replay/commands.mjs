@@ -5,15 +5,15 @@
 //
 //   replay  --treatment <dir> [--treatment-pins <file>]
 //           (--history <file or directory>... | --shapes <names|all>)
-//           --plan recent | peak | test
-//           [--collateral-rule ledger | practice] [--reps <n>]
-//           [--test-reps <n>] [--run-id <id>] [--workers <n>]
+//           --plan recent | peak
+//           --collateral-rule ledger | practice [--reps <n>]
+//           [--run-id <id>] [--workers <n>]
 //           [--memory-budget <GiB>]
 //           [--analysis-freeze-tx <hash>] [--validity] [--machine <label>]
 //           [--shard <k>/<n> | --wallet-indexes <file>]
 //   plan-shards (--history <file or directory>... | --shapes <names|all>)
-//           --plan recent | peak | test [--collateral-rule ...] [--reps <n>]
-//           [--test-reps <n>] [--treatment <dir> [--treatment-pins <file>]]
+//           --plan recent | peak --collateral-rule ... [--reps <n>]
+//           [--treatment <dir> [--treatment-pins <file>]]
 //           --machines <label>[=<speed>],... --out <dir>
 //
 // A history directory is read for its *.jsonl files. --shapes takes `all`
@@ -46,7 +46,7 @@ import { createHash } from 'node:crypto';
 import { loadTreatment, DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { Pool, workerCount } from './pool.mjs';
 import { runReplays } from './run.mjs';
-import { windowPlan, testPlan, STUDY_ROLES, TEST_ROLES } from '../arms/plan.mjs';
+import { windowPlan, STUDY_ROLES } from '../arms/plan.mjs';
 import { recordsShapeName } from '../out/records.mjs';
 import { openStage, walletList, walletsSha256, writeAtomic, jsonText, STAGE_LAYOUT } from '../out/stage.mjs';
 import { checkSelection, selectionOf, machinesOf, walletFacts, packShards, COST_FORMULA, WALLET_INDEXES_FORMAT } from './shards.mjs';
@@ -152,17 +152,14 @@ export function stageHeader(opts, T, { plan, entries }) {
 }
 
 // A replay's plan from its options, checked before anything is loaded: the
-// plan's entries, the roles its selectors play and the collateral rules
-// (the one --collateral-rule names, or every rule for a test plan without
-// it).
+// plan's entries, the roles its selectors play and the one collateral rule
+// every job runs under.
 export function replayPlanOf(opts) {
   const plan = opts.plan;
-  if (!['recent', 'peak', 'test'].includes(plan)) throw new Error('--plan recent | peak | test');
-  if (plan !== 'test' && !opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
-  if (plan === 'test' && opts.reps !== undefined) throw new Error('--reps is for the recent and peak plans; a test plan takes --test-reps');
-  const entries = plan === 'test' ? testPlan({ reps: Number(opts.testReps || 2) }) : windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
-  const roles = plan === 'test' ? { ...TEST_ROLES, test: 'test-largest-first' } : STUDY_ROLES;
-  return { plan, entries, roles, collateralRules: opts.collateralRule ? [opts.collateralRule] : null };
+  if (!['recent', 'peak'].includes(plan)) throw new Error('--plan recent | peak');
+  if (!opts.collateralRule) throw new Error('--collateral-rule ledger | practice names the one rule every job runs under (the study takes it from the collateral measurement)');
+  const entries = windowPlan(plan, opts.reps ? { reps: Number(opts.reps) } : {});
+  return { plan, entries, roles: STUDY_ROLES, collateralRules: [opts.collateralRule] };
 }
 
 // The replay command. A shard (--shard or --wallet-indexes) runs only its
@@ -184,7 +181,7 @@ export async function cmdReplay(opts) {
     out = await openStage(runDir(first.network, runId), { header: stageHeader(opts, T, { plan, entries }), wallets: list, machine, workers: threads.workers, selection });
     out.machine({ memoryBudgetBytes: pool.budget, pool: pool.stats });
     out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null, selection: selection ? selection.record : null });
-    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, ...(collateralRules ? { collateralRules } : {}) });
+    const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, collateralRules });
     out.note({ event: 'end', ended: out.ended, totals, records: out.counts, workers: pool.stats });
     const print = { runId, dir: out.dir, ended: out.ended, ...(out.earlier ? { endedEarlier: true } : {}), ...(out.progress ? { shard: { selection: selection.record, ...out.progress } } : {}), totals, records: out.counts, workers: pool.stats };
     return { print, ended: out.ended, failed: !!(totals.validity && totals.validity.failed) };

@@ -4,8 +4,7 @@
 // A replay job's records on disk. The worker that ran the job builds its
 // records and writes them to the job's spool; the run commits the spools in
 // job order to the wallet's segment (replay/run.mjs, out/records.mjs), so the
-// main thread holds no wallet's records, only what H-6's join reads. A job's
-// spool is two files in its wallet's spool directory:
+// main thread holds no wallet's records. A job's spool is two files in its wallet's spool directory:
 //   <job>.records.jsonl  the record lines, byte for byte as RunOutput.write
 //                        writes them
 //   <job>.timings.jsonl  their timing rows, numbered within the job from 1

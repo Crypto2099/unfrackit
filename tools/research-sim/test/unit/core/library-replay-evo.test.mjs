@@ -170,7 +170,7 @@ test('the Evolution SDK replays the synthetic streams\' mints, fixed inputs and 
 
 const payTo = (i, coin, extra = {}) => payToOf(T, i, coin, extra);
 
-const sourceOf = (state, intents, params = SYNTHETIC_PARAMS) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), arrival: new Map(), windowStart: 0, windowEnd: 1000, params });
+const sourceOf = (state, intents, params = SYNTHETIC_PARAMS) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: intents.map((intent, i) => ({ kind: 'intent', txId: i + 1, intent })), windowStart: 0, windowEnd: 1000, params });
 
 test('the Evolution SDK replays a burn, Conway certificates with a withdrawal, a datum output, a required signer and payments without their network id and empty auxiliary data, writes the parts it cannot price on its transaction and names them when it fails, and refuses a body field 6', { skip }, async (t) => {
   const shape = shapeState(T, 'S8');

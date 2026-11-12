@@ -79,7 +79,7 @@ test('the method contract', () => {
   assert.throws(() => checkMethod({ name: 'x', version: '1', deterministic: false, build() {} }), /seeded must be a boolean/);
   assert.throws(() => checkMethod({ name: 'x', version: '1', deterministic: true, seeded: false, build() {} }), /a deterministic method is seeded/);
   assert.doesNotThrow(() => checkMethod({ name: 'x', version: '1', deterministic: false, seeded: false, build() {} }));
-  assert.throws(() => checkOptions({ changePolicy: 'ladder' }), /unknown change policy/);
+  for (const changePolicy of ['ladder', 'single', 'naive']) assert.throws(() => checkOptions({ changePolicy }), /unknown change policy/);
   assert.equal(checkResult(m, { ok: false, class: 'balance' }).class, 'balance');
   assert.equal(checkResult(m, { ok: false, class: 'not-replayable' }).class, 'not-replayable');
   assert.throws(() => checkResult(m, { ok: false, class: 'nope' }), /unknown failure class/);
