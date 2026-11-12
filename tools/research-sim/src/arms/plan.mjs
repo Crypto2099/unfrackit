@@ -21,6 +21,8 @@
 //              round-robin Random-Improve on one summed output, seeded
 //   typhon-lp  typhonjs's paymentTransaction, the shortest prefix of the
 //              list (deterministic)
+//   helios-sf  Helios's smallest-first selectUtxos, then build with the
+//              wallet's UTxOs as spares (deterministic)
 //   h12        UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
@@ -41,7 +43,7 @@
 // L/layout alike, so the two arms share one seed sequence (common random
 // numbers; replay/run.mjs replayJobOpts). Per wallet and window that is 2 jobs
 // per deterministic library, 20 per random one and 2 for the rule: with the
-// eight libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 = 72.
+// nine libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 = 74.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
@@ -54,7 +56,8 @@ export const LIBRARY_TABLE = Object.freeze([
   { role: 'blaze-wd', method: 'blaze-wd', random: false },
   { role: 'lucid-lf', method: 'lucid-lf', random: false },
   { role: 'mesh-rrri', method: 'mesh-rrri', random: true },
-  { role: 'typhon-lp', method: 'typhon-lp', random: false }
+  { role: 'typhon-lp', method: 'typhon-lp', random: false },
+  { role: 'helios-sf', method: 'helios-sf', random: false }
 ].map((r) => Object.freeze(r)));
 const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 

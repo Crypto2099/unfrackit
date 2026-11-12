@@ -77,6 +77,8 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   typhon typhon-lp: every part, through the library's operations and types
 //         where they write it and on its transaction after the build
 //         otherwise (methods/typhon.mjs)
+//   helios helios-sf: every part, through the library's operations; the parts
+//         its types cannot hold are not replayable (methods/helios.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -85,7 +87,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   h12: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   blaze: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   lucid: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  typhon: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  typhon: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  helios: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

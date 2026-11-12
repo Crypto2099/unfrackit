@@ -21,6 +21,9 @@
 //                       selector, with exact constraint callbacks
 //   typhon-lp           methods/typhon.mjs: typhonjs's paymentTransaction,
 //                       the shortest prefix of the list it is given
+//   helios-sf           methods/helios.mjs: Helios's WalletHelper.selectUtxos
+//                       at its smallest-first default, then build with the
+//                       wallet's UTxOs as spares
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -43,6 +46,7 @@ import { blazeMethod } from './blaze.mjs';
 import { lucidMethod } from './lucid.mjs';
 import { meshStudyMethod } from './mesh.mjs';
 import { typhonMethod } from './typhon.mjs';
+import { heliosMethod } from './helios.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -71,7 +75,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -82,6 +86,7 @@ const FACTORIES = new Map([
   ['lucid-lf', baseline('lucid-lf', (T) => lucidMethod({ T }))],
   ['mesh-rrri', baseline('mesh-rrri', (T) => meshStudyMethod(T))],
   ['typhon-lp', baseline('typhon-lp', (T) => typhonMethod(T))],
+  ['helios-sf', baseline('helios-sf', (T) => heliosMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

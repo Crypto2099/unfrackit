@@ -16,6 +16,7 @@ import { CJS_VERSION } from '../../../src/methods/cjs.mjs';
 import { EVO_VERSION } from '../../../src/methods/evo.mjs';
 import { LUCID_VERSION } from '../../../src/methods/lucid.mjs';
 import { MESH_VERSION, MESH_CJS_VERSION } from '../../../src/methods/mesh.mjs';
+import { HELIOS_TX_UTILS_VERSION, HELIOS_LEDGER_VERSION } from '../../../src/methods/helios.mjs';
 import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
@@ -32,7 +33,8 @@ test('every study baseline is made by name, with its library version, determinis
     'blaze-wd': ['@blaze-cardano/tx 0.15.4 with @blaze-cardano/sdk 0.3.3 micahsSelector', true, true],
     'lucid-lf': [`@lucid-evolution/lucid ${LUCID_VERSION} LargestFirst`, true, true],
     'mesh-rrri': [`@meshsdk/transaction ${MESH_VERSION} CardanoSdkInputSelector (@cardano-sdk/input-selection ${MESH_CJS_VERSION} roundRobinRandomImprove)`, false, true],
-    'typhon-lp': ['@stricahq/typhonjs 4.0.0 paymentTransaction', true, true]
+    'typhon-lp': ['@stricahq/typhonjs 4.0.0 paymentTransaction', true, true],
+    'helios-sf': ['@helios-lang/tx-utils 0.6.42 with @helios-lang/ledger 0.7.24 selectSmallestFirst', true, true]
   };
   assert.deepEqual([...BASELINE_METHODS].sort(), Object.keys(want).sort());
   for (const [name, [version, deterministic, seeded]] of Object.entries(want)) {
@@ -48,6 +50,7 @@ test('every study baseline is made by name, with its library version, determinis
   assert.equal(CJS_VERSION, '0.14.35');
   assert.equal(EVO_VERSION, '0.8.0');
   assert.deepEqual([MESH_VERSION, MESH_CJS_VERSION], ['1.9.1', '0.14.28']);
+  assert.deepEqual([HELIOS_TX_UTILS_VERSION, HELIOS_LEDGER_VERSION], ['0.6.42', '0.7.24']);
 });
 
 test('the builder survey\'s other subjects are not registered', () => {
@@ -61,10 +64,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the eight libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'unfrackit-h12']);
+  // The replays run the nine libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'helios-sf', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'unfrackit-h12']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);
