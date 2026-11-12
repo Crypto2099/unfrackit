@@ -74,6 +74,9 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   lucid lucid-lf: every part, collateral as the library chooses it, since
 //         it cannot be given the UTxO the engine would set aside
 //         (methods/lucid.mjs)
+//   typhon typhon-lp: every part, through the library's operations and types
+//         where they write it and on its transaction after the build
+//         otherwise (methods/typhon.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -81,7 +84,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   h12: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   blaze: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  lucid: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  lucid: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  typhon: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

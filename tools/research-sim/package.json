@@ -25,6 +25,7 @@
     "@evolution-sdk/evolution": "0.8.0",
     "@lucid-evolution/lucid": "0.8.9",
     "@meshsdk/transaction": "1.9.1",
+    "@stricahq/typhonjs": "4.0.0",
     "pg": "8.23.0"
   },
   "overrides": {

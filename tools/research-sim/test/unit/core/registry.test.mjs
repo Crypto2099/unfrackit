@@ -31,7 +31,8 @@ test('every study baseline is made by name, with its library version, determinis
     'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true, true],
     'blaze-wd': ['@blaze-cardano/tx 0.15.4 with @blaze-cardano/sdk 0.3.3 micahsSelector', true, true],
     'lucid-lf': [`@lucid-evolution/lucid ${LUCID_VERSION} LargestFirst`, true, true],
-    'mesh-rrri': [`@meshsdk/transaction ${MESH_VERSION} CardanoSdkInputSelector (@cardano-sdk/input-selection ${MESH_CJS_VERSION} roundRobinRandomImprove)`, false, true]
+    'mesh-rrri': [`@meshsdk/transaction ${MESH_VERSION} CardanoSdkInputSelector (@cardano-sdk/input-selection ${MESH_CJS_VERSION} roundRobinRandomImprove)`, false, true],
+    'typhon-lp': ['@stricahq/typhonjs 4.0.0 paymentTransaction', true, true]
   };
   assert.deepEqual([...BASELINE_METHODS].sort(), Object.keys(want).sort());
   for (const [name, [version, deterministic, seeded]] of Object.entries(want)) {
@@ -60,10 +61,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the seven libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'lucid-lf', 'mesh-rrri', 'unfrackit-h12']);
+  // The replays run the eight libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'unfrackit-h12']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);
