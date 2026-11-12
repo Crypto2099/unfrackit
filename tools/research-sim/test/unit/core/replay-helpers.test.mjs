@@ -72,13 +72,13 @@ test('the fixed witnesses beyond the keys the kit reads: a required signer\'s an
   const fixedIn = { ref: `${'ee'.repeat(32)}#0`, cbor: unspentOutput('ee'.repeat(32), 0, encodeOutput({ address: inAddr, coin: 2000000n, assets: [] }, 'array')).toString('hex'), walletKey: null };
   const witnesses = { 0: encArray([witnessOf(0x4e), witnessOf(0x5f), witnessOf(0x6a)]).toString('hex') };
   const intent = (body) => ({ fixed: fixedOf({ inputs: [fixedIn], body, witnesses }) });
-  assert.equal(fixedExtraWitnesses(intent({ 14: encTag(258, encArray([encBytes(Buffer.from(keyOf(0x5f), 'hex'))])).toString('hex') })), 1);
+  assert.deepEqual([...fixedExtraWitnesses(intent({ 14: encTag(258, encArray([encBytes(Buffer.from(keyOf(0x5f), 'hex'))])).toString('hex') }))], [keyOf(0x6a)]);
   // Without the required signer, its witness is one the kit's keys do not
   // account for.
-  assert.equal(fixedExtraWitnesses(intent({})), 2);
+  assert.deepEqual([...fixedExtraWitnesses(intent({}))].sort(), [keyOf(0x5f), keyOf(0x6a)].sort());
   // A split-off signer has no fixed witness, so nothing is taken off.
-  assert.equal(fixedExtraWitnesses(intent({ 14: encArray([encBytes(Buffer.from(keyOf(0xa1), 'hex'))]).toString('hex') })), 2);
-  assert.equal(fixedExtraWitnesses({ fixed: null }), 0);
+  assert.equal(fixedExtraWitnesses(intent({ 14: encArray([encBytes(Buffer.from(keyOf(0xa1), 'hex'))]).toString('hex') })).size, 2);
+  assert.equal(fixedExtraWitnesses({ fixed: null }).size, 0);
 });
 
 test('the scripts an intent holds, by hash: the witness set\'s, then reference scripts', () => {

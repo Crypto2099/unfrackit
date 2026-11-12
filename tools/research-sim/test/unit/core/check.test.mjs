@@ -115,9 +115,25 @@ test('a required signer needs its own witness unless it is an input\'s key', () 
   const s = checkTx(same.bytes, { params: P, resolve: same.resolve });
   assert.equal(s.ok, true, JSON.stringify(s.failures));
   assert.equal(s.facts.required, 1);
-  // The fixed witnesses the transaction's keys do not account for add to the
-  // count.
-  assert.equal(checkTx(two.bytes, { params: P, resolve: two.resolve, extraWitnesses: 1 }).facts.required, 3);
+  // The keys of the fixed witnesses the transaction's keys do not account for
+  // add to the count.
+  assert.equal(checkTx(two.bytes, { params: P, resolve: two.resolve, extraWitnesses: new Set([keyHash(2)]) }).facts.required, 3);
+});
+
+test('a key that is both a required signer and an observed fixed witness\'s is needed once', () => {
+  // A delegation whose stake key (key 1) the library writes as a required
+  // signer, and the intent's observed witness of that stake key: the ledger
+  // needs keys 0 and 1, so the input's witness and the stake key's pass.
+  const ins = [{ ref: `${TXA}#0`, address: ADDR0, coin: 10000000n }];
+  const outs = [{ address: ADDR0, coin: 0n }];
+  const signer1 = { 14: encTag(258, encArray([encBytes(Buffer.from(keyHash(1), 'hex'))])) };
+  const two = balanced({ ins, outs, extra: signer1, vkeys: 2 });
+  const r = checkTx(two.bytes, { params: P, resolve: two.resolve, extraWitnesses: new Set([keyHash(1)]) });
+  assert.equal(r.ok, true, JSON.stringify(r.failures));
+  assert.equal(r.facts.required, 2);
+  // One witness is still short.
+  const one = balanced({ ins, outs, extra: signer1, vkeys: 1 });
+  assert.deepEqual(checkTx(one.bytes, { params: P, resolve: one.resolve, extraWitnesses: new Set([keyHash(1)]) }).failures.map((f) => f.check), ['witnesses']);
 });
 
 test('an output under its minimum is change-minimum, or other for a requested output', () => {

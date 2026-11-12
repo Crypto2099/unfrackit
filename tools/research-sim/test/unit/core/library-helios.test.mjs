@@ -35,6 +35,7 @@ import { base58decode, addressBytes } from '../../../src/history/address.mjs';
 import { encodeOutput, unspentOutput } from '../../../src/history/output.mjs';
 import { executionFee } from '../../../src/history/params.mjs';
 import { encUint, encInt, encBytes, encArray, encMap, encTag, encText } from '../../../src/history/cbor.mjs';
+import { blake2b224 } from '../../../src/history/blake2b.mjs';
 import { replayIntent, payTo as payToOf, V3, EX_UNITS } from '../../lib/script-intents.mjs';
 
 const P = SYNTHETIC_PARAMS;
@@ -263,6 +264,31 @@ test('a replayed signer, validity, metadata, a registration and script spends bu
   }
   const t = inspectTx((await replayHelios(source, 'default')).spends[0].built.txs[0].bytes);
   assert.equal(t.hasAux, true);
+});
+
+// A delegation of a key stake credential with the stake key's observed
+// witness: the library writes the stake key as a required signer
+// (TxBuilder.js:680-692), and the kit needs that key once.
+test('a key delegation whose stake key the library writes as a required signer builds under both changes', { skip }, async () => {
+  const state = shapeState(T, 'S1').state;
+  const vkey = Buffer.alloc(32, 0x73);
+  const stake = blake2b224(vkey);
+  const cert = encArray([encUint(2), encArray([encUint(0), encBytes(stake)]), encBytes(Buffer.alloc(28, 0x50))]);
+  const witness = encArray([encArray([encBytes(vkey), encBytes(Buffer.alloc(64, 0x77))])]).toString('hex');
+  const it = replayIntent('k1', 10, { type: 'T7', fixed: { body: { 4: encArray([cert]).toString('hex') }, witnesses: { 0: witness } } });
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: [{ kind: 'intent', txId: 1, intent: it }], windowStart: 0, windowEnd: 100, params: P };
+  for (const cp of ['default', 'layout']) {
+    const r = await replayHelios(source, cp);
+    assert.equal(r.summary.validity.failed, 0, JSON.stringify(r.summary.validity.details));
+    const s = r.spends[0];
+    assert.equal(s.outcome, 'built', `${cp}: ${s.class} ${s.detail}`);
+    if (cp === 'default') {
+      const t = inspectTx(s.built.txs[0].bytes);
+      assert.deepEqual(t.requiredSigners, [stake.toString('hex')]);
+      // The wallet input's witness and the stake key's.
+      assert.equal(t.vkeys.length, 1 + new Set(s.built.txs[0].walletInputs.map((ref) => s.built.before.utxos.get(ref).cred)).size);
+    }
+  }
 });
 
 // Parts the library cannot hold, each on a payment from the S1 wallet.

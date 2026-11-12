@@ -44,9 +44,11 @@
 //                 Conway rule adds to the needed keys: eras/conway/impl/src/
 //                 Cardano/Ledger/Conway/UTxO.hs:172-180,
 //                 getConwayWitsVKeyNeeded, Conway's getWitsVKeyNeeded at
-//                 :132), plus the intent's fixed witnesses that no such key
-//                 accounts for (eras/shelley/impl/src/Cardano/Ledger/Shelley/
-//                 Rules/Utxow.hs:420-434, validateNeededWitnesses). Witnesses
+//                 :132), and the keys of the intent's fixed witnesses that no
+//                 such key accounts for: one witness per distinct key of the
+//                 union, since the needed witnesses are a set of key hashes
+//                 (eras/shelley/impl/src/Cardano/Ledger/Shelley/Rules/
+//                 Utxow.hs:420-434, validateNeededWitnesses). Witnesses
 //                 here are synthetic, so they are counted, not verified; a key
 //                 payment credential is spent with a vkey witness (CIP-0019,
 //                 "Payment part").
@@ -98,11 +100,14 @@ export const outputMinimum = (params, rawLength) => params.coinsPerUtxoByte * (1
 //                collateral input
 //   implicit     { withdrawals, refunds, deposits, donation, mint, burn }
 //   scriptFee    bigint, the intent's script fee
-//   extraWitnesses  the number of vkey witnesses the intent's fixed parts
-//                need beyond the keys the transaction itself names (the
-//                inputs' and collateral inputs' key payment credentials and
-//                the required signers), such as a stake key's, a voter's or
-//                a native script's (replay/engine.mjs fixedExtraWitnesses)
+//   extraWitnesses  a Set of the key hashes (hex) of the intent's fixed vkey
+//                witnesses that neither its fixed inputs nor its required
+//                signers account for, such as a stake key's, a voter's or a
+//                native script's (replay/engine.mjs fixedExtraWitnesses); the
+//                check needs one witness per distinct key of these and the
+//                keys the transaction itself names (the inputs' and
+//                collateral inputs' key payment credentials and the required
+//                signers)
 //   requested    a Set of output indexes that are requested outputs, which
 //                classifies a minimum failure as 'other' rather than as change
 export function checkTx(bytes, ctx) {
@@ -166,7 +171,8 @@ export function checkTx(bytes, ctx) {
     if (r && r.addr && r.addr.paymentKind === 'key') keys.add(r.addr.payment);
   }
   for (const h of t.requiredSigners) keys.add(h);
-  const required = keys.size + (ctx.extraWitnesses || 0);
+  for (const h of ctx.extraWitnesses || []) keys.add(h);
+  const required = keys.size;
   if (t.vkeys.length < required) fail('witnesses', CLASSES.other, `${t.vkeys.length} vkey witnesses, ${required} needed`);
 
   if (t.hasAux !== t.auxHashField) fail('aux-hash', CLASSES.other, t.hasAux ? 'auxiliary data without its hash' : 'an auxiliary data hash without auxiliary data');

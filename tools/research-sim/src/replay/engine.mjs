@@ -188,24 +188,25 @@ export function spendCollateralAvailability(T, params, state, intent, suffices) 
   return out;
 }
 
-// The number of the intent's fixed vkey witnesses that neither a fixed
-// input's key nor a required signer accounts for (stake keys, voters, native
-// scripts' keys): with the keys the kit reads from the transaction (its
-// inputs' and collateral inputs' key payment credentials and its required
-// signers, kit/check.mjs) they are the witnesses the kit requires, each
-// counted once.
+// The keys (hex) of the intent's fixed vkey witnesses that neither a fixed
+// input's key nor one of the intent's required signers accounts for (stake
+// keys, voters, native scripts' keys), as a Set: with the keys the kit reads
+// from the transaction (its inputs' and collateral inputs' key payment
+// credentials and its required signers, kit/check.mjs) they are the keys the
+// kit requires a witness for, each distinct key once, so a key a library also
+// writes as a required signer (a stake key, for one) is needed once.
 export function fixedExtraWitnesses(intent) {
   const f = intent.fixed;
-  if (!f || f.witnesses[0] === undefined) return 0;
+  if (!f || f.witnesses[0] === undefined) return new Set();
   const b = Buffer.from(f.witnesses[0], 'hex');
   const n = decode(b);
   const arr = n.mt === 6 ? n.item : n;
   const inputKeys = new Set(fixedInputValues(intent).filter((x) => x.addr.paymentKind === 'key' && !x.walletKey).map((x) => x.addr.payment));
   const signers = new Set(requiredSigners(f));
-  let extra = 0;
+  const extra = new Set();
   for (const w of arr.items) {
     const h = blake2b224(Buffer.from(raw(b, w.items[0])).subarray(2)).toString('hex');
-    if (!inputKeys.has(h) && !signers.has(h)) extra++;
+    if (!inputKeys.has(h) && !signers.has(h)) extra.add(h);
   }
   return extra;
 }

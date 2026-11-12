@@ -64,7 +64,7 @@ export function checkAndApply(state, params, txs, opts = {}) {
       resolve,
       implicit: last ? opts.implicit : undefined,
       scriptFee: last ? opts.scriptFee : 0n,
-      extraWitnesses: last ? opts.extraWitnesses || 0 : 0,
+      extraWitnesses: last ? opts.extraWitnesses : undefined,
       requested: last ? opts.requested : undefined
     });
     checks.push(r);
@@ -74,7 +74,7 @@ export function checkAndApply(state, params, txs, opts = {}) {
         resolve,
         implicit: last ? opts.implicit : undefined,
         scriptFee: last ? opts.scriptFee : 0n,
-        extraWitnesses: last ? opts.extraWitnesses || 0 : 0
+        extraWitnesses: last ? opts.extraWitnesses : undefined
       });
     }
     s = applyTx(s, { bytes: txs[i].bytes, walletInputs: txs[i].walletInputs, heldInputs: last ? opts.heldInputs || [] : [], notWallet: opts.notWallet || null, heldRef: opts.heldRef || null }).state;
