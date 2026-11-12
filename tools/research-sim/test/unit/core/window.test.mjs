@@ -25,7 +25,7 @@ import { openStage, walletList, STAGE_LAYOUT } from '../../../src/out/stage.mjs'
 import { mergeStage } from '../../../src/out/merge.mjs';
 import { selectionOf } from '../../../src/replay/shards.mjs';
 import { spoolJob, runReplays, openWalletCap, poolJobCap } from '../../../src/replay/run.mjs';
-import { windowPlan, expandJobs, TEST_ROLES } from '../../../src/arms/plan.mjs';
+import { windowPlan, expandJobs, TEST_ROLES, LIBRARY_ROLES } from '../../../src/arms/plan.mjs';
 import { HISTORY_FORMAT } from '../../../src/state/history.mjs';
 import { paramsFromRow } from '../../../src/history/params.mjs';
 import { runDir } from '../../../src/history/paths.mjs';
@@ -214,7 +214,8 @@ function assertSameStage(a, b) {
 }
 
 test('several wallets open at once, closed out of order, write the records, timing rows, segments and totals of a run with one wallet open at a time', withHome(async (home) => {
-  assert.equal(JOBS, 14);
+  // At one repetition: L/own and L/layout per library, and the rule twice.
+  assert.equal(JOBS, 2 * LIBRARY_ROLES.length + 2);
   assert.equal(openWalletCap(2), 4);
   assert.equal(poolJobCap(2), 4);
   const wallets = walletsIn(home, [101, 102, 103, 104, 105, 106]);

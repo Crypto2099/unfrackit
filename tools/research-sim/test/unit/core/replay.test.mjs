@@ -11,10 +11,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { record, assertClean, scrubText, RunOutput, IdentifierInRecord } from '../../../src/out/records.mjs';
-import { windowPlan, mergePlan, expandJobs, STUDY_ROLES } from '../../../src/arms/plan.mjs';
+import { windowPlan, mergePlan, expandJobs, STUDY_ROLES, TEST_ROLES, LIBRARY_ROLES, LIBRARY_TABLE } from '../../../src/arms/plan.mjs';
 import { replayJobOpts } from '../../../src/replay/run.mjs';
 import { BASE_ARMS, VARIANTS, checkArm } from '../../../src/arms/arms.mjs';
 import { eligibleCollateral, collateralAvailability, totalCollateralFor } from '../../../src/replay/collateral.mjs';
@@ -105,6 +106,38 @@ test('run plans: the refocused arms, the same in both windows, 50 jobs per walle
   assert.equal(windowPlan('recent', { reps: 3 }).filter((e) => e.role === 'lf' && e.change === 'default')[0].repetitions, 1);
   assert.throws(() => windowPlan('recent', { reps: 0 }), /positive whole number/);
   assert.throws(() => windowPlan('snapshot'), /no replay plan/);
+});
+
+// The jobs of the six libraries the study ran before the role table and of
+// the rule, unchanged by the table: their list, in order, as the plan made it
+// at 59b3f30 (the role maps written out by hand), by count and the first 16
+// hex digits of the SHA-256 of its JSON, for the study and the test roles,
+// both windows, with and without collateral rules (ledger and practice), at
+// 10 and at 2 repetitions.
+test('run plans: the role table leaves the existing roles\' jobs as they were', () => {
+  const BEFORE = {
+    study: { false: { 10: [50, 'df83381402fc354c'], 2: [18, 'd81ac2761d7e3f3f'] }, true: { 10: [100, 'ee4aff781e8c94a4'], 2: [36, 'b84583da527bc181'] } },
+    test: { false: { 10: [50, '2fd4ef0a71f486d3'], 2: [18, '67a8b5fafb1b8148'] }, true: { 10: [100, '3c48ad2944f573ab'], 2: [36, '2f65e541f688e8cb'] } }
+  };
+  const existing = new Set(['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'h12']);
+  for (const [label, roles] of [['study', STUDY_ROLES], ['test', TEST_ROLES]]) {
+    for (const w of ['recent', 'peak']) {
+      for (const needsCollateral of [false, true]) {
+        for (const reps of [10, 2]) {
+          const jobs = expandJobs(windowPlan(w, { reps }), { roles, needsCollateral, collateralRules: ['ledger', 'practice'] }).filter((j) => existing.has(j.role));
+          const got = [jobs.length, createHash('sha256').update(JSON.stringify(jobs)).digest('hex').slice(0, 16)];
+          assert.deepEqual(got, BEFORE[label][needsCollateral][reps], `${label} ${w} ${needsCollateral} ${reps}`);
+        }
+      }
+    }
+  }
+  // The tables come from the one library table, and every library role is
+  // in each.
+  assert.deepEqual(LIBRARY_ROLES, LIBRARY_TABLE.map((r) => r.role));
+  assert.deepEqual(Object.keys(STUDY_ROLES), [...LIBRARY_ROLES, 'h12']);
+  assert.deepEqual(Object.keys(TEST_ROLES), [...LIBRARY_ROLES, 'h12']);
+  for (const r of LIBRARY_TABLE) assert.equal(STUDY_ROLES[r.role], r.method);
+  for (const r of LIBRARY_TABLE) assert.equal(mergePlan(windowPlan('recent')).find((e) => e.role === r.role).repetitions, r.random ? 10 : 1, r.role);
 });
 
 test('run plans: L/own and L/layout of one repetition draw the same seed; the rule\'s jobs carry the absorption setting and differ in their keys', () => {

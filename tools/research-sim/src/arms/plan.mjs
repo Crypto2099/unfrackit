@@ -6,21 +6,23 @@
 // into jobs, one per (wallet, arm, variant, selector, change policy,
 // absorption setting, collateral rule, repetition).
 //
-// Selectors are named by role; the study's roles name the libraries, and the
-// test roles map every role to the test method:
-//   lf      cardano-serialization-lib Largest-First (deterministic)
-//   ri      cardano-serialization-lib random selection
-//   rrri    cardano-js-sdk round-robin Random-Improve, seeded
-//   evo     the Evolution SDK default (deterministic)
-//   blaze-wd  Blaze's default, micahsSelector (deterministic)
-//   lucid-lf  Lucid Evolution's complete() default (deterministic)
-//   h12     UnFrack.It's H-12 input rule, with UnFrack.It's own change
+// Selectors are named by role. Each study library is one row of
+// LIBRARY_TABLE: its role, the method the role names, and whether it picks
+// at random; the role tables below are derived from it, so a library joins the
+// study with one row. The study's roles name the libraries, and the test roles
+// map every role to the test method:
+//   lf         cardano-serialization-lib Largest-First (deterministic)
+//   ri         cardano-serialization-lib random selection
+//   rrri       cardano-js-sdk round-robin Random-Improve, seeded
+//   evo        the Evolution SDK default (deterministic)
+//   blaze-wd   Blaze's default, micahsSelector (deterministic)
+//   lucid-lf   Lucid Evolution's complete() default (deterministic)
+//   h12        UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
 // arm replays the wallet's observed state, under one collateral rule (a job
 // of a wallet whose window holds no script interaction records
-// 'none-needed'). For each library role L of lf, ri, rrri, evo, blaze-wd and
-// lucid-lf:
+// 'none-needed'). For each library role L of LIBRARY_ROLES:
 //   L/own     L's inputs and L's own change ('default'): question 1's
 //             reference and the user switching away from L
 //   L/layout  L's inputs and UnFrack.It's change ('layout'): question 1's
@@ -30,19 +32,30 @@
 // 'absorb-off', which give the planner its default settings; the setting
 // reaches the method as opts.absorb). Question 1 compares L/layout with
 // L/own; question 2 compares the rule with L/layout.
-// Repetitions: 10 for a library that picks at random (ri, rrri), one for a
-// deterministic one and for the rule. Repetition r seeds the selector with r
-// in L/own and in L/layout alike, so the two arms share one seed sequence
-// (common random numbers; replay/run.mjs replayJobOpts). With six libraries
-// that is 2 + 20 + 20 + 2 + 2 + 2 + 2 = 50 jobs per wallet and window.
+// Repetitions: 10 for a library that picks at random, one for a deterministic
+// one and for the rule. Repetition r seeds the selector with r in L/own and in
+// L/layout alike, so the two arms share one seed sequence (common random
+// numbers; replay/run.mjs replayJobOpts). Per wallet and window that is 2 jobs
+// per deterministic library, 20 per random one and 2 for the rule: with the
+// six libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 2 = 50.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
-export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', 'blaze-wd': 'blaze-wd', 'lucid-lf': 'lucid-lf', h12: 'unfrackit-h12' });
-export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', 'blaze-wd': 'test-largest-first', 'lucid-lf': 'test-largest-first', h12: 'test-largest-first' });
-const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'blaze-wd', 'lucid-lf', 'h12']);
+// One row per study library: { role, method, random }.
+export const LIBRARY_TABLE = Object.freeze([
+  { role: 'lf', method: 'csl-lf', random: false },
+  { role: 'ri', method: 'csl-ri', random: true },
+  { role: 'rrri', method: 'cjs-rrri', random: true },
+  { role: 'evo', method: 'evo-lf', random: false },
+  { role: 'blaze-wd', method: 'blaze-wd', random: false },
+  { role: 'lucid-lf', method: 'lucid-lf', random: false }
+].map((r) => Object.freeze(r)));
+const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 
-export const LIBRARY_ROLES = Object.freeze(['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf']);
+export const LIBRARY_ROLES = Object.freeze(LIBRARY_TABLE.map((r) => r.role));
+export const STUDY_ROLES = Object.freeze(Object.fromEntries([...LIBRARY_TABLE, RULE].map((r) => [r.role, r.method])));
+export const TEST_ROLES = Object.freeze(Object.fromEntries([...LIBRARY_ROLES, RULE.role].map((role) => [role, 'test-largest-first'])));
+const DETERMINISTIC_ROLES = new Set([...LIBRARY_TABLE.filter((r) => !r.random).map((r) => r.role), RULE.role]);
 export const RANDOM_REPETITIONS = 10;
 
 // The plan's entries for a window: [{ hypothesis, arm, variant, role, change,
@@ -57,7 +70,7 @@ export function windowPlan(window, { reps = RANDOM_REPETITIONS } = {}) {
     out.push({ hypothesis: 'Q1', arm: 'observed', variant: 'default', role, change: 'default', repetitions: n(role) });
     for (const hypothesis of ['Q1', 'Q2']) out.push({ hypothesis, arm: 'observed', variant: 'default', role, change: 'layout', repetitions: n(role) });
   }
-  for (const absorb of [true, false]) out.push({ hypothesis: 'Q2', arm: 'observed', variant: absorb ? 'absorb-on' : 'absorb-off', role: 'h12', change: 'default', repetitions: 1, absorb });
+  for (const absorb of [true, false]) out.push({ hypothesis: 'Q2', arm: 'observed', variant: absorb ? 'absorb-on' : 'absorb-off', role: RULE.role, change: 'default', repetitions: 1, absorb });
   return out;
 }
 
