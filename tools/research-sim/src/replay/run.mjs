@@ -17,14 +17,17 @@
 // those of one thread writing every job in turn, whatever order the jobs end
 // in, and the parent holds no wallet's records: of a job it keeps only
 // whether it was refused, its validity summary and, for a maintained-tidy
-// job, what H-6's join reads. Every job runs to completion: a job the pool's
-// watchdog stops, or one a machine error ends, runs again (replay/pool.mjs),
-// rewriting its spool, and only the attempt that completes is recorded. An
-// engine refusal (a wallet the rules do not settle, such as one with no
-// change address) is recorded as refused; a stop point or a failed job stops
-// the run and drops the wallet's segment, so only whole wallets are marked
-// done, and the run resumes at the wallets not done. When every wallet is
-// done the stage joins the segments in wallet order.
+// job, what H-6's join reads. Several wallets are open at once (runReplays),
+// so a wallet's slowest job does not leave the other workers idle, and
+// wallets are done in any order. Every job runs to completion: a job the
+// pool's watchdog stops, or one a machine error ends, runs again
+// (replay/pool.mjs), rewriting its spool, and only the attempt that completes
+// is recorded. An engine refusal (a wallet the rules do not settle, such as
+// one with no change address) is recorded as refused; a stop point or a
+// failed job stops the run and drops the segments of the wallets with a job
+// not ended, so only whole wallets are marked done, and the run resumes at
+// the wallets not done. When every wallet is done the stage joins the
+// segments in wallet order.
 //
 // H-6's rescue test: each trigger of a maintained-tidy arm under the decided or
 // an alternative threshold is followed for 30 days of block time; it rescues
@@ -123,89 +126,233 @@ export function replayJobOpts(j) {
 
 const needsCollateral = (source) => source.events.some((e) => e.kind === 'intent' && e.intent.collateral.required);
 
+// The cap on a replay run's open wallets at a worker count: twice the
+// workers. Each wallet still running holds at least one worker, so no more
+// than the worker count of wallets can be held open by their slowest jobs,
+// and the rest of the cap keeps wallets whose jobs are queued or that are
+// closing. An open wallet holds its spool on disk and its segment's two
+// files open.
+export const openWalletCap = (workers) => 2 * workers;
+
 // wallets: [{ spec }], in the stage's wallet order; plan: the window's
 // entries; roles: role -> method name (a test plan's entries name role
 // 'test'); out: the stage (out/stage.mjs openStage) over the same wallets;
-// watchdogMs: the replay watchdog (the pool's default when absent). A wallet
-// the stage has done is skipped, and so is one outside the invocation's
-// share of the wallets (out/stage.mjs runs). The jobs' spools are under
-// out.dir/spool/<wallet index>/, removed when the run ends. Returns the
-// stage's totals, every done wallet's summed: { wallets, jobs, refused,
-// triggers } and, with validity, their validity counts.
-export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false }) {
+// watchdogMs: the replay watchdog (the pool's default when absent); maxOpen:
+// the most wallets open at once (openWalletCap of the pool's size when
+// absent). A wallet the stage has done is skipped, and so is one outside the
+// invocation's share of the wallets (out/stage.mjs runs). The jobs' spools
+// are under out.dir/spool/<wallet index>/, removed when the run ends.
+// Returns the stage's totals, every done wallet's summed: { wallets, jobs,
+// refused, triggers } and, with validity, their validity counts.
+//
+// Several wallets run at once. The run keeps one queue of the jobs not yet
+// started, in (wallet index, job index) order, and hands the pool a job
+// whenever fewer than pool.size of its jobs are running, so the pool never
+// holds a job waiting for a worker. It opens the next wallet it runs (in
+// index order) whenever fewer than twice pool.size jobs are queued and fewer
+// than maxOpen wallets are open, so the workers are not left idle behind a
+// wallet's slowest job. A wallet closes when its last job ends: its trigger
+// records after its jobs', then the stage compresses its segment and writes
+// its done file (out/stage.mjs complete), off the main thread's path, one
+// wallet at a time, while the other wallets' jobs run. Wallets close in any
+// order; the stage joins their segments in index order at its end. A failed
+// job, or a close that fails, stops the run: no job is handed to the pool
+// after it, the wallets already closing finish closing, and every open wallet
+// with a job not ended is dropped, without a done file, so that a resume runs
+// it again.
+export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogMs, settleEvery = 25, methodOptions = {}, collateralRules, validity = false, maxOpen = openWalletCap(pool.size) }) {
   if (wallets.length !== out.n) throw new Error(`the stage lists ${out.n} wallets, not the ${wallets.length} given`);
-  try {
-    for (const [wi, w] of wallets.entries()) {
-      if (!out.runs(wi)) continue;
-      const start = new Date();
-      const source = loadSource(T, w.spec);
-      if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
-      const jobs = expandJobs(plan, { roles, needsCollateral: needsCollateral(source), ...(collateralRules ? { collateralRules } : {}) });
-      const totals = { jobs: 0, refused: 0, triggers: 0 };
-      const validities = [];
-      const seg = out.segment(wi);
-      const dir = seg.dir;
-      // H-6's fields of each maintained-tidy job that was not refused, by job.
-      const rescue = new Array(jobs.length).fill(null);
-      const frontier = new Frontier(jobs.length, (_i, spooled) => seg.commit(spooled));
-      try {
-        await Promise.all(jobs.map(async (j, i) => {
-          const key = { wallet: source.wallet, window: source.window, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
-          const job = {
-            source: w.spec,
-            arm: j.arm,
-            variant: j.variant,
-            repetition: j.repetition,
-            method: { name: j.method, options: methodOptions[j.method] || {} },
-            opts: replayJobOpts(j),
-            settleEvery,
-            policyLock: j.policyLock,
-            validity,
-            key,
-            hypotheses: j.hypotheses,
-            spool: spoolPaths(dir, i)
-          };
-          const at = { wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
-          const r = await pool.replay(job, { watchdogMs, note: (e) => out.note({ ...e, ...at }) });
-          totals.jobs++;
-          if (!r.ok) {
-            out.note({ event: 'replay error', wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, repetition: j.repetition, error: r.error, stop: r.stop });
-            if (r.stop) throw new Error(`stop point: ${r.error}`);
-            throw new Error(`replay failed: ${r.error}`);
-          }
-          const x = r.result;
-          if (x.refused) totals.refused++;
-          else {
-            if (x.validity) {
-              validities.push(x.validity);
-              noteValidity(out, key, x.validity);
-            }
-            if (x.rescue) rescue[i] = { key, ...x.rescue };
-          }
-          if (x.spooled.held) x.spooled.held.times.ms = r.ms;
-          frontier.done(i, x.spooled);
-        }));
-        if (!frontier.complete) throw new Error('a job of the wallet was not committed');
-        // H-6's rescue test, per maintained-tidy rule arm against its
-        // never-propose twin, in job order.
-        const twins = new Map(rescue.filter(Boolean).map((r) => [JSON.stringify(r.key), r]));
-        for (const res of rescue) {
-          if (!res || !res.triggers.length) continue;
-          const twin = H6_RULES.has(res.key.variant) ? twins.get(JSON.stringify({ ...res.key, variant: 'never-propose' })) : null;
-          const outcomes = twin ? rescueOutcomes(res, twin) : res.triggers.map((t) => ({ ...t, rescue: null }));
-          for (const t of outcomes) seg.write(record('trigger', res.key, t));
-          totals.triggers += outcomes.length;
-        }
-      } catch (e) {
-        frontier.stop();
-        seg.close();
-        throw e;
-      }
-      if (validity) totals.validity = sumValidity(validities);
-      await out.complete(wi, seg, { wallet: source.wallet, totals, start });
+  if (!Number.isSafeInteger(maxOpen) || maxOpen < 1) throw new Error('the cap on open wallets is a positive whole number');
+  const workers = pool.size;
+  const todo = wallets.flatMap((_w, wi) => (out.runs(wi) ? [wi] : []));
+  if (todo.length) out.note({ event: 'window', workers, queue: 2 * workers, maxOpen, wallets: todo.length });
+  // Jobs not started, in (wallet, job) order: wallets open in index order,
+  // each appending its jobs in job order.
+  const queue = [];
+  // The open wallets: those with a job not ended, and those closing.
+  const open = new Set();
+  let nextWallet = 0;
+  let running = 0;
+  let failure = null;
+  let closing = Promise.resolve();
+  let wake = null;
+  const signal = () => {
+    const w = wake;
+    wake = null;
+    if (w) w();
+  };
+  // A wallet dropped by a failure: what it committed is not marked done.
+  const drop = (st) => {
+    st.dropped = true;
+    st.frontier.stop();
+    st.seg.close();
+    open.delete(st);
+  };
+  const fail = (e) => {
+    if (!failure) {
+      failure = e;
+      queue.length = 0;
+      for (const st of [...open]) if (!st.closing) drop(st);
     }
+    signal();
+  };
+
+  const openWallet = (wi) => {
+    const w = wallets[wi];
+    const start = new Date();
+    const source = loadSource(T, w.spec);
+    if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
+    const jobs = expandJobs(plan, { roles, needsCollateral: needsCollateral(source), ...(collateralRules ? { collateralRules } : {}) });
+    const seg = out.segment(wi);
+    const dir = seg.dir;
+    const st = {
+      index: wi,
+      wallet: source.wallet,
+      start,
+      seg,
+      totals: { jobs: 0, refused: 0, triggers: 0 },
+      validities: [],
+      // H-6's fields of each maintained-tidy job that was not refused, by job.
+      rescue: new Array(jobs.length).fill(null),
+      frontier: new Frontier(jobs.length, (_i, spooled) => seg.commit(spooled)),
+      left: jobs.length,
+      closing: false,
+      dropped: false
+    };
+    open.add(st);
+    for (const [i, j] of jobs.entries()) {
+      const key = { wallet: source.wallet, window: source.window, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
+      const job = {
+        source: w.spec,
+        arm: j.arm,
+        variant: j.variant,
+        repetition: j.repetition,
+        method: { name: j.method, options: methodOptions[j.method] || {} },
+        opts: replayJobOpts(j),
+        settleEvery,
+        policyLock: j.policyLock,
+        validity,
+        key,
+        hypotheses: j.hypotheses,
+        spool: spoolPaths(dir, i)
+      };
+      const at = { wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
+      queue.push({ st, i, j, key, job, at });
+    }
+    if (!jobs.length) close(st);
+  };
+
+  // A job's end: its result kept, its spool committed in job order, and the
+  // wallet closed after its last job.
+  const ended = (q, r) => {
+    const { st, i, j, key } = q;
+    if (st.dropped) return;
+    st.totals.jobs++;
+    if (!r.ok) {
+      out.note({ event: 'replay error', wallet: st.wallet, arm: j.arm, variant: j.variant, method: j.method, repetition: j.repetition, error: r.error, stop: r.stop });
+      if (r.stop) throw new Error(`stop point: ${r.error}`);
+      throw new Error(`replay failed: ${r.error}`);
+    }
+    const x = r.result;
+    if (x.refused) st.totals.refused++;
+    else {
+      if (x.validity) {
+        st.validities.push(x.validity);
+        noteValidity(out, key, x.validity);
+      }
+      if (x.rescue) st.rescue[i] = { key, ...x.rescue };
+    }
+    if (x.spooled.held) x.spooled.held.times.ms = r.ms;
+    st.frontier.done(i, x.spooled);
+    if (--st.left === 0) close(st);
+  };
+
+  const dispatch = () => {
+    while (!failure && running < workers && queue.length) {
+      const q = queue.shift();
+      running++;
+      pool.replay(q.job, { watchdogMs, note: (e) => out.note({ ...e, ...q.at }) }).then((r) => {
+        running--;
+        try {
+          ended(q, r);
+        } catch (e) {
+          fail(e);
+        }
+        signal();
+      }, (e) => {
+        running--;
+        if (!q.st.dropped) fail(e);
+        signal();
+      });
+    }
+  };
+
+  // A wallet whose jobs have all ended: H-6's rescue test, per
+  // maintained-tidy rule arm against its never-propose twin, in job order;
+  // then the stage completes its segment, after the closes before it.
+  const close = (st) => {
+    st.closing = true;
+    let ready = false;
+    try {
+      if (!st.frontier.complete) throw new Error('a job of the wallet was not committed');
+      const twins = new Map(st.rescue.filter(Boolean).map((r) => [JSON.stringify(r.key), r]));
+      for (const res of st.rescue) {
+        if (!res || !res.triggers.length) continue;
+        const twin = H6_RULES.has(res.key.variant) ? twins.get(JSON.stringify({ ...res.key, variant: 'never-propose' })) : null;
+        const outcomes = twin ? rescueOutcomes(res, twin) : res.triggers.map((t) => ({ ...t, rescue: null }));
+        for (const t of outcomes) st.seg.write(record('trigger', res.key, t));
+        st.totals.triggers += outcomes.length;
+      }
+      if (validity) st.totals.validity = sumValidity(st.validities);
+      st.rescue = null;
+      st.validities = null;
+      ready = true;
+    } catch (e) {
+      drop(st);
+      fail(e);
+    }
+    if (!ready) return;
+    closing = closing.then(async () => {
+      try {
+        await out.complete(st.index, st.seg, { wallet: st.wallet, totals: st.totals, start: st.start });
+      } catch (e) {
+        st.dropped = true;
+        fail(e);
+      }
+      open.delete(st);
+      signal();
+    });
+  };
+
+  try {
+    for (;;) {
+      if (!failure) {
+        try {
+          dispatch();
+          while (!failure && nextWallet < todo.length && open.size < maxOpen && queue.length < 2 * workers) {
+            openWallet(todo[nextWallet++]);
+            dispatch();
+          }
+        } catch (e) {
+          fail(e);
+        }
+      }
+      if (failure) break;
+      if (nextWallet === todo.length && open.size === 0) break;
+      await new Promise((resolve) => {
+        wake = resolve;
+      });
+    }
+    await closing;
+    if (failure) throw failure;
   } finally {
-    rmSync(out.spool, { recursive: true, force: true });
+    // After a failure the pool may still be running jobs of dropped wallets,
+    // writing to their spools; the resume removes what is left.
+    try {
+      rmSync(out.spool, { recursive: true, force: true });
+    } catch (e) {
+      if (!failure) throw e;
+    }
   }
   return out.finish();
 }

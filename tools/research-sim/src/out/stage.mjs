@@ -32,8 +32,9 @@
 //                  it completed, start and end
 //   machines/<label>.log.jsonl
 //                  the log, appended by every invocation under the label
-//   spool/         while a wallet runs: its jobs' spools and its records
-//                  before compression (replay/run.mjs); removed when it ends
+//   spool/<i>/     while wallet i is open: its jobs' spools and its records
+//                  before compression (replay/run.mjs, which keeps several
+//                  wallets open at once); removed when it is done
 //   records.jsonl.gz, timings.jsonl.gz
 //                  at the stage's end, the segments' gzip members joined in
 //                  index order, not recompressed
@@ -72,6 +73,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, rmSync, readdirSync, statSync, chmodSync, openSync, readSync, writeSync, closeSync, fsyncSync, createReadStream, createWriteStream, unlinkSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { createHash } from 'node:crypto';
+import { writeFile, rename, chmod, stat, rm } from 'node:fs/promises';
 import { createGzip, createGunzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { Transform, Writable } from 'node:stream';
@@ -95,6 +97,15 @@ export function writeAtomic(path, text) {
   writeFileSync(tmp, text, { mode: 0o600, flush: true });
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
+}
+
+// writeAtomic without blocking the thread, for a wallet's close, which runs
+// while other wallets' jobs end (replay/run.mjs).
+async function writeAtomicAsync(path, text) {
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, text, { mode: 0o600, flush: true });
+  await chmod(tmp, 0o600);
+  await rename(tmp, path);
 }
 
 // The wallets.json entry of each replay wallet ({ spec }, replay/source.mjs),
@@ -157,12 +168,14 @@ function tap() {
 const sink = () => new Writable({ write(_c, _e, cb) { cb(); } });
 
 // src compressed to dst as one gzip member at GZIP_LEVEL; the decompressed
-// bytes' SHA-256, byte and line counts, and the compressed size.
+// bytes' SHA-256, byte and line counts, and the compressed size. The
+// compression runs on libuv's thread pool and the file I/O is asynchronous,
+// so the calling thread goes on with other work meanwhile.
 export async function gzipFile(src, dst) {
   const { t, result } = tap();
   await pipeline(createReadStream(src), t, createGzip({ level: GZIP_LEVEL }), createWriteStream(dst, { mode: 0o600, flush: true }));
-  chmodSync(dst, 0o600);
-  return { ...result(), gzipBytes: statSync(dst).size };
+  await chmod(dst, 0o600);
+  return { ...result(), gzipBytes: (await stat(dst)).size };
 }
 
 // A gzip file's decompressed bytes, every member: SHA-256, bytes, lines.
@@ -489,9 +502,20 @@ export class ReplayStage {
     return new Segment(join(this.spool, String(i)), i);
   }
 
+  // The machine record written without blocking the thread; such writes
+  // follow one another, each with the record as it stood when it was asked
+  // for.
+  saveMachineAsync() {
+    const text = jsonText({ label: this.label, invocations: this.invocations });
+    this.machineWrite = (this.machineWrite || Promise.resolve()).then(() => writeAtomicAsync(this.machinePath, text));
+    return this.machineWrite;
+  }
+
   // Wallet i's segment compressed into segments/, its done file written last,
   // and its spool directory removed. wallet: the records' wallet field;
-  // totals: the wallet's counts; start: when the wallet started.
+  // totals: the wallet's counts; start: when the wallet started. The
+  // compression, the hashing and the file writes are asynchronous, so a
+  // run's other wallets go on while one closes.
   async complete(i, seg, { wallet, totals, start }) {
     seg.close();
     const out = {};
@@ -500,14 +524,13 @@ export class ReplayStage {
       out[kind] = await gzipFile(src, `${this.path(i, kind)}.tmp`);
     }
     if (out.records.lines !== seg.n) throw new Error(`wallet ${i}'s segment holds ${out.records.lines} records, not the ${seg.n} written`);
-    for (const kind of KINDS) renameSync(`${this.path(i, kind)}.tmp`, this.path(i, kind));
+    for (const kind of KINDS) await rename(`${this.path(i, kind)}.tmp`, this.path(i, kind));
     const done = { index: i, wallet, runSha256: this.runSha256, records: out.records, timings: out.timings, counts: seg.counts, totals, machine: this.label, start: start instanceof Date ? start.toISOString() : start, end: new Date().toISOString() };
-    writeAtomic(this.path(i, 'done'), jsonText(done));
-    seg.remove();
-    rmSync(seg.dir, { recursive: true, force: true });
+    await writeAtomicAsync(this.path(i, 'done'), jsonText(done));
+    await rm(seg.dir, { recursive: true, force: true });
     this.done[i] = done;
     this.invocation.completed.push(i);
-    this.saveMachine();
+    await this.saveMachineAsync();
     this.note({ event: 'segment-done', index: i, records: seg.n });
     return done;
   }
