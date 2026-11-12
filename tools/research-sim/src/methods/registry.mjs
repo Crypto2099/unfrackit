@@ -17,6 +17,8 @@
 //                       micahsSelector's wide-then-deep selection
 //   lucid-lf            methods/lucid.mjs: Lucid Evolution's complete() at
 //                       its defaults
+//   mesh-rrri           methods/mesh.mjs: Mesh's builder at its default
+//                       selector, with exact constraint callbacks
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -26,8 +28,8 @@
 //                       once on every other
 // A baseline runs at its library's defaults and the simulator's settings, so
 // it takes no options. The builder survey's other subjects (the Evolution
-// SDK's unfrack option, Mesh's selectors; survey/survey.mjs) are not
-// registered, so no run plan can name them. The adapters load with this
+// SDK's unfrack option, Mesh's selectors with Mesh's own callbacks;
+// survey/survey.mjs) are not registered, so no run plan can name them. The adapters load with this
 // module, and so in every worker.
 
 import { testLargestMethod } from './test-largest.mjs';
@@ -37,6 +39,7 @@ import { cjsMethod } from './cjs.mjs';
 import { evoMethod } from './evo.mjs';
 import { blazeMethod } from './blaze.mjs';
 import { lucidMethod } from './lucid.mjs';
+import { meshStudyMethod } from './mesh.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -65,7 +68,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -74,6 +77,7 @@ const FACTORIES = new Map([
   ['evo-lf', baseline('evo-lf', (T) => evoMethod({ T }))],
   ['blaze-wd', baseline('blaze-wd', (T) => blazeMethod(T))],
   ['lucid-lf', baseline('lucid-lf', (T) => lucidMethod({ T }))],
+  ['mesh-rrri', baseline('mesh-rrri', (T) => meshStudyMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

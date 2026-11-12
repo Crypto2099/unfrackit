@@ -13,6 +13,7 @@ import { ZERO_IMPLICIT } from '../../../src/state/intent.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 import { negativeControls, EXPECTED } from '../../lib/controls.mjs';
 import { cjsMethod, cjsImplicitValue } from '../../../src/methods/cjs.mjs';
+import { SURVEY_COVERAGE } from '../../../src/methods/mesh.mjs';
 import { replay, fixedExtraWitnesses } from '../../../src/replay/engine.mjs';
 import { loadSource } from '../../../src/replay/source.mjs';
 import { fixedResolver } from '../../../src/kit/apply.mjs';
@@ -69,13 +70,15 @@ test('cardano-js-sdk covers every replay part', () => {
   for (const [c, [it]] of Object.entries(CASES)) assert.doesNotThrow(() => refuseUncovered('cjs-rrri', REPLAY_COVERAGE.cjs, it), c);
 });
 
-test('Mesh covers no replay part and refuses each with the messages it has always given', () => {
-  for (const [mod, name] of [['mesh', 'mesh-default']]) {
-    assert.deepEqual(REPLAY_COVERAGE[mod], []);
+test('Mesh\'s study method covers every replay part; the survey\'s Mesh subjects cover none and refuse each with the messages they have always given', () => {
+  assert.deepEqual(REPLAY_COVERAGE.mesh, REPLAY_PARTS);
+  for (const [c, [it]] of Object.entries(CASES)) assert.doesNotThrow(() => refuseUncovered('mesh-rrri', REPLAY_COVERAGE.mesh, it), c);
+  for (const name of ['mesh-default', 'mesh-lf']) {
+    assert.deepEqual(SURVEY_COVERAGE, []);
     const msg = MESSAGES(name);
     for (const [c, [it, want]] of Object.entries(CASES)) {
-      if (want === null) assert.doesNotThrow(() => refuseUncovered(name, REPLAY_COVERAGE[mod], it), c);
-      else assert.throws(() => refuseUncovered(name, REPLAY_COVERAGE[mod], it), (e) => e.constructor === Error && e.message === msg[want], c);
+      if (want === null) assert.doesNotThrow(() => refuseUncovered(name, SURVEY_COVERAGE, it), c);
+      else assert.throws(() => refuseUncovered(name, SURVEY_COVERAGE, it), (e) => e.constructor === Error && e.message === msg[want], c);
     }
   }
 });

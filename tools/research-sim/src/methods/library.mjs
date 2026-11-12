@@ -61,8 +61,10 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   evo   evo-lf (and the survey's evo-unfrack): every part, collateral as
 //         the library chooses it, since it cannot be given the UTxO the
 //         engine would set aside (methods/evo.mjs)
-//   mesh  the survey's Mesh subjects: none; Mesh is surveyed on battery spends
-//         only and never replays
+//   mesh  mesh-rrri: every part, the fixed parts and the collateral through
+//         the kit and the rest through Mesh's selector's own parameters
+//         (methods/mesh.mjs, its replay path); the survey's Mesh subjects
+//         cover none (mesh.mjs SURVEY_COVERAGE)
 //   cjs   cjs-rrri: every part (methods/cjs.mjs, its replay path)
 //   h12   unfrackit-h12: every part, each in the rule's request, which the
 //         rule takes into its selection, size and fee (methods/h12.mjs)
@@ -75,7 +77,7 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  mesh: Object.freeze([]),
+  mesh: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   h12: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   blaze: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
