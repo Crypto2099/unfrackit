@@ -38,6 +38,10 @@
 //   yoroi-lf            methods/yoroi.mjs: the Yoroi wallet's send flow,
 //                       built from its source by scripts/build-yoroi.mjs;
 //                       made only when that build is present
+//   apollo-macs         methods/apollo.mjs: Apollo's transaction builder at
+//                       its defaults, MACSSelector, in a Go helper process
+//                       (scripts/build-helpers.mjs apollo) through the bridge
+//                       (methods/helper.mjs)
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -66,6 +70,7 @@ import { cometaMethod } from './cometa.mjs';
 import { laceMethod } from './lace.mjs';
 import { adaliteMethod } from './adalite.mjs';
 import { yoroiMethod } from './yoroi.mjs';
+import { apolloMethod } from './apollo.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -94,7 +99,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -112,6 +117,7 @@ const FACTORIES = new Map([
   ['lace-rrri', baseline('lace-rrri', (T) => laceMethod(T))],
   ['adalite-lp', baseline('adalite-lp', (T) => adaliteMethod(T))],
   ['yoroi-lf', baseline('yoroi-lf', (T) => yoroiMethod(T))],
+  ['apollo-macs', baseline('apollo-macs', (T) => apolloMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

@@ -94,6 +94,9 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   yoroi yoroi-lf: every part; the send flow writes outputs, a TTL and
 //         metadata only, so an intent with any other part is not replayable
 //         (methods/yoroi.mjs)
+//   apollo apollo-macs: the fixed parts, implicit values and output data,
+//         through the builder's operations; the Plutus parts and the
+//         collateral of a script spend not yet (methods/apollo.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -108,7 +111,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   cometa: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   lace: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   adalite: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  yoroi: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  yoroi: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  apollo: Object.freeze(['fixed', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
