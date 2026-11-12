@@ -24,7 +24,7 @@
 // the esbuild version and the bundle's SHA-256. Nothing else is written; the
 // extracted source is removed. Exit code 0 when the build is written, 1 on any
 // failure. The clone, the checks and the extraction are scripts/
-// wallet-source.mjs, which build-yoroi.mjs shares.
+// wallet-source.mjs, which build-yoroi.mjs and build-adalite.mjs share.
 
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

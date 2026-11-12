@@ -29,8 +29,8 @@
 // modules bundled, the packages left out, and the bundle's SHA-256. Nothing
 // else is written; the extracted source and the tarballs are removed. Exit
 // code 0 when the build is written, 1 on any failure. The clone, the checks
-// and the extraction are scripts/wallet-source.mjs, which build-lace.mjs
-// shares.
+// and the extraction are scripts/wallet-source.mjs, which build-lace.mjs and
+// build-adalite.mjs share.
 
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// What the wallet build scripts share (build-lace.mjs, build-yoroi.mjs): their
+// What the wallet build scripts share (build-lace.mjs, build-yoroi.mjs,
+// build-adalite.mjs): their
 // two ways of naming the source, a local clone or a fresh shallow clone of
 // the pinned commit alone; the check of each pinned path's git object at the
 // commit; the extraction of the pinned paths from the commit's objects, never
@@ -30,16 +31,21 @@ export function parseArgs(name, argv) {
   return { mode: flag.slice(2), dir: resolve(dir) };
 }
 
-// A shallow clone of the pinned commit alone, its blobs fetched only for the
-// paths later read.
-export function freshClone(name, dir, repo, commit) {
+// A shallow clone of the pinned commit alone. Blobless (the default), its
+// blobs are fetched only for the paths later read; with blobless false, the
+// commit's whole tree is fetched.
+export function freshClone(name, dir, repo, commit, { blobless = true } = {}) {
   if (existsSync(dir)) usage(name, `${dir} exists; --fetch makes a new clone`);
   mkdirSync(dir, { recursive: true });
   git(dir, ['init', '--quiet']);
   git(dir, ['remote', 'add', 'origin', repo]);
-  git(dir, ['config', 'remote.origin.promisor', 'true']);
-  git(dir, ['config', 'remote.origin.partialclonefilter', 'blob:none']);
-  git(dir, ['fetch', '--quiet', '--depth', '1', '--filter=blob:none', 'origin', commit]);
+  if (blobless) {
+    git(dir, ['config', 'remote.origin.promisor', 'true']);
+    git(dir, ['config', 'remote.origin.partialclonefilter', 'blob:none']);
+    git(dir, ['fetch', '--quiet', '--depth', '1', '--filter=blob:none', 'origin', commit]);
+  } else {
+    git(dir, ['fetch', '--quiet', '--depth', '1', 'origin', commit]);
+  }
   return dir;
 }
 

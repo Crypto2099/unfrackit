@@ -26,11 +26,12 @@
 // object's hash, the manifests', the packages, the esbuild version, the
 // compile departures (adalite-source.mjs) with every rewritten import, the
 // files bundled and the bundle's SHA-256. The extracted source is removed.
-// Exit code 0 when the build is written, 1 on any failure.
+// Exit code 0 when the build is written, 1 on any failure. The clone, the
+// object checks and the extraction are scripts/wallet-source.mjs, which
+// build-lace.mjs and build-yoroi.mjs share; its fresh clone here fetches the
+// commit's whole tree, not a blobless one.
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -38,49 +39,10 @@ import {
   ADALITE_REPO, ADALITE_COMMIT, ADALITE_RELEASE, ADALITE_SRC, ADALITE_PATHS, ADALITE_LICENSE, ADALITE_ROOT_MANIFEST, ADALITE_MANIFEST, ADALITE_LOCK,
   ADALITE_PACKAGES, OUTPUT_DIR, BUNDLE, BUILD_RECORD, ENTRY, NAMESPACE_CALLS, BANNER
 } from '../src/methods/adalite-source.mjs';
+import { git, parseArgs, freshClone, requireCommit, checkObject, extractPaths, sha256 } from './wallet-source.mjs';
 
 const TOOL = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
-
-const git = (dir, args, opts = {}) => execFileSync('git', ['-C', dir, ...args], { encoding: opts.encoding === null ? null : 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-
-function usage(msg) {
-  if (msg) console.error(`build-adalite: ${msg}`);
-  console.error('usage: node scripts/build-adalite.mjs --clone <dir> | --fetch <dir>');
-  process.exit(1);
-}
-
-function parseArgs(argv) {
-  if (argv.length !== 2) usage();
-  const [flag, dir] = argv;
-  if (flag !== '--clone' && flag !== '--fetch') usage(`unknown option ${flag}`);
-  return { mode: flag.slice(2), dir: resolve(dir) };
-}
-
-// A shallow clone of the pinned commit alone.
-function freshClone(dir) {
-  if (existsSync(dir)) usage(`${dir} exists; --fetch makes a new clone`);
-  mkdirSync(dir, { recursive: true });
-  git(dir, ['init', '--quiet']);
-  git(dir, ['remote', 'add', 'origin', ADALITE_REPO]);
-  git(dir, ['fetch', '--quiet', '--depth', '1', 'origin', ADALITE_COMMIT]);
-  return dir;
-}
-
-// Checks one path's object at the commit against its pin.
-function checkObject(clone, path, type, hash) {
-  let got;
-  let kind;
-  try {
-    got = git(clone, ['rev-parse', `${ADALITE_COMMIT}:${path}`]).trim();
-    kind = git(clone, ['cat-file', '-t', got]).trim();
-  } catch (e) {
-    throw new Error(`${path} at ${ADALITE_COMMIT}: ${String(e.stderr || e.message).trim()}`);
-  }
-  if (kind !== type) throw new Error(`${path} at ${ADALITE_COMMIT} is a ${kind}, pinned as a ${type}`);
-  if (got !== hash) throw new Error(`${path} at ${ADALITE_COMMIT} is ${got}, pinned as ${hash}`);
-  return got;
-}
 
 // The version yarn.lock (Berry format) resolves for a package's range: the
 // entry whose key lists "<name>@npm:<range>".
@@ -120,19 +82,13 @@ function namespacePlugin(srcRoot, rewrites) {
   };
 }
 
-const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
-
 async function main() {
-  const { mode, dir } = parseArgs(process.argv.slice(2));
-  const clone = mode === 'fetch' ? freshClone(dir) : dir;
-  try {
-    git(clone, ['cat-file', '-e', `${ADALITE_COMMIT}^{commit}`]);
-  } catch {
-    throw new Error(`${clone} does not hold commit ${ADALITE_COMMIT}`);
-  }
+  const { mode, dir } = parseArgs('build-adalite', process.argv.slice(2));
+  const clone = mode === 'fetch' ? freshClone('build-adalite', dir, ADALITE_REPO, ADALITE_COMMIT, { blobless: false }) : dir;
+  requireCommit(clone, ADALITE_COMMIT);
   const objects = {};
-  for (const [path, [type, hash]] of Object.entries(ADALITE_PATHS)) objects[path] = { type, hash: checkObject(clone, path, type, hash) };
-  for (const [path, type, hash] of [ADALITE_ROOT_MANIFEST, ADALITE_MANIFEST, ADALITE_LOCK]) checkObject(clone, path, type, hash);
+  for (const [path, [type, hash]] of Object.entries(ADALITE_PATHS)) objects[path] = { type, hash: checkObject(clone, ADALITE_COMMIT, path, type, hash) };
+  for (const [path, type, hash] of [ADALITE_ROOT_MANIFEST, ADALITE_MANIFEST, ADALITE_LOCK]) checkObject(clone, ADALITE_COMMIT, path, type, hash);
 
   // The license both manifests declare.
   for (const [path] of [ADALITE_ROOT_MANIFEST, ADALITE_MANIFEST]) {
@@ -159,9 +115,7 @@ async function main() {
   const staging = mkdtempSync(join(out, '.source-'));
   try {
     // The pinned paths from the commit's objects, never a working tree.
-    const tar = git(clone, ['archive', '--format=tar', ADALITE_COMMIT, '--', ...Object.keys(ADALITE_PATHS)], { encoding: null });
-    const x = spawnSync('tar', ['-x', '-C', staging], { input: tar });
-    if (x.status !== 0) throw new Error(`tar: ${String(x.stderr).trim()}`);
+    extractPaths(clone, ADALITE_COMMIT, Object.keys(ADALITE_PATHS), staging);
     const src = join(staging, ADALITE_SRC);
     const entryName = 'unfrackit-entry.ts';
     writeFileSync(join(src, entryName), ENTRY);
