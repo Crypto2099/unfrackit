@@ -73,11 +73,15 @@ test('a plan, a set of payments and a replay on M2, M3 and E1, with memory', { s
     t.diagnostic(JSON.stringify(row));
   }
   // Growth over repeated replays of the largest shape, the heap settled.
+  // The settle is forced: settle() collects only once external memory has
+  // grown by 48 MiB, and an observed-arm replay of M3 grows it by about
+  // 1 MiB, so an unforced settle collects nothing and resident memory would
+  // count garbage V8 has not yet collected.
   const src = loadSource(T, { kind: 'shape', name: 'M3', stream: 'synthetic' });
   const rss = [];
   for (let i = 0; i < 10; i++) {
     await replay(T, src.params, src, { arm: 'observed', variant: 'default', repetition: 1, method: test, opts: { seed: 1, changePolicy: 'default', collateralRule: 'ledger' }, settleEvery: 25 });
-    await settle();
+    await settle({ growth: 0 });
     rss.push(mem().rss);
   }
   t.diagnostic(`resident memory over ten M3 replays (MiB): ${rss.join(', ')}`);
