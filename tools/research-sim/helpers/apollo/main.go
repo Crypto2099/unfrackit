@@ -16,7 +16,7 @@
 //	    .Complete()
 //
 // with no coin selector set, so Complete selects with the package's default,
-// NewMACSSelector() (apollo.go:2640-2643, coinselection.go:57, macs.go:80-86):
+// NewMACSSelector() (apollo.go:2640-2643, coinselection.go:57, macs.go:79-85):
 // Apollo's MACS as shipped. The chain context is the request's: its protocol
 // parameters, its network, and its UTxOs, which Utxos returns by address in
 // the request's order and UtxoByRef by reference (with the fixed and reference

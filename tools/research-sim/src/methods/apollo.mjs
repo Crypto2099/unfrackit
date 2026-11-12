@@ -8,7 +8,7 @@
 // the bridge (methods/helper.mjs). The selector is Apollo's MACS as shipped:
 // the builder is given no coin selector, so Complete() selects with
 // defaultCoinSelector = NewMACSSelector() (apollo.go:2640-2643,
-// coinselection.go:57, macs.go:80-86), the multi-asset coin selection of
+// coinselection.go:57, macs.go:79-85), the multi-asset coin selection of
 // Ramezan, Schneider and McCann with the MinChange steer of 1.5 ADA and the
 // dust sweep the library adds. It is the study's only MACS.
 //
@@ -29,7 +29,7 @@
 // build refused (evaluation_balance.go:33-104), the fee re-estimated until two
 // passes agree (at most five); it refuses a transaction over maxTxSize and an
 // output whose value is over maxValSize (apollo.go:2322-2347, :2352-2378).
-// MACS breaks every tie by the UTxO reference (macs.go:546), so the state's
+// MACS breaks every tie by the UTxO reference (macs.go:542-560), so the state's
 // order decides nothing; it draws nothing at random: deterministic.
 //
 // Witnesses: Complete() writes no vkey witness; the bridge has the helper
