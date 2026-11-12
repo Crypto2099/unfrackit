@@ -7,7 +7,8 @@
 // ends recording their outputs' digests; the run's directory copied to a
 // second machine; a sharded start refused there until those stages have
 // ended with their outputs as recorded (a fresh run, a changed or missing
-// file, a log without digests); each machine runs its shard of both replay
+// file, a log without digests); the second machine's input files at other
+// paths, compared by content; each machine runs its shard of both replay
 // stages; merge-stage joins them; and the study run again, unsharded, sees
 // both replay stages as ended without running a wallet, with the records of
 // an unsharded run. Also --wallet-indexes through the study, a synthetic
@@ -110,12 +111,22 @@ test('a study split across two machines: the stages before the replays here, a s
   writeFileSync(logB, logText);
   assert.equal(readFileSync(logB, 'utf8'), logText, 'the refusals wrote nothing');
 
+  // Machine B's input files sit elsewhere. The study compares them by
+  // content: a wallets file with other content is refused, naming it, and
+  // copies with the same content at other paths are accepted.
+  const walletsB = join(home('b'), 'wallets.txt');
+  writeFileSync(walletsB, '1\n2\n');
+  await on('b', () => assert.rejects(run(preprod('split', { shard: '1/2', wallets: walletsB })), /differs from its first start in the wallets file;/));
+  assert.equal(readFileSync(logB, 'utf8'), logText, 'the refusal wrote nothing');
+  writeFileSync(walletsB, readFileSync(walletsFile));
+  const atB = { wallets: walletsB, treatment: join(home('b'), 'treatment') };
+
   // Each machine runs its shard of both replay stages, under its own label.
   const ranB = [];
   const callsB = [];
-  await on('b', () => run(preprod('split', { shard: '1/2', machine: 'laptop' }), { ran: ranB, calls: callsB }));
+  await on('b', () => run(preprod('split', { shard: '1/2', machine: 'laptop', ...atB }), { ran: ranB, calls: callsB }));
   assert.deepEqual(callsB.map(([s]) => s), REPLAYS, 'no database stage runs');
-  assert.deepEqual(callsB.map(([, o]) => o.shard), ['1/2', '1/2']);
+  assert.deepEqual(callsB.map(([, o]) => [o.shard, o.treatment]), [['1/2', atB.treatment], ['1/2', atB.treatment]]);
   assert.deepEqual(ranB, [['replay-recent', 1], ['replay-recent', 3], ['replay-peak', 1], ['replay-peak', 3]]);
   const eventsB = await on('b', () => logOf('preprod', 'split').slice(logA.length));
   assert.deepEqual(eventsB.map((e) => e.event), ['resume', ...BEFORE_REPLAYS.map(() => 'stage-skipped'), 'collateral-rule', 'stage-start', 'stage-part', 'stage-start', 'stage-part', 'end']);

@@ -6,10 +6,12 @@
 // of each plan in order with the options each is given, the layout, a replay
 // stage killed half way and resumed at the wallets it had not done, a stage
 // that fails, a resume with other worker counts and another machine label,
-// and the refusals (an option, an input file or the code changed on resume,
-// a machine label that is not one, the plans' own
-// rules, a confirmation-split wallet without the analysis-freeze
-// transaction, a second invocation while one runs); the nested run ids, and
+// a resume with its input files at other paths (compared by content, so
+// equal copies resume and changed ones are refused), and the refusals (an
+// option, an input file or the code changed on resume, a machine label that
+// is not one, the plans' own rules, a confirmation-split wallet without the
+// analysis-freeze transaction, a second invocation while one runs); the
+// nested run ids, and
 // the collateral rule read from the collateral stage's report (and refused
 // when the measurement picks none), and the battery-pools command's output.
 
@@ -26,6 +28,7 @@ import { runDir, historyDir } from '../../../src/history/paths.mjs';
 import { stubCommands, STUB_RECORDS } from '../../lib/study-stubs.mjs';
 import { poolsOf } from '../../../src/replay/commands.mjs';
 import { cmdBatteryPools } from '../../../src/history/reports.mjs';
+import { DEFAULT_PINS } from '../../../src/treatment/bridge.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CHILD = join(HERE, '..', '..', 'lib', 'study-child.mjs');
@@ -218,9 +221,6 @@ test('a resume with an option, an input file or the code changed is refused, and
   await assert.rejects(run(preprod('strict', { reps: '2' }), { calls }), /differs from its first start in --reps/);
   await assert.rejects(run(preprod('strict', { validity: true }), { calls }), /does not use --validity/);
   await assert.rejects(run(preprod('strict'), { calls }, { manifest: () => 'another manifest\n' }), /the code manifest/);
-  const copy = join(root, 'wallets-copy.txt');
-  writeFileSync(copy, readFileSync(walletsFile));
-  await assert.rejects(run(preprod('strict', { wallets: copy }), { calls }), /--wallets/);
   writeFileSync(walletsFile, '1\n2\n3\n4\n5\n');
   try {
     await assert.rejects(run(preprod('strict'), { calls }), /the wallets file/);
@@ -230,6 +230,35 @@ test('a resume with an option, an input file or the code changed is refused, and
   assert.equal(calls.length, 0);
   await run(preprod('strict'), { calls });
   assert.equal(calls.length, 0, 'the same options resume, with every stage finished');
+});
+
+test('a resume compares the input files by content, not by path: files at other paths with the same content are accepted, a file with other content is refused, naming it', async () => {
+  // The first start stops at replay-peak, so the resume runs a stage with
+  // the paths it is given.
+  await assert.rejects(run(preprod('moved'), { fail: 'replay-peak' }), /stand-in failure/);
+  const elsewhere = join(root, 'elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  const wallets = join(elsewhere, 'wallets.txt');
+  const pins = join(elsewhere, 'pins.txt');
+  writeFileSync(wallets, readFileSync(walletsFile));
+  writeFileSync(pins, readFileSync(DEFAULT_PINS));
+  const moved = { wallets, treatmentPins: pins, treatment: join(elsewhere, 'treatment') };
+  // Other content is refused, naming the file, and runs nothing.
+  const calls = [];
+  writeFileSync(wallets, '1\n2\n3\n');
+  await assert.rejects(run(preprod('moved', moved), { calls }), /differs from its first start in the wallets file;/);
+  writeFileSync(wallets, readFileSync(walletsFile));
+  writeFileSync(pins, `${readFileSync(DEFAULT_PINS, 'utf8')}# changed\n`);
+  await assert.rejects(run(preprod('moved', moved), { calls }), /differs from its first start in the treatmentPins file;/);
+  assert.equal(calls.length, 0);
+  // The same content at other paths resumes, and the stage runs with them.
+  writeFileSync(pins, readFileSync(DEFAULT_PINS));
+  await run(preprod('moved', moved), { calls });
+  assert.deepEqual(calls.map(([s]) => s), ['replay-peak']);
+  assert.deepEqual([calls[0][1].treatment, calls[0][1].treatmentPins], [moved.treatment, pins]);
+  // The header keeps the first start's paths.
+  const header = JSON.parse(readFileSync(join(runDir('preprod', 'moved'), 'study.json'), 'utf8'));
+  assert.deepEqual([header.options.wallets, header.options.treatment, 'treatmentPins' in header.options], [walletsFile, join(root, 'treatment'), false]);
 });
 
 test('a resume may use another worker count: it changes no record, and the log records each invocation\'s with its machine', async () => {

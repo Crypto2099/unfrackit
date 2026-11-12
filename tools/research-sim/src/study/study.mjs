@@ -69,13 +69,14 @@
 //
 // Layout, under the private root (history/paths.mjs):
 //   <network>/<id>/study.json   the header: plan, network, stages, options
-//                               but the worker count and the machine label,
-//                               the input files'
-//                               SHA-256 (treatment pins, wallets, extraction
-//                               run), the code manifest (`hash`) and its
-//                               SHA-256, Node, and the collateral rule with
-//                               its source (filled in when the rule is known;
-//                               not compared on resume)
+//                               but the worker count and the machine label
+//                               (paths as the first start gave them, made
+//                               absolute; not compared on resume), the input
+//                               files' SHA-256 (treatment pins, wallets,
+//                               extraction run), the code manifest (`hash`)
+//                               and its SHA-256, Node, and the collateral rule
+//                               with its source (filled in when the rule is
+//                               known; not compared on resume)
 //   <network>/<id>/log.jsonl    the study's log, appended: each invocation's
 //                               start or resume with its worker count, machine
 //                               label, share of the wallets, stop stage and
@@ -91,19 +92,24 @@
 // The network is --expect-network, or `synthetic`.
 //
 // Resume: running the same plan and run id again resumes it. The header must
-// equal the first start's in plan, network, stages, options (paths made
-// absolute), input files and code manifest, or the run is refused. The worker
-// count (--workers), the machine label (--machine), the share of the wallets
-// and the stop stage are not compared: they change no record, so a resume
-// may use others, on this machine or another. The paths the options name
-// are compared, so on another machine they are the same absolute paths. A
-// stage whose end entry is in the log is skipped. A replay stage that has not
-// ended resumes at the wallets it has not done (out/stage.mjs), its done
-// wallets' segments kept. Any other stage is rerun from its start: its
-// directory is removed first, so it is written as by an uninterrupted run (the
-// stages' records are deterministic but for the unseeded selectors). A live
-// lock refuses a second invocation; a lock whose process is gone (a kill) is
-// replaced.
+// equal the first start's in plan, network, stages, options, input files and
+// code manifest, or the run is refused. The worker count (--workers), the
+// machine label (--machine), the share of the wallets and the stop stage are
+// not compared: they change no record, so a resume may use others, on this
+// machine or another. Nor are the paths the options name (PATHS): the files
+// are compared by content instead, through the SHA-256 of the treatment pins
+// (which pin the treatment's files, checked when a stage loads it), the
+// wallets file and the extraction run's file (inputDigests), so on another
+// machine they may sit elsewhere. The ImmutableDB directory is not hashed:
+// the node keeps appending to it, and the history stages find each block they
+// read by the hash and slot the database gives and check its bytes against
+// the chunk index's CRC-32 (history/immutable.mjs). A stage whose end entry
+// is in the log is skipped. A replay stage that has not ended resumes at the
+// wallets it has not done (out/stage.mjs), its done wallets' segments kept.
+// Any other stage is rerun from its start: its directory is removed first, so
+// it is written as by an uninterrupted run (the stages' records are
+// deterministic but for the unseeded selectors). A live lock refuses a second
+// invocation; a lock whose process is gone (a kill) is replaced.
 //
 // A stage that throws stops the run, with its error in the log. A stage that
 // finishes with a failed check (a validity failure) has its end entry, marked
@@ -148,9 +154,11 @@ export const STAGE_COMMAND = Object.freeze({
   battery: 'battery'
 });
 
-// Options by use (the lists are in ../options.mjs). Paths are made absolute before they are recorded.
+// Options by use (the lists are in ../options.mjs). Paths are made absolute
+// before they are recorded, and are not compared on resume: the files they
+// name are, by content (inputDigests).
 const ALLOWED = Object.freeze(Object.fromEntries(Object.entries(STUDY_PLAN_OPTIONS).map(([k, v]) => [k, new Set(v)])));
-const PATHS = ['treatment', 'treatmentPins', 'wallets', 'extractionRun', 'immutableDir'];
+const PATHS = Object.freeze(['treatment', 'treatmentPins', 'wallets', 'extractionRun', 'immutableDir']);
 const RUN_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const flag = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
@@ -213,7 +221,9 @@ export function studyOptions(opts) {
 }
 
 // The SHA-256 of each input file the options name, so that a file changed
-// between a start and a resume is seen.
+// between a start and a resume is seen wherever it sits. The treatment is
+// compared through its pins: the bridge refuses a treatment whose files do
+// not match them.
 function inputDigests(o) {
   const d = { treatmentPins: sha256(readFileSync(o.treatmentPins || DEFAULT_PINS)) };
   if (o.wallets) d.wallets = sha256(readFileSync(o.wallets));
@@ -276,6 +286,8 @@ function checkEarlierStages(stages, done, network, runId) {
 }
 
 const withoutMachine = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !MACHINE_OPTIONS.includes(k)));
+// The options a resume compares: neither the machine's nor the paths.
+const compared = (o) => Object.fromEntries(Object.entries(withoutMachine(o)).filter(([k]) => !PATHS.includes(k)));
 
 export function studyHeader(o, { manifest = formatHashList } = {}) {
   const network = o.plan === 'synthetic' ? 'synthetic' : o.expectNetwork;
@@ -285,12 +297,13 @@ export function studyHeader(o, { manifest = formatHashList } = {}) {
 }
 
 // What differs between a recorded header and this invocation's, by name; the
-// worker count is not compared.
+// machine's options and the paths are not compared, the input files' digests
+// are.
 export function headerDifferences(was, now) {
   const out = [];
   for (const k of ['plan', 'network', 'stages']) if (canonical(was[k]) !== canonical(now[k])) out.push(k);
-  const wasOptions = withoutMachine(was.options);
-  const nowOptions = withoutMachine(now.options);
+  const wasOptions = compared(was.options);
+  const nowOptions = compared(now.options);
   const keys = [...new Set([...Object.keys(wasOptions), ...Object.keys(nowOptions)])].sort();
   for (const k of keys) if (canonical(wasOptions[k]) !== canonical(nowOptions[k])) out.push(flag(k));
   for (const k of [...new Set([...Object.keys(was.inputs || {}), ...Object.keys(now.inputs)])].sort()) if ((was.inputs || {})[k] !== now.inputs[k]) out.push(`the ${k} file`);
@@ -421,9 +434,11 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
   const dir = runDir(header.network, o.runId);
   const headerPath = join(dir, 'study.json');
   const resuming = existsSync(headerPath);
+  // The header as the first start wrote it: a resume fills in only the
+  // collateral rule, so the paths and the rest stay the first start's.
+  const recorded = resuming ? JSON.parse(readFileSync(headerPath, 'utf8')) : header;
   if (resuming) {
-    const was = JSON.parse(readFileSync(headerPath, 'utf8'));
-    const diff = headerDifferences(was, header);
+    const diff = headerDifferences(recorded, header);
     if (diff.length) throw new Refusal(`refusing: study run ${o.runId} differs from its first start in ${diff.join(', ')}; resume it with the same options, input files and code, or start a new run id`);
   }
   const logPath = join(dir, 'log.jsonl');
@@ -472,7 +487,8 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
           throw e;
         }
         header.collateralRule = picked;
-        writeJson(headerPath, header);
+        recorded.collateralRule = picked;
+        writeJson(headerPath, recorded);
         log.note({ event: 'collateral-rule', ...picked });
         say(`study ${o.runId}: every replay runs under the ${picked.rule} collateral rule (${(100 * picked.shareUnder20Ada).toFixed(1)}% of ${picked.measured} measured script transactions under 20 ADA of collateral)`);
       }
