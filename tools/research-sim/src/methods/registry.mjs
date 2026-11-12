@@ -24,6 +24,8 @@
 //   helios-sf           methods/helios.mjs: Helios's WalletHelper.selectUtxos
 //                       at its smallest-first default, then build with the
 //                       wallet's UTxOs as spares
+//   cml-lf, cml-ri      methods/cml.mjs: Cardano Multiplatform Lib's
+//                       LargestFirstMultiAsset and RandomImproveMultiAsset
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -47,6 +49,7 @@ import { lucidMethod } from './lucid.mjs';
 import { meshStudyMethod } from './mesh.mjs';
 import { typhonMethod } from './typhon.mjs';
 import { heliosMethod } from './helios.mjs';
+import { cmlMethod } from './cml.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -75,7 +78,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -87,6 +90,8 @@ const FACTORIES = new Map([
   ['mesh-rrri', baseline('mesh-rrri', (T) => meshStudyMethod(T))],
   ['typhon-lp', baseline('typhon-lp', (T) => typhonMethod(T))],
   ['helios-sf', baseline('helios-sf', (T) => heliosMethod(T))],
+  ['cml-lf', baseline('cml-lf', (T) => cmlMethod(T, { strategy: 'lf' }))],
+  ['cml-ri', baseline('cml-ri', (T) => cmlMethod(T, { strategy: 'ri' }))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

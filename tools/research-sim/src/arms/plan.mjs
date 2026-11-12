@@ -23,6 +23,9 @@
 //              list (deterministic)
 //   helios-sf  Helios's smallest-first selectUtxos, then build with the
 //              wallet's UTxOs as spares (deterministic)
+//   cml-lf     Cardano Multiplatform Lib Largest-First (deterministic)
+//   cml-ri     Cardano Multiplatform Lib random selection with its
+//              improvement phase
 //   h12        UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
@@ -43,7 +46,7 @@
 // L/layout alike, so the two arms share one seed sequence (common random
 // numbers; replay/run.mjs replayJobOpts). Per wallet and window that is 2 jobs
 // per deterministic library, 20 per random one and 2 for the rule: with the
-// nine libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 = 74.
+// eleven libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 = 96.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
@@ -57,7 +60,9 @@ export const LIBRARY_TABLE = Object.freeze([
   { role: 'lucid-lf', method: 'lucid-lf', random: false },
   { role: 'mesh-rrri', method: 'mesh-rrri', random: true },
   { role: 'typhon-lp', method: 'typhon-lp', random: false },
-  { role: 'helios-sf', method: 'helios-sf', random: false }
+  { role: 'helios-sf', method: 'helios-sf', random: false },
+  { role: 'cml-lf', method: 'cml-lf', random: false },
+  { role: 'cml-ri', method: 'cml-ri', random: true }
 ].map((r) => Object.freeze(r)));
 const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 

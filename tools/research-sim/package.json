@@ -22,6 +22,7 @@
     "@blaze-cardano/sdk": "0.3.3",
     "@blaze-cardano/tx": "0.15.4",
     "@cardano-sdk/input-selection": "0.14.35",
+    "@dcspark/cardano-multiplatform-lib-nodejs": "6.2.0",
     "@evolution-sdk/evolution": "0.8.0",
     "@helios-lang/ledger": "0.7.24",
     "@helios-lang/tx-utils": "0.6.42",
