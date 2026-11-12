@@ -15,6 +15,8 @@
 //                       defaults
 //   blaze-wd            methods/blaze.mjs: Blaze's builder at its defaults,
 //                       micahsSelector's wide-then-deep selection
+//   lucid-lf            methods/lucid.mjs: Lucid Evolution's complete() at
+//                       its defaults
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -34,6 +36,7 @@ import { cslMethod } from './csl.mjs';
 import { cjsMethod } from './cjs.mjs';
 import { evoMethod } from './evo.mjs';
 import { blazeMethod } from './blaze.mjs';
+import { lucidMethod } from './lucid.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -62,7 +65,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -70,6 +73,7 @@ const FACTORIES = new Map([
   ['cjs-rrri', baseline('cjs-rrri', (T) => cjsMethod(T))],
   ['evo-lf', baseline('evo-lf', (T) => evoMethod({ T }))],
   ['blaze-wd', baseline('blaze-wd', (T) => blazeMethod(T))],
+  ['lucid-lf', baseline('lucid-lf', (T) => lucidMethod({ T }))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

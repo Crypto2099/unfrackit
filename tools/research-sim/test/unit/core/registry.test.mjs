@@ -14,6 +14,7 @@ import { makeMethod, methodNames, BASELINE_METHODS, TEST_METHODS } from '../../.
 import { choosesOwnCollateral } from '../../../src/methods/contract.mjs';
 import { CJS_VERSION } from '../../../src/methods/cjs.mjs';
 import { EVO_VERSION } from '../../../src/methods/evo.mjs';
+import { LUCID_VERSION } from '../../../src/methods/lucid.mjs';
 import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
@@ -27,7 +28,8 @@ test('every study baseline is made by name, with its library version, determinis
     'csl-ri': ['cardano-serialization-lib 17.0.0 RandomImproveMultiAsset', false, false],
     'cjs-rrri': [`@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`, false, true],
     'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true, true],
-    'blaze-wd': ['@blaze-cardano/tx 0.15.4 with @blaze-cardano/sdk 0.3.3 micahsSelector', true, true]
+    'blaze-wd': ['@blaze-cardano/tx 0.15.4 with @blaze-cardano/sdk 0.3.3 micahsSelector', true, true],
+    'lucid-lf': [`@lucid-evolution/lucid ${LUCID_VERSION} LargestFirst`, true, true]
   };
   assert.deepEqual([...BASELINE_METHODS].sort(), Object.keys(want).sort());
   for (const [name, [version, deterministic, seeded]] of Object.entries(want)) {
@@ -36,7 +38,7 @@ test('every study baseline is made by name, with its library version, determinis
     assert.equal(m.version, version);
     assert.equal(m.deterministic, deterministic, name);
     assert.equal(m.seeded, seeded, name);
-    assert.equal(choosesOwnCollateral(m), name === 'evo-lf', name);
+    assert.equal(choosesOwnCollateral(m), name === 'evo-lf' || name === 'lucid-lf', name);
     assert.throws(() => makeMethod(T, name, { bundleCoin: 'shortest' }), /takes no options/);
   }
   for (const name of ['unfrackit-h12', 'test-largest-first', 'test-stall']) assert.deepEqual([makeMethod(T, name).deterministic, makeMethod(T, name).seeded], [true, true], name);
@@ -55,10 +57,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the five libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'unfrackit-h12']);
+  // The replays run the six libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'lucid-lf', 'unfrackit-h12']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);

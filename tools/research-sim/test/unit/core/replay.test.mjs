@@ -70,13 +70,13 @@ test('the run directory is private and the records are JSON Lines', () => {
   }
 });
 
-test('run plans: the refocused arms, the same in both windows, 48 jobs per wallet at five libraries', () => {
+test('run plans: the refocused arms, the same in both windows, 50 jobs per wallet at six libraries', () => {
   for (const w of ['recent', 'peak']) {
     const plan = mergePlan(windowPlan(w));
     const one = (role, change, variant = 'default') => plan.find((e) => e.role === role && e.change === change && e.variant === variant);
     assert.ok(plan.every((e) => e.arm === 'observed'), 'every arm replays the observed state');
     // Per library: its own change under Q1, UnFrack.It's change under Q1 and Q2.
-    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1]]) {
+    for (const [role, reps] of [['lf', 1], ['ri', 10], ['rrri', 10], ['evo', 1], ['blaze-wd', 1], ['lucid-lf', 1]]) {
       assert.equal(one(role, 'default').repetitions, reps, role);
       assert.equal(one(role, 'layout').repetitions, reps, role);
       assert.deepEqual(one(role, 'default').hypotheses, ['Q1'], role);
@@ -88,15 +88,15 @@ test('run plans: the refocused arms, the same in both windows, 48 jobs per walle
     const off = one('h12', 'default', 'absorb-off');
     assert.deepEqual([on.absorb, off.absorb, on.repetitions, off.repetitions], [true, false, 1, 1]);
     assert.deepEqual([on.hypotheses, off.hypotheses], [['Q2'], ['Q2']]);
-    assert.equal(plan.length, 12);
-    // 48 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2.
+    assert.equal(plan.length, 14);
+    // 50 jobs a wallet: 2 + 20 + 20 + 2 + 2 + 2 + 2.
     const jobs = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: false });
-    assert.equal(jobs.length, 48);
-    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'unfrackit-h12': 2 });
+    assert.equal(jobs.length, 50);
+    assert.deepEqual(Object.fromEntries(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'unfrackit-h12'].map((m) => [m, jobs.filter((j) => j.method === m).length])), { 'csl-lf': 2, 'csl-ri': 20, 'cjs-rrri': 20, 'evo-lf': 2, 'blaze-wd': 2, 'lucid-lf': 2, 'unfrackit-h12': 2 });
     assert.ok(jobs.every((j) => j.collateral === 'none-needed'));
     // One collateral rule: a script wallet's jobs run under it alone.
     const withScripts = expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
-    assert.equal(withScripts.length, 48);
+    assert.equal(withScripts.length, 50);
     assert.ok(withScripts.every((j) => j.collateral === 'practice'));
     // Every tidy arm, control and variant is gone.
     assert.ok(!plan.some((e) => e.arm !== 'observed' || e.hypotheses.some((h) => !['Q1', 'Q2'].includes(h))));
@@ -109,7 +109,7 @@ test('run plans: the refocused arms, the same in both windows, 48 jobs per walle
 
 test('run plans: L/own and L/layout of one repetition draw the same seed; the rule\'s jobs carry the absorption setting and differ in their keys', () => {
   const jobs = expandJobs(windowPlan('recent'), { roles: STUDY_ROLES, needsCollateral: true, collateralRules: ['practice'] });
-  for (const method of ['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf']) {
+  for (const method of ['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'lucid-lf']) {
     const own = jobs.filter((j) => j.method === method && j.change === 'default');
     const layout = jobs.filter((j) => j.method === method && j.change === 'layout');
     assert.equal(own.length, layout.length, method);
@@ -272,7 +272,7 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
     meta: null
   };
   const sourceOf = (start) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start, events: [{ kind: 'intent', txId: 1, intent }], windowStart: 0, windowEnd: 20, params: SP });
-  const LARGEST_FIRST = new Set(['csl-lf', 'evo-lf', 'test-largest-first']);
+  const LARGEST_FIRST = new Set(['csl-lf', 'evo-lf', 'lucid-lf', 'test-largest-first']);
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);
     for (const name of [...BASELINE_METHODS, 'test-largest-first']) {

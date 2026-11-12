@@ -50,7 +50,7 @@ test('the Evolution SDK covers every replay part, its collateral as the library 
   }
   const renamed = { ...evoMethod(), name: 'csl-lf' };
   assert.equal(choosesOwnCollateral(renamed), false);
-  assert.throws(() => checkMethod(renamed), /only the Evolution SDK's methods choose their own collateral/);
+  assert.throws(() => checkMethod(renamed), /only the Evolution SDK's and Lucid Evolution's methods choose their own collateral/);
 });
 
 const T = await treatment();

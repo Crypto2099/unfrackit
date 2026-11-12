@@ -62,15 +62,15 @@ export function checkMethod(m) {
   if (typeof m.seeded !== 'boolean') throw new TypeError(`method ${m.name}: seeded must be a boolean`);
   if (m.deterministic && !m.seeded) throw new TypeError(`method ${m.name}: a deterministic method is seeded`);
   if (typeof m.build !== 'function') throw new TypeError(`method ${m.name}: no build function`);
-  if (m.ownCollateral !== undefined && !choosesOwnCollateral(m)) throw new TypeError(`method ${m.name}: only the Evolution SDK's methods choose their own collateral`);
+  if (m.ownCollateral !== undefined && !choosesOwnCollateral(m)) throw new TypeError(`method ${m.name}: only the Evolution SDK's and Lucid Evolution's methods choose their own collateral`);
   return m;
 }
 
 // The methods whose library chooses its own collateral: the Evolution SDK's
-// (methods/evo.mjs), which no operation or build option can give a collateral
-// UTxO. The engine accepts the collateral such a method's library picks, for
-// these methods only.
-export const OWN_COLLATERAL_METHODS = Object.freeze(['evo-lf', 'evo-unfrack']);
+// (methods/evo.mjs) and Lucid Evolution's (methods/lucid.mjs), which no
+// operation or build option can give a collateral UTxO. The engine accepts the
+// collateral such a method's library picks, for these methods only.
+export const OWN_COLLATERAL_METHODS = Object.freeze(['evo-lf', 'evo-unfrack', 'lucid-lf']);
 export const choosesOwnCollateral = (m) => m.ownCollateral === true && OWN_COLLATERAL_METHODS.includes(m.name);
 
 export function checkOptions(opts) {

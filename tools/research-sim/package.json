@@ -23,6 +23,7 @@
     "@blaze-cardano/tx": "0.15.4",
     "@cardano-sdk/input-selection": "0.14.35",
     "@evolution-sdk/evolution": "0.8.0",
+    "@lucid-evolution/lucid": "0.8.9",
     "@meshsdk/transaction": "1.9.1",
     "pg": "8.23.0"
   },
