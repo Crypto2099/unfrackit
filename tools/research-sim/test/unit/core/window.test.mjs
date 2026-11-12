@@ -214,7 +214,7 @@ function assertSameStage(a, b) {
 }
 
 test('several wallets open at once, closed out of order, write the records, timing rows, segments and totals of a run with one wallet open at a time', withHome(async (home) => {
-  assert.equal(JOBS, 10);
+  assert.equal(JOBS, 12);
   assert.equal(openWalletCap(2), 4);
   assert.equal(poolJobCap(2), 4);
   const wallets = walletsIn(home, [101, 102, 103, 104, 105, 106]);

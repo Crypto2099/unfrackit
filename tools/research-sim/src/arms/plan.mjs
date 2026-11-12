@@ -12,12 +12,13 @@
 //   ri      cardano-serialization-lib random selection
 //   rrri    cardano-js-sdk round-robin Random-Improve, seeded
 //   evo     the Evolution SDK default (deterministic)
+//   blaze-wd  Blaze's default, micahsSelector (deterministic)
 //   h12     UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
 // arm replays the wallet's observed state, under one collateral rule (a job
 // of a wallet whose window holds no script interaction records
-// 'none-needed'). For each library role L of lf, ri, rrri and evo:
+// 'none-needed'). For each library role L of lf, ri, rrri, evo and blaze-wd:
 //   L/own     L's inputs and L's own change ('default'): question 1's
 //             reference and the user switching away from L
 //   L/layout  L's inputs and UnFrack.It's change ('layout'): question 1's
@@ -30,16 +31,16 @@
 // Repetitions: 10 for a library that picks at random (ri, rrri), one for a
 // deterministic one and for the rule. Repetition r seeds the selector with r
 // in L/own and in L/layout alike, so the two arms share one seed sequence
-// (common random numbers; replay/run.mjs replayJobOpts). With four libraries
-// that is 2 + 20 + 20 + 2 + 2 = 46 jobs per wallet and window.
+// (common random numbers; replay/run.mjs replayJobOpts). With five libraries
+// that is 2 + 20 + 20 + 2 + 2 + 2 = 48 jobs per wallet and window.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
-export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', h12: 'unfrackit-h12' });
-export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', h12: 'test-largest-first' });
-const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'h12']);
+export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', 'blaze-wd': 'blaze-wd', h12: 'unfrackit-h12' });
+export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', 'blaze-wd': 'test-largest-first', h12: 'test-largest-first' });
+const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'blaze-wd', 'h12']);
 
-export const LIBRARY_ROLES = Object.freeze(['lf', 'ri', 'rrri', 'evo']);
+export const LIBRARY_ROLES = Object.freeze(['lf', 'ri', 'rrri', 'evo', 'blaze-wd']);
 export const RANDOM_REPETITIONS = 10;
 
 // The plan's entries for a window: [{ hypothesis, arm, variant, role, change,

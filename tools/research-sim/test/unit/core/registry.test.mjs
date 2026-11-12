@@ -26,7 +26,8 @@ test('every study baseline is made by name, with its library version, determinis
     'csl-lf': ['cardano-serialization-lib 17.0.0 LargestFirstMultiAsset', true, true],
     'csl-ri': ['cardano-serialization-lib 17.0.0 RandomImproveMultiAsset', false, false],
     'cjs-rrri': [`@cardano-sdk/input-selection ${CJS_VERSION} roundRobinRandomImprove`, false, true],
-    'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true, true]
+    'evo-lf': [`@evolution-sdk/evolution ${EVO_VERSION} largest-first`, true, true],
+    'blaze-wd': ['@blaze-cardano/tx 0.15.4 with @blaze-cardano/sdk 0.3.3 micahsSelector', true, true]
   };
   assert.deepEqual([...BASELINE_METHODS].sort(), Object.keys(want).sort());
   for (const [name, [version, deterministic, seeded]] of Object.entries(want)) {
@@ -54,10 +55,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the four libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'unfrackit-h12']);
+  // The replays run the five libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['blaze-wd', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf', 'unfrackit-h12']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);

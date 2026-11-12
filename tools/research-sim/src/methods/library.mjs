@@ -65,12 +65,16 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   cjs   cjs-rrri: every part (methods/cjs.mjs, its replay path)
 //   h12   unfrackit-h12: every part, each in the rule's request, which the
 //         rule takes into its selection, size and fee (methods/h12.mjs)
+//   blaze blaze-wd: every part, through the library's operations where one
+//         writes it and on its transaction after the build otherwise
+//         (methods/blaze.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   mesh: Object.freeze([]),
   cjs: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  h12: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  h12: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  blaze: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
