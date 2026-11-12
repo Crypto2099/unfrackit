@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The validity checks as a run mode (`--validity` of the replay and battery
-// commands): every transaction a method or plan returns and the kit passes is
+// The validity checks as a run mode (`--validity` of the replay command): every transaction a method or plan returns and the kit passes is
 // read by cardano-serialization-lib, whose re-serialization must have the
 // transaction's inputs, fee and witness count and its outputs by decoded
 // content, and the four negative controls (kit/controls.mjs) must each be
@@ -17,7 +16,7 @@
 // A transaction with no outputs has no fee or value control
 // (kit/controls.mjs); it is counted in notApplicable, not as a failure.
 //
-// An accumulator is made per wallet and arm (a replay) or per battery run,
+// An accumulator is made per wallet and arm (a replay),
 // checkAndApply feeds it, and `summarize` turns it into the record's
 // `validity` field. A failure names the transaction by position, never by
 // hash.

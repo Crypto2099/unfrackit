@@ -114,9 +114,7 @@ export function stubCommands({ network, calls = [], ran = [], hang: hangStage = 
     census: make('census', (o) => o.expectNetwork),
     'near-cap': make('near-cap', (o) => o.expectNetwork),
     collateral: make('collateral', (o) => o.expectNetwork),
-    'battery-pools': make('battery-pools', (o) => o.network),
     fidelity: make('fidelity', study),
-    replay: make('replay', study),
-    battery: make('battery', study)
+    replay: make('replay', study)
   };
 }

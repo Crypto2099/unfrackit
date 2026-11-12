@@ -44,7 +44,7 @@ import { encUint, encInt, encBytes, encArray, encMap } from '../../../src/histor
 import { encodeOutput, unspentOutput } from '../../../src/history/output.mjs';
 import { blake2b224, blake2b256 } from '../../../src/history/blake2b.mjs';
 import { addressTextOf, utxoFromOutput } from '../../../src/state/utxo.mjs';
-import { recipientAddress } from '../../../src/battery/recipients.mjs';
+import { recipientAddress } from '../../../src/kit/recipients.mjs';
 import { shapeState } from '../../../src/shapes/shapes.mjs';
 
 const T = await treatment();

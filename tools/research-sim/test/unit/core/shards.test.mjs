@@ -97,7 +97,7 @@ test('--shard k/n: the indexes modulo n equal to k; k out of range, n of 0, and 
   }
   assert.equal(parseArgs(['--shard', '1/2'], 'replay').shard, '1/2');
   assert.equal(parseArgs(['--shard', '0/2'], 'study').shard, '0/2');
-  assert.throws(() => parseArgs(['--shard', '0/2'], 'battery'), /unknown option --shard for battery/);
+  assert.throws(() => parseArgs(['--shard', '0/2'], 'census'), /unknown option --shard for census/);
   const list = walletList(shapes([...SHAPES, 'S2', 'S3', 'S4']));
   assert.deepEqual(selectionOf({ shard: '1/3' }, { plan: 'test', wallets: list }), { indexes: [1, 4, 7], record: { shard: '1/3', wallets: 3 } });
   assert.deepEqual(selectionOf({ shard: '0/1' }, { plan: 'test', wallets: list }).indexes, [0, 1, 2, 3, 4, 5, 6, 7]);

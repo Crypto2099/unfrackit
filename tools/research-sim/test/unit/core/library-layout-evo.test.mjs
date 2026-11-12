@@ -23,7 +23,7 @@ import { loadSource } from '../../../src/replay/source.mjs';
 import { constructState, payIntent, policy, assetName, ADA } from '../../lib/construct.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
-import { recipientAddress } from '../../../src/battery/recipients.mjs';
+import { recipientAddress } from '../../../src/kit/recipients.mjs';
 import { shapeState } from '../../../src/shapes/shapes.mjs';
 import { encUint, encBytes, encArray, encMap } from '../../../src/history/cbor.mjs';
 import { withoutLeftovers } from '../../../src/kit/replay.mjs';

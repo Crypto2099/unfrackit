@@ -85,7 +85,7 @@ test('a method whose transaction lacks one of the intent\'s redeemers fails, its
 
   // Every replaying method builds the script spends with all their
   // redeemers, and no detail names redeemers.
-  for (const name of ['test-largest-first', 'cjs-rrri', 'csl-lf', 'csl-ri', 'csl-lf-pure', 'csl-ri-pure', 'evo-lf']) {
+  for (const name of ['test-largest-first', 'cjs-rrri', 'csl-lf', 'csl-ri', 'evo-lf']) {
     const r = await run(source, makeMethod(T, name));
     for (const [i, s] of r.spends.entries()) {
       assert.ok(!/redeemers/.test(s.detail || ''), `${name} ${i}: ${s.detail}`);

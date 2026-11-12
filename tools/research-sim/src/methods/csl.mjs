@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The cardano-serialization-lib baselines: csl-lf and csl-ri, and the
-// sensitivity arm with prefer_pure_change set (csl-lf-pure, csl-ri-pure).
+// The cardano-serialization-lib baselines: csl-lf and csl-ri. The factory also
+// takes prefer_pure_change, which the builder survey sets (survey/survey.mjs);
+// no run plan names it.
 // cardano-serialization-lib 17.0.0 is the treatment's instance, loaded through
 // its cslkit.mjs; no second CSL build is installed or imported.
 //

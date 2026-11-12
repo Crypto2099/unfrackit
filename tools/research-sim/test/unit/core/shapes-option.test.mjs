@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The wallets `replay --shapes` and `battery --shapes` take: `all` is the 21
+// The wallets `replay --shapes` takes: `all` is the 21
 // fixed shapes; a list names fixed shapes and heavy wallets H<k>E<e>
 // (src/shapes/heavy.mjs). A name the generator does not make, or a heavy
 // name longer than a record's wallet field can carry, is refused before the
@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shapeNamesOf, cmdReplay, cmdBattery } from '../../../src/replay/commands.mjs';
+import { shapeNamesOf, cmdReplay } from '../../../src/replay/commands.mjs';
 import { SHAPE_NAMES } from '../../../src/shapes/shapes.mjs';
 import { recordKey } from '../../../src/out/records.mjs';
 
@@ -34,5 +34,5 @@ test('a name the generator does not make, or one too long for a record, is refus
 
 test('the commands refuse a bad name before they load the treatment', async () => {
   await assert.rejects(cmdReplay({ treatment: '/nonexistent', plan: 'test', shapes: 'H20E005' }), /a record names a shape in at most six characters/);
-  await assert.rejects(cmdBattery({ treatment: '/nonexistent', shapes: 'S1,H99E1' }), /unknown shape H99E1/);
+  await assert.rejects(cmdReplay({ treatment: '/nonexistent', plan: 'test', shapes: 'S1,H99E1' }), /unknown shape H99E1/);
 });

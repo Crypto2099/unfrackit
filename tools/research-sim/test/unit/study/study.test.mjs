@@ -13,7 +13,7 @@
 // analysis-freeze transaction, a second invocation while one runs); the
 // nested run ids, and
 // the collateral rule read from the collateral stage's report (and refused
-// when the measurement picks none), and the battery-pools command's output.
+// when the measurement picks none).
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,8 +26,6 @@ import { fileURLToPath } from 'node:url';
 import { runStudy, PLANS, studyOptions } from '../../../src/study/study.mjs';
 import { runDir, historyDir } from '../../../src/history/paths.mjs';
 import { stubCommands, STUB_RECORDS } from '../../lib/study-stubs.mjs';
-import { poolsOf } from '../../../src/replay/commands.mjs';
-import { cmdBatteryPools } from '../../../src/history/reports.mjs';
 import { DEFAULT_PINS } from '../../../src/treatment/bridge.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -367,20 +365,4 @@ test('a second invocation is refused while the first runs; a lock left by a proc
 test('a stage\'s run id nests in the study run\'s directory, one level deep', () => {
   assert.equal(runDir('preprod', 'a/b'), join(process.env.RESEARCH_SIM_HOME, 'preprod', 'a', 'b'));
   for (const bad of ['a/b/c', 'a/..', '../a', 'a/.', '/a', 'a/', '']) assert.throws(() => runDir('preprod', bad), /bad run id/);
-});
-
-test('the battery reads the pools as battery-pools writes them, from the run whose histories it is given', async () => {
-  assert.deepEqual(poolsOf({ t1Amounts: ['2000000', '5'], t5Shares: [['1', '10']] }), { t1: [2000000n, 5n], t5: [[1n, 10n]] });
-  assert.deepEqual(poolsOf({ t1: ['7'], t5: [] }), { t1: [7n], t5: [] });
-  assert.throws(() => poolsOf({}), /either t1Amounts and t5Shares/);
-  assert.throws(() => poolsOf({ t1Amounts: [], t5Shares: [], t1: [] }), /either/);
-  assert.throws(() => poolsOf({ t1Amounts: [], t5Shares: [['1', '2', 'x']] }), /units sent, units held/);
-  const header = { kind: 'header', wallet: 1, frame: 'recent', split: null };
-  mkdirSync(historyDir('preprod', 'pools/history-recent'), { recursive: true });
-  writeFileSync(join(historyDir('preprod', 'pools/history-recent'), '1.recent.jsonl'), JSON.stringify(header) + '\n');
-  const r = await cmdBatteryPools({ runId: 'pools/battery-pools', network: 'preprod', historyRun: 'pools/history-recent' });
-  assert.equal(r.print.files, 1);
-  const written = JSON.parse(readFileSync(join(runDir('preprod', 'pools/battery-pools'), 'battery-pools.json'), 'utf8'));
-  assert.equal(written.historyRun, 'pools/history-recent');
-  assert.deepEqual(poolsOf(written), { t1: [], t5: [] });
 });

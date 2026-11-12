@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Every baseline on every battery spend of the 21 synthetic shapes (the
-// standard battery and H-10's on the observed layout, H-10's on the tidy
+// Every baseline on every payment of the 21 synthetic shapes (the set of
+// test/lib/payments.mjs paymentSet on the observed layout and on the tidy
 // layout), at its default change and, for csl-lf, csl-ri and cjs-rrri, under
 // each simulator-owned change policy: every transaction an adapter builds
 // either meets the ledger kit's checks or fails one with its class, every
@@ -29,7 +29,7 @@ import { checkAndApply } from '../../src/kit/apply.mjs';
 import { inspectTx } from '../../src/kit/inspect.mjs';
 import { valueSize } from '../../src/history/value.mjs';
 import { addressTextOf } from '../../src/state/utxo.mjs';
-import { standardBattery, h10Battery, SHAPE_POOLS } from '../../src/battery/battery.mjs';
+import { paymentSet } from '../lib/payments.mjs';
 import { settle } from '../../src/kit/heap.mjs';
 import { cslMethod } from '../../src/methods/csl.mjs';
 import { cjsMethod } from '../../src/methods/cjs.mjs';
@@ -45,7 +45,7 @@ const median = (xs) => {
   return s.length ? s[Math.floor(s.length / 2)] : null;
 };
 
-test('every baseline on the battery spends of the 21 shapes', { skip, timeout: 3 * 60 * 60 * 1000 }, async (t) => {
+test('every baseline on the payments of the 21 shapes', { skip, timeout: 3 * 60 * 60 * 1000 }, async (t) => {
   const lf = cslMethod(T, { strategy: 'lf' });
   const ri = cslMethod(T, { strategy: 'ri' });
   const configs = [
@@ -61,9 +61,8 @@ test('every baseline on the battery spends of the 21 shapes', { skip, timeout: 3
     const s = shapeState(T, name).state;
     const tidy = planState(T, s, P, {}).after;
     const intents = [
-      ...standardBattery(T, s, P, { pools: SHAPE_POOLS }).map((it) => [s, it]),
-      ...h10Battery(T, s, P).map((it) => [s, it]),
-      ...h10Battery(T, tidy, P, { observed: s }).map((it) => [tidy, it])
+      ...paymentSet(T, s, P).map((it) => [s, it]),
+      ...paymentSet(T, tidy, P, { observed: s }).map((it) => [tidy, it])
     ];
     for (const [state, it] of intents) {
       if (it.unsettled) {
@@ -131,7 +130,7 @@ test('every baseline on the battery spends of the 21 shapes', { skip, timeout: 3
   for (const [k, xs] of Object.entries(summary.timing)) timing[k] = { n: xs.length, medianMs: Math.round(median(xs)), maxMs: Math.round(Math.max(...xs)) };
   summary.timing = timing;
   const out = JSON.stringify(summary, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 1);
-  if (process.env.RESEARCH_SIM_OUT) writeFileSync(join(process.env.RESEARCH_SIM_OUT, 'baselines-battery.json'), out);
+  if (process.env.RESEARCH_SIM_OUT) writeFileSync(join(process.env.RESEARCH_SIM_OUT, 'baselines-payments.json'), out);
   t.diagnostic(out);
   assert.deepEqual(summary.controls.bad, []);
   assert.deepEqual(summary.cjs.bundleDisagree, []);
@@ -150,8 +149,7 @@ test('determinism: csl-lf and evo-lf repeat byte for byte, cjs-rrri repeats per 
   for (const name of shapes) {
     await settle();
     const s = shapeState(T, name).state;
-    for (const it of [...standardBattery(T, s, P, { pools: SHAPE_POOLS }), ...h10Battery(T, s, P)]) {
-      if (it.unsettled) continue;
+    for (const it of paymentSet(T, s, P)) {
       n.spends++;
       const o = { changePolicy: 'default' };
       if (key(await lf.build(s, it, P, o)) === key(await lf.build(s, it, P, o))) n.lfSame++;

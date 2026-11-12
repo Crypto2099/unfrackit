@@ -2,8 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 // The machine a run ran on and the workers it used, recorded beside the
-// timings (a battery's run.json, a replay stage's machines/<label>.json, the
-// study's log) as timing context. No record reads them: the records are the
+// timings (a replay stage's machines/<label>.json, the study's log) as timing context. No record reads them: the records are the
 // same on any machine and at any worker count.
 
 import os from 'node:os';
@@ -34,12 +33,11 @@ export function hostFacts() {
   };
 }
 
-// workers: the replay or battery workers; oracleWorkers: the battery's
-// oracle workers, when it runs the oracle; memoryBudgetBytes: the workers'
-// memory budget (replay/pool.mjs), when known, or null for the pool's
-// default, chosen when each pool starts.
-export function machineRecord({ workers, oracleWorkers = 0, memoryBudgetBytes }) {
-  return { workers, oracleWorkers, ...(memoryBudgetBytes !== undefined ? { memoryBudgetBytes } : {}), ...hostFacts() };
+// workers: the replay workers; memoryBudgetBytes: the workers' memory budget
+// (replay/pool.mjs), when known, or null for the pool's default, chosen when
+// each pool starts.
+export function machineRecord({ workers, memoryBudgetBytes }) {
+  return { workers, ...(memoryBudgetBytes !== undefined ? { memoryBudgetBytes } : {}), ...hostFacts() };
 }
 
 // The physical cores /proc/cpuinfo lists: its distinct (physical id, core

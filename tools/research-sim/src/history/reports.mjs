@@ -12,26 +12,23 @@
 //   whose collateral inputs all sit at key addresses: how many carry less
 //   than 20 ADA of collateral in total, the distribution of collateral coin,
 //   how many have a collateral return, and how many collateral inputs carry
-//   tokens;
-// - battery-pools: the T1 amounts and T5 shares of a run's history files.
+//   tokens.
 //
 // Value bytes are the ledger's serialization of the Value (value.mjs); a
 // UTxO's minimum is the ledger's rule on the output re-encoded from
 // db-sync's columns, at the snapshot's coins per UTxO byte. Per-wallet rows are written to the private run directory only.
 
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { q, explain } from './db.mjs';
 import { makeContext, resolveWallets, allowedWallets, refuseOutside } from './commands.mjs';
 import { Refusal } from './db.mjs';
 import { lifeRow, loadExtras, reencode, loadLife } from './wallet.mjs';
-import { valueSize, assetMap, mergeAssets } from './value.mjs';
+import { valueSize } from './value.mjs';
 import { minAdaForOutput } from './csl.mjs';
 import { valueLimit } from './params.mjs';
 import { recentWindow } from './windows.mjs';
-import { decodeOutputBytes } from './output.mjs';
-import { runDir, historyDir, JsonLines, writeJson } from './paths.mjs';
+import { runDir, JsonLines, writeJson } from './paths.mjs';
 
 const BATCH = 500;
 
@@ -295,83 +292,4 @@ export async function cmdCollateral(opts) {
   } finally {
     await ctx.client.end();
   }
-}
-
-// The observed state along a history file, for the holding before each
-// spend.
-function observedStates(lines, onIntent) {
-  const state = new Map();
-  for (const e of lines) {
-    if (e.kind === 'state') for (const u of e.utxos) state.set(u.ref, u.assets.map((a) => ({ ...a, qty: BigInt(a.qty) })));
-    else if (e.kind === 'deposit') for (const u of e.utxos) state.set(u.ref, u.assets.map((a) => ({ ...a, qty: BigInt(a.qty) })));
-    else if (e.kind === 'held-consumed') for (const r of e.refs) state.delete(r);
-    else if (e.kind === 'intent' || e.kind === 'self-reorganization') {
-      const it = e.kind === 'intent' ? e.intent : e;
-      if (e.kind === 'intent') onIntent(it, mergeAssets(...[...state.values()]));
-      for (const x of it.observed.walletInputs) state.delete(x.ref);
-      if (e.kind === 'intent' && it.fixed) for (const x of it.fixed.inputs) if (x.held) state.delete(x.ref);
-      if (e.kind === 'intent' && it.invalid) for (const r of it.invalid.heldConsumed) state.delete(r);
-      if (e.kind === 'self-reorganization') for (const r of e.heldConsumed) state.delete(r);
-      const tx = e.kind === 'intent' ? it.id : e.tx;
-      for (const o of it.observed.walletOutputs) state.set(`${tx}#${o.index}`, decodeOutputBytes(Buffer.from(o.cbor, 'hex')).assets);
-    }
-  }
-}
-
-// T1 amounts: per T1 intent, the coin of its requested outputs to other stake
-// credentials, as observed (before any raise). T5 shares: per T5 intent and
-// fungible asset sent, the units sent over the wallet's holding just before
-// the spend. Only the recent-window files of exploration-split wallets in the
-// recent frame's random sample are read (the extraction draws that sample from
-// token-holding wallets only). A file with no split (a wallet outside the
-// extraction's samples, or a run whose study tables were not read) is read
-// and counted apart; a file with a split but no sample field is refused.
-// --history-run names the run whose history files are read, when it is not
-// the run written to (a study run's stages, study/study.mjs).
-export async function cmdBatteryPools(opts) {
-  if (!opts.runId || !opts.network) throw new Error('--run-id and --network are required');
-  const dir = historyDir(opts.network, opts.historyRun || opts.runId);
-  if (!existsSync(dir)) throw new Error('the run has no history directory');
-  const files = readdirSync(dir).filter((f) => f.endsWith('.recent.jsonl')).sort();
-  const t1 = [];
-  const t5 = [];
-  let used = 0;
-  let noSplit = 0;
-  let skipped = 0;
-  let outside = 0;
-  for (const f of files) {
-    const lines = readFileSync(join(dir, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    const h = lines[0];
-    if (h.split === null || h.split === undefined) noSplit++;
-    else {
-      if (!h.sample || typeof h.sample.recentRandom !== 'boolean') throw new Error(`${f}: the header names a split but not the wallet's sample membership; rerun history for this run`);
-      if (h.split !== 'exploration') {
-        skipped++;
-        continue;
-      }
-      if (!h.sample.recentRandom) {
-        outside++;
-        continue;
-      }
-    }
-    used++;
-    observedStates(lines, (it, holding) => {
-      if (it.type === 'T1') {
-        const amount = it.requested.filter((r) => !r.wallet).reduce((s, r) => s + BigInt(r.raised ? r.raised.from : r.coin), 0n);
-        if (amount > 0n) t1.push(amount);
-      } else if (it.type === 'T5') {
-        const held = assetMap(holding);
-        const sent = assetMap(it.requested.filter((r) => !r.inflow).flatMap((r) => r.assets.map((a) => ({ ...a, qty: BigInt(a.qty) }))));
-        for (const [k, units] of sent) {
-          if (it.classes[k] !== 'FT') continue;
-          const before = held.get(k) || 0n;
-          if (before > 0n) t5.push([units.toString(), before.toString(), k]);
-        }
-      }
-    });
-  }
-  t1.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const pools = { network: opts.network, runId: opts.runId, historyRun: opts.historyRun || opts.runId, files: files.length, used, skippedConfirmation: skipped, outsideRecentRandom: outside, withoutSplit: noSplit, t1Amounts: t1.map(String), t5Shares: t5.map(([u, b]) => [u, b]) };
-  writeJson(join(runDir(opts.network, opts.runId), 'battery-pools.json'), pools);
-  return { print: { command: 'battery-pools', files: files.length, used, confirmation: skipped, outsideRecentRandom: outside, withoutSplit: noSplit, t1: t1.length, t5: t5.length } };
 }

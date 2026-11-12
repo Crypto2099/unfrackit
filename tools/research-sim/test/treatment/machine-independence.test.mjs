@@ -2,19 +2,18 @@
 // Copyright 2026 Adam K. Dean
 
 // The records do not depend on how the machine runs the jobs. The same
-// replays and batteries over S1, S8 and M1 run three ways: through one worker
+// replays over S1, S8 and M1 run three ways: through one worker
 // that runs every job in turn; through three workers, each replaced after a
 // single job, so every job starts in a fresh worker; and the same with a
 // 1-second watchdog, which stops each stalling job (test-stall, 1.5 seconds
-// on a wallet's first intent, or on a battery's ADA payment), and any other
-// job that runs past it, and has it run again to completion.
+// on a wallet's first intent), and any other job that runs past it, and has
+// it run again to completion.
 // The three write the same records, byte for byte once the unseeded
-// selectors' (csl-ri, csl-ri-pure) are set aside; theirs are compared by key
-// and count, where those are fixed (the jobs, and in a replay one spend
-// record per intent; their plans and triggers follow their draws). The replay
-// plan is the H-1 arms, H-7's evo-lf and H-6's default and never-propose
-// thresholds (so the trigger join runs) under the ledger collateral rule; the
-// battery is the study's methods at one repetition, without the oracle.
+// selector's (csl-ri) are set aside; theirs are compared by key and count,
+// where those are fixed (the jobs, and one spend record per intent; their
+// plans and triggers follow their draws). The replay plan is the H-1 arms,
+// H-7's evo-lf and H-6's default and never-propose thresholds (so the trigger
+// join runs) under the ledger collateral rule.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
 
 import { test } from 'node:test';
@@ -24,17 +23,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { treatment, skip, TREATMENT_DIR } from '../lib/treatment.mjs';
 import { Pool } from '../../src/replay/pool.mjs';
-import { runReplays, runBatteries } from '../../src/replay/run.mjs';
+import { runReplays } from '../../src/replay/run.mjs';
 import { RunOutput } from '../../src/out/records.mjs';
 import { testStage, stageText, stageLog } from '../lib/stage.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
-import { windowPlan, batteryPlan, STUDY_ROLES } from '../../src/arms/plan.mjs';
+import { windowPlan, STUDY_ROLES } from '../../src/arms/plan.mjs';
 
 const T = await treatment();
 const pins = process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS;
 const SHAPES = ['S1', 'S8', 'M1'];
-const UNSEEDED = new Set(['csl-ri', 'csl-ri-pure']);
+const UNSEEDED = new Set(['csl-ri']);
 const STALL_MS = 1500;
 const WATCHDOG_MS = 1000;
 // One worker running every job; three, each job in a fresh worker; the same
@@ -72,8 +71,8 @@ function split(text, countedKinds) {
   return { seeded, unseeded: [...unseeded].sort() };
 }
 
-// A battery run writes its records whole; a replay run (wallets given) is a
-// stage, whose joined records and log are read.
+// A replay run (wallets given) is a stage, whose joined records and log are
+// read; a run without wallets writes its records whole.
 async function runWay(way, runId, go, { wallets = null } = {}) {
   const pool = new Pool({ treatmentDir: TREATMENT_DIR, pinsPath: pins, size: way.size, maxJobs: way.maxJobs });
   const out = wallets ? await testStage(runId, wallets, { workers: way.size }) : new RunOutput('synthetic', runId, { command: 'test' });
@@ -129,17 +128,4 @@ test('replays: one worker, a fresh worker per job, and a watchdog stop write the
   assert.ok(runs[1].stats.started >= runs[1].totals.jobs, 'a fresh worker per job');
   assert.ok(runs[0].records.some((l) => l.includes('"kind":"trigger"')), 'the trigger join ran');
   assertSame(runs, ['wallet-arm', 'spend']);
-}));
-
-test('batteries: one worker, a fresh worker per wallet, and a watchdog stop write the same records', { skip, timeout: 20 * 60 * 1000 }, withHome(async () => {
-  const wallets = SHAPES.map((name) => ({ spec: { kind: 'shape', name, stream: null } }));
-  const methods = [...batteryPlan({ roles: STUDY_ROLES, reps: 1 }), { name: 'test-stall', options: { stallMs: STALL_MS, only: ['ada-payment'] }, opts: [{ changePolicy: 'default' }], repetitions: 1 }];
-  const runs = [];
-  for (const way of WAYS) runs.push(await runWay(way, `machine-battery-${way.name}`, (pool, out) => runBatteries(T, pool, { wallets, methods, out, watchdogMs: way.watchdogMs })));
-  // Each wallet's ADA payment stalls under test-stall, so the third way
-  // stops at least one answer per wallet.
-  assert.deepEqual([runs[0].stats.watchdogStops, runs[1].stats.watchdogStops], [0, 0]);
-  assert.deepEqual([...new Set(runs[2].log.filter((e) => e.event === 'watchdog stop').map((e) => e.wallet))].sort(), [...SHAPES].sort());
-  assert.ok(runs[1].stats.started >= SHAPES.length, 'a fresh worker per wallet');
-  assertSame(runs, ['battery']);
 }));

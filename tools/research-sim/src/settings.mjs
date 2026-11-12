@@ -6,7 +6,7 @@
 // answer changes one value. A value that is not implemented is refused, never
 // silently ignored. The history reader keeps its own readings in
 // history/settings.mjs, recorded in each history file's header; these are the
-// replay's and the batteries'. A phase-2-invalid transaction is the history
+// replay's. A phase-2-invalid transaction is the history
 // reader's to write or leave out (its setting phase2Invalid); the replay
 // engine replays every one a history holds as a forfeit.
 //
@@ -26,28 +26,17 @@ export const SIM_SETTINGS = Object.freeze({
   // its own serialization, with synthetic witnesses in the same encoding; a
   // selection-only method is assembled by the ledger kit with CSL.
   serialization: 'own',
-  // Battery draws. 'pool': the ADA amounts and fungible shares are drawn from
-  // a pool frozen with the simulator (for the study, the pooled spends of the
-  // exploration split's recent window), one mulberry32 generator per wallet
-  // and spend kind, seeded from the first four bytes, read big-endian, of
-  // SHA-256("battery" || 28-byte stake credential || the spend kind's ASCII
-  // name); choices only among spendable holdings.
-  batteryDraws: 'pool',
   // External recipients. 'synthetic-base': fixed synthetic base addresses
-  // with key payment and key stake parts, distinct per payroll recipient,
-  // identical for every method and wallet, with a stake part that is no
-  // wallet's.
+  // with key payment and key stake parts, distinct per recipient, identical
+  // for every method and wallet, with a stake part that is no wallet's.
   recipients: 'synthetic-base',
   // A requested token output over the value-size limit. 'split': as many
   // requested outputs as needed, in policy and asset-name order, each at its
   // minimum, identical for every method.
   oversizeRequest: 'split',
   // Infeasible by balance. 'exact': the exact test of the H-12 rule's
-  // "balance suffices", for every battery.
+  // "balance suffices", for every replayed intent.
   infeasible: 'exact',
-  // H-10's payment on the tidy layout. 'observed': p of the observed layout's
-  // ADA balance in both layouts, so both build the same intent.
-  h10Amount: 'observed',
   // A build failure that fits none of the named classes. 'other': its own
   // class, with the error text.
   unclassified: 'other',
@@ -58,8 +47,7 @@ export const SIM_SETTINGS = Object.freeze({
   // selector; random layouts seeded with the repetition number. A replay job
   // (wallet, window, arm, variant, method, change policy, collateral rule,
   // seed) makes one generator when it starts, and every build of the job
-  // draws from it in order, the burst pass included; a battery run (spend,
-  // method, repetition) seeds its own.
+  // draws from it in order, the burst pass included.
   rng: 'mulberry32',
   // Which collateral a replayed script spend uses. 'smallest': the smallest
   // UTxO eligible under the arm's rule that is not a fixed input of the spend
@@ -103,11 +91,9 @@ export const SIM_SETTINGS = Object.freeze({
 const IMPLEMENTED = {
   changeAddress: ['latest-key-base-received'],
   serialization: ['own'],
-  batteryDraws: ['pool'],
   recipients: ['synthetic-base'],
   oversizeRequest: ['split'],
   infeasible: ['exact'],
-  h10Amount: ['observed'],
   unclassified: ['other'],
   substitutedChange: ['fail'],
   rng: ['mulberry32'],

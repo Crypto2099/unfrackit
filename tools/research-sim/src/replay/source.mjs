@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// A replay's or battery's wallet, from its history file or a synthetic shape:
+// A replay's wallet, from its history file or a synthetic shape:
 //   { wallet, window, network, stakeCred, changeAddress, changeAddressEnd,
 //     franken, start, events, arrival, windowStart, windowEnd, params,
 //     analysisFreezeTx, capped }

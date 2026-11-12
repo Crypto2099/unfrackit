@@ -4,7 +4,7 @@
 // Where the reader writes. Wallet-level data never enters the repository:
 // ${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/sim/<network>/<run-id>/
 // holds history/ (one JSON Lines file per wallet and window) and the reports
-// of the census, near-cap, collateral and battery-pool commands. Directories
+// of the census, near-cap and collateral commands. Directories
 // are created 0700 and files 0600. RESEARCH_SIM_HOME overrides the root
 // (tests use a temporary one).
 

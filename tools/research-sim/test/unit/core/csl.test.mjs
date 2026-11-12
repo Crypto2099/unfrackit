@@ -5,7 +5,7 @@
 // the treatment's pins and parameters, the shapes against the harness's own
 // generators, output and transaction sizes against CSL, witness counting over
 // several payment keys, the negative controls on every form of transaction
-// the kit assembles or receives, the change policies and the battery intents.
+// the kit assembles or receives, the change policies and the recipients.
 // Skipped unless RESEARCH_SIM_TREATMENT_DIR names the treatment.
 
 import { test } from 'node:test';
@@ -29,14 +29,14 @@ import { unspentOutputParts } from '../../../src/kit/inspect.mjs';
 import { buildWithChange } from '../../../src/methods/change.mjs';
 import { testLargestMethod } from '../../../src/methods/test-largest.mjs';
 import { h12Method, h12Request } from '../../../src/methods/h12.mjs';
-import { standardBattery, h10Battery, SHAPE_POOLS, spreadFungible, drawSeed } from '../../../src/battery/battery.mjs';
-import { recipientAddress, RECIPIENT_STAKE } from '../../../src/battery/recipients.mjs';
+import { spreadFungible } from '../../../src/shapes/streams.mjs';
+import { paymentIntent, nftHoldings, adaShareIntent } from '../../lib/payments.mjs';
+import { recipientAddress, RECIPIENT_STAKE } from '../../../src/kit/recipients.mjs';
 import { spendable, cmpRef } from '../../../src/state/state.mjs';
 import { settle } from '../../../src/kit/heap.mjs';
 import { withoutOneWitness } from '../../lib/txcbor.mjs';
 import { negativeControls, EXPECTED } from '../../lib/controls.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
-import { createHash } from 'node:crypto';
 
 const T = await treatment();
 const P = SYNTHETIC_PARAMS;
@@ -246,7 +246,7 @@ test('negative controls on every form: a plan transaction, a chain\'s planner tr
   controls(s3, plan.txs[0].bytes, 'plan');
   // A chain: M4 paying 90% of its ADA needs the planner first.
   const m4 = shapeState(T, 'M4').state;
-  const h10 = h10Battery(T, m4, P).find((x) => x.id === 'h10-0.9');
+  const h10 = adaShareIntent(T, m4, P, [9n, 10n]);
   const chain = selectState(T, m4, h12Request(h10), P, { absorb: true });
   assert.equal(chain.result.kind, 'chain');
   controls(m4, chain.txs[0].bytes, 'chain planner transaction');
@@ -254,7 +254,7 @@ test('negative controls on every form: a plan transaction, a chain\'s planner tr
   assert.equal(inspectTx(chain.txs[1].bytes).hasAux, false);
   controls(afterFirst, chain.txs[1].bytes, 'chain payment');
   // A single payment.
-  const pay = standardBattery(T, s3, P, { pools: SHAPE_POOLS }).find((x) => x.id === 'one-nft');
+  const pay = paymentIntent(T, s3, P, { id: 'one-nft', tokens: [{ ...nftHoldings(T, s3)[0], qty: 1n }] });
   const single = selectState(T, s3, h12Request(pay), P, { absorb: false });
   assert.equal(single.result.kind, 'single');
   controls(s3, single.txs[0].bytes, 'single payment');
@@ -271,7 +271,7 @@ test('the change policies: layout groups by class and policy, naive mixes classe
   const ft = spend.filter((u) => u.assets.length && u.assets[0].qty > 1n).slice(0, 2);
   const nft = spend.filter((u) => u.assets.length && u.assets[0].qty === 1n).slice(0, 3);
   const pure = spend.filter((u) => !u.assets.length).sort((x, y) => (x.coin > y.coin ? -1 : 1))[0];
-  const intent = standardBattery(T, s, P, { pools: { t1: [3000000n], t5: [] } }).find((x) => x.id === 'ada-payment');
+  const intent = paymentIntent(T, s, P, { id: 'ada-payment', coin: 3000000n });
   const inputs = [...ft, ...nft, pure];
   const outs = (policy) => {
     const r = buildWithChange(T, { state: s, params: P, inputs, intent, policy });
@@ -300,58 +300,36 @@ test('the change policies: layout groups by class and policy, naive mixes classe
   const mixed = { ...m1, utxos: new Map([...m1.utxos, ...sixNft.map((u) => [u.ref, u])].sort((x, y) => cmpRef(x[0], y[0]))) };
   const over = buildWithChange(T, { state: mixed, params: P, inputs: [...big, ...sixNft, ...spendable(m1).filter((u) => !u.assets.length)], intent, policy: 'single' });
   assert.equal(over.class, CLASSES.valueSize);
-  const big200 = standardBattery(T, s, P, { pools: { t1: [200000000n], t5: [] } }).find((x) => x.id === 'ada-payment');
+  const big200 = paymentIntent(T, s, P, { id: 'ada-payment', coin: 200000000n });
   const short = buildWithChange(T, { state: s, params: P, inputs: nft.slice(0, 1), intent: big200, policy: 'layout' });
   assert.equal(short.class, CLASSES.changeMinimum);
 });
 
-test('battery intents: deterministic draws, the spread fungible, payrolls, oversize splits, H-10', { skip }, async () => {
-  const cred = 'ab'.repeat(28);
-  const h = createHash('sha256').update('battery').update(Buffer.from(cred, 'hex')).update('one-nft').digest();
-  assert.equal(drawSeed(cred, 'one-nft'), h.readUInt32BE(0));
+test('recipients carry no wallet\'s stake credential; the spread fungible is the most spread, then the larger, then the lower policy and name', { skip }, async () => {
   const s6 = shapeState(T, 'S6').state;
-  const a = standardBattery(T, s6, P, { pools: SHAPE_POOLS });
-  const b = standardBattery(T, s6, P, { pools: SHAPE_POOLS });
-  assert.deepEqual(a, b);
-  assert.deepEqual(a.map((x) => x.id), ['ada-payment', 'one-nft', 'fungible-share', 'policy-nfts', 'fungible-p-0.25', 'fungible-p-0.5', 'fungible-p-0.75', 'fungible-p-0.9', 'payroll-10', 'payroll-100']);
-  for (const it of a) for (const o of it.requested) {
+  const pay = paymentIntent(T, s6, P, { id: 'one-nft', tokens: [{ ...nftHoldings(T, s6)[0], qty: 1n }] });
+  for (const o of pay.requested) {
     const pa = parseAddress(addressBytes(o.address));
     assert.equal(pa.stake, RECIPIENT_STAKE, 'recipients carry no wallet\'s stake credential');
     assert.equal(o.coin >= outputMinimum(P, Buffer.from(o.cbor, 'hex').length), true);
   }
-  const pay100 = a.find((x) => x.id === 'payroll-100');
-  assert.equal(new Set(pay100.requested.map((o) => o.address)).size, 100);
-  assert.equal(pay100.requested[0].address, recipientAddress('synthetic', 0));
-  // The spread fungible: most UTxOs, then the larger total, then the lower
-  // policy and name.
+  assert.equal(pay.requested[0].address, recipientAddress(s6.network, 0));
+  assert.equal(new Set(Array.from({ length: 100 }, (_x, i) => recipientAddress('synthetic', i))).size, 100);
+  assert.equal(recipientAddress('synthetic', 0), recipientAddress('synthetic', 0));
   const f = (policy, name, qty, utxos) => ({ policy, name, qty, utxos });
   assert.equal(spreadFungible([f('bb', '01', 5n, 3), f('aa', '01', 9n, 2)]).policy, 'bb');
   assert.equal(spreadFungible([f('bb', '01', 5n, 3), f('aa', '01', 6n, 3)]).policy, 'aa');
   assert.equal(spreadFungible([f('bb', '01', 6n, 3), f('aa', '02', 6n, 3), f('aa', '01', 6n, 3)]).name, '01');
-  // p of the spread fungible, at least one unit.
-  const fp = a.filter((x) => x.type === 'fungible-p').map((x) => x.meta.units);
-  assert.deepEqual(fp, [...fp].sort((x, y) => (x < y ? -1 : 1)));
-  // All 3,000 NFTs of M2's one policy, split at the value-size limit.
-  const m2 = shapeState(T, 'M2').state;
-  const pn = standardBattery(T, m2, P, { pools: SHAPE_POOLS }).find((x) => x.id === 'policy-nfts');
-  assert.ok(pn.requested.length > 1);
-  assert.equal(pn.requested.reduce((n, o) => n + o.assets.length, 0), 3000);
-  for (const o of pn.requested) assert.ok(valueSize(o.coin, o.assets) <= P.maxValSize);
-  // H-10: the observed layout's amounts in every layout; token-laden flags.
-  const tidy = planState(T, s6, P, {}).after;
-  const obs = h10Battery(T, s6, P);
-  const td = h10Battery(T, tidy, P, { observed: s6 });
-  assert.deepEqual(obs.map((x) => x.meta.amount), td.map((x) => x.meta.amount));
-  assert.equal(obs.find((x) => x.id === 'h10-0.9').meta.tokenLaden, true);
+  assert.equal(spreadFungible([]), null);
   await settle();
 });
 
 test('the H-12 method refuses what its request cannot carry', { skip }, () => {
   const s = shapeState(T, 'S1').state;
   const m = h12Method(T);
-  const it = standardBattery(T, s, P, { pools: SHAPE_POOLS })[0];
-  // A battery spend carries no replay part; one that did would not be the
-  // battery's, and its request is refused. A replayed intent's carries them
+  const it = paymentIntent(T, s, P, { id: 'ada-payment', coin: 2000000n });
+  // A payment intent carries no replay part; one that did would not be a
+  // payment's, and its request is refused. A replayed intent's carries them
   // all (test/unit/core/library-replay-h12.test.mjs).
   assert.equal(m.build(s, { ...it, implicit: { ...it.implicit, deposits: 1n } }, P, { changePolicy: 'default', absorb: true }).class, 'not-replayable');
   assert.equal(m.build(s, { ...it, source: 'replay' }, P, { changePolicy: 'default', absorb: true }).ok, true);

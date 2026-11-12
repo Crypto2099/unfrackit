@@ -26,7 +26,7 @@
 //   names            policies, token names, transaction ids and the wallet's
 //                    keys are BLAKE2b hashes of fixed texts (below), so no key
 //                    controls them; the recipient is the batteries' first
-//                    external recipient (battery/recipients.mjs)
+//                    external recipient (kit/recipients.mjs)
 //   randomRuns       30 runs or seeds (1 to 30) of each random subject, the
 //                    snapshot's repetition count
 //
@@ -42,7 +42,7 @@ import { outputBytes } from '../kit/assemble.mjs';
 import { utxoFromCbor } from '../state/utxo.mjs';
 import { makeState } from '../state/state.mjs';
 import { batteryIntent } from '../state/intent.mjs';
-import { recipientAddress } from '../battery/recipients.mjs';
+import { recipientAddress } from '../kit/recipients.mjs';
 
 const ADA = 1000000n;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// A stand-in for the replay and battery worker process
+// A stand-in for the replay worker process
 // (src/replay/worker.mjs) that speaks its messages without the treatment,
 // for the pool's tests. Each attempt appends a line to job.counter, so the
 // attempt knows its number n across fresh workers, and acts as
@@ -15,8 +15,6 @@
 //            machine's), 'error' (one that is not), 'die' (the process
 //            exits with code 3), 'kill' (it is killed by SIGKILL, as the
 //            out-of-memory killer does), 'throw' (an uncaught exception)
-//   battery  { stall: { <run>: ms }, machine: <run>, die: <run> } over runs
-//            0 to job.runs - 1, skipping job.skip
 // A replay result names the attempt that made it and whether it recorded
 // machine errors, and, when job.trace is set, the process and when the
 // attempt started and ended (Date.now()).
@@ -69,17 +67,6 @@ process.on('message', async ({ id, task, job, recordMachineErrors = false }) => 
     }
     return process.send({ id, event: 'done', result: { attempt: n, record: recordMachineErrors, ...(job.trace ? { pid: process.pid, start, end: Date.now() } : {}) }, memory: report(csl) });
   }
-  const skip = new Set(job.skip || []);
-  for (let k = 0; k < job.runs; k++) {
-    if (skip.has(k)) continue;
-    // The parent learns the run before the process dies there.
-    await new Promise((r) => process.send({ id, event: 'answering', spend: k }, r));
-    if (act.stall && act.stall[k]) block(act.stall[k]);
-    if (act.machine === k) return fail(true);
-    if (act.die === k) process.exit(3);
-    process.send({ id, event: 'answered', spend: k });
-    process.send({ id, event: 'spend', spend: k, result: { k, attempt: n, through: job.recordMachineThrough } });
-  }
-  return process.send({ id, event: 'done', result: { runs: job.runs }, memory: report() });
+  return fail(false);
 });
 process.send({ event: 'ready' });

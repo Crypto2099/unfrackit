@@ -50,11 +50,19 @@ import { encodeOutput, unspentOutput } from '../history/output.mjs';
 import { addressBytes } from '../history/address.mjs';
 import { utxoFromOutput, addressTextOf } from '../state/utxo.mjs';
 import { spendable, holdings } from '../state/state.mjs';
-import { recipientAddress } from '../battery/recipients.mjs';
+import { recipientAddress } from '../kit/recipients.mjs';
 import { executionFee } from '../history/params.mjs';
-import { spreadFungible } from '../battery/battery.mjs';
 import { ADA, DAY, hash32, hash28, key, cmpKey, atMinimum, requestedOut, payOut, ZERO, fixedBytesOf } from './stream-parts.mjs';
 import { heavyStream } from './heavy.mjs';
+
+// The fungible of the fungible-p and payroll spends, or null.
+export function spreadFungible(fts) {
+  let best = null;
+  for (const h of fts) {
+    if (!best || h.utxos > best.utxos || (h.utxos === best.utxos && (h.qty > best.qty || (h.qty === best.qty && cmpKey(h, best) < 0)))) best = h;
+  }
+  return best;
+}
 
 export function syntheticStream(T, shape, params, { kind = 'synthetic' } = {}) {
   if (kind !== 'synthetic') throw new Error(`unknown stream ${kind}`);

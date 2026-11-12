@@ -86,7 +86,7 @@ test("the extraction tool's verifyLog reads the simulator's runs: clean, refused
   // Only the extraction run that kept the pick is listed as kept.
   assert.deepEqual(ids(v.kept_not_cleaned), ['xr-1']);
 
-  await run(opts('sim-kept', 'xr-1', { keepForDebug: true }), { fail: 'battery' });
+  await run(opts('sim-kept', 'xr-1', { keepForDebug: true }), { fail: 'replay-peak' });
   v = C.verifyLog('mainnet');
   assert.deepEqual(ids(v.kept_not_cleaned), ['xr-1', 'sim-kept']);
   cleanupLiveFire({ _: [], cleanup: true, runId: 'sim-kept', network: 'mainnet' });
@@ -100,7 +100,7 @@ test("the extraction tool's verifyLog reads the simulator's runs: clean, refused
   cleanupLiveFire({ _: [], cleanup: true, runId: 'sim-killed', network: 'mainnet' });
   assert.deepEqual(C.verifyLog('mainnet').unclosed, []);
 
-  const stuck = await run(opts('sim-stuck', 'xr-1'), { readOnly: 'battery' });
+  const stuck = await run(opts('sim-stuck', 'xr-1'), { readOnly: 'replay-peak' });
   assert.match(stuck.entry.wallet_level_output, /^deletion failed: /);
   v = C.verifyLog('mainnet');
   assert.deepEqual(ids(v.failed_deletions), ['sim-stuck']);

@@ -30,7 +30,7 @@ export const STUDY_PLAN_OPTIONS = Object.freeze({
 
 // The live-fire command's two forms (study/live-fire.mjs liveFireOptions and
 // the cleanup form).
-export const LIVE_FIRE_RUN_OPTIONS = Object.freeze(['runId', 'extractionRun', 'purpose', 'expectNetwork', 'treatment', 'treatmentPins', 'workers', 'oracleWorkers', 'bytes', 'immutableDir', 'immutableHost', 'keepForDebug']);
+export const LIVE_FIRE_RUN_OPTIONS = Object.freeze(['runId', 'extractionRun', 'purpose', 'expectNetwork', 'treatment', 'treatmentPins', 'workers', 'bytes', 'immutableDir', 'immutableHost', 'keepForDebug']);
 export const LIVE_FIRE_CLEANUP_OPTIONS = Object.freeze(['cleanup', 'runId', 'network']);
 
 // The options that say how a run uses the machine or which part of the work
@@ -39,7 +39,7 @@ export const LIVE_FIRE_CLEANUP_OPTIONS = Object.freeze(['cleanup', 'runId', 'net
 // --wallet-indexes) and the stage a study stops before. They change no
 // record, so run.json keeps them apart from the options and a study or a
 // replay stage resumes with other values (study/study.mjs, out/stage.mjs).
-export const MACHINE_OPTIONS = Object.freeze(['workers', 'oracleWorkers', 'memoryBudget', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
+export const MACHINE_OPTIONS = Object.freeze(['workers', 'memoryBudget', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
 
 // The options that say where a replay's inputs and output are on this
 // machine: the run ID, the treatment directory and pins file, the history
@@ -83,10 +83,9 @@ export function memoryBudgetOf(v) {
 }
 
 // Options an earlier version took, refused by name wherever they appear.
-export const ORACLE_LIMIT_MS_GONE = 'refusing: --oracle-limit-ms is gone: the oracle stops on its work budget (the oracle settings maxCandidateSets and maxProgramWork), and a call runs to completion';
 export const LIMIT_MS_GONE = 'refusing: --limit-ms is gone: no time limit decides a result; every replay runs to completion, and a watchdog only makes one that hangs run again';
 export const ANSWER_LIMIT_MS_GONE = 'refusing: --answer-limit-ms is gone: no time limit decides a result; every method answer runs to completion, and a watchdog only makes one that hangs run again';
-const RETIRED = Object.freeze({ oracleLimitMs: ORACLE_LIMIT_MS_GONE, limitMs: LIMIT_MS_GONE, answerLimitMs: ANSWER_LIMIT_MS_GONE });
+const RETIRED = Object.freeze({ limitMs: LIMIT_MS_GONE, answerLimitMs: ANSWER_LIMIT_MS_GONE });
 
 const unique = (...lists) => [...new Set(lists.flat())];
 
@@ -100,11 +99,9 @@ export const COMMAND_OPTIONS = Object.freeze({
   census: { flags: ['fromStudy', 'allWallets', 'explain'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   'near-cap': { flags: ['fromStudy', 'allWallets'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   collateral: { flags: ['explain'], values: [...CONTEXT_VALUES, 'runId', 'days', 'batch'], repeat: ['set'] },
-  'battery-pools': { flags: [], values: ['runId', 'network', 'historyRun'], repeat: [] },
   replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'memoryBudget', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'testReps', 'reps', 'collateralRule', 'machine', 'shard', 'walletIndexes'], repeat: ['history'] },
   'plan-shards': { flags: [], values: ['treatment', 'treatmentPins', 'plan', 'shapes', 'testReps', 'reps', 'collateralRule', 'machines', 'out'], repeat: ['history'] },
   'merge-stage': { flags: [], values: ['into', 'machine'], repeat: [], positional: true },
-  battery: { flags: ['oracle', 'validity'], values: ['treatment', 'treatmentPins', 'workers', 'memoryBudget', 'runId', 'shapes', 'analysisFreezeTx', 'methods', 'reps', 'pools', 'oracleSettings', 'oracleWorkers'], repeat: ['history'] },
   fidelity: { flags: [], values: ['treatment', 'treatmentPins', 'analysisFreezeTx', 'runId'], repeat: ['history'] },
   study: {
     flags: [],
@@ -123,13 +120,12 @@ const BYTES = ['tx_cbor', 'immutable'];
 const FROM_STUDY = ['random', 'all'];
 const CLOSED = Object.freeze({
   fromStudy: { '*': FROM_STUDY },
-  methods: { '*': ['study', 'test'] },
   bytes: { '*': BYTES },
   plan: { replay: ['recent', 'peak', 'test'], 'plan-shards': ['recent', 'peak', 'test'], study: ['synthetic', 'preprod', 'corpus'] },
   collateralRule: { '*': ['ledger', 'practice'] }
 });
 const WINDOW = /^(recent|peak|snapshot|blocks:\d+-\d+)$/;
-const WHOLE = ['workers', 'oracleWorkers', 'reps', 'testReps', 'days', 'batch'];
+const WHOLE = ['workers', 'reps', 'testReps', 'days', 'batch'];
 
 export const flagOf = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 const camelOf = (s) => s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());

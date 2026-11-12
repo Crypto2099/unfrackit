@@ -7,10 +7,10 @@
 // far a worker's memory has grown depends on what it ran before and on the
 // machine, so such an error is never recorded on its first appearance. Where
 // the code turns an exception into a recorded outcome (a method's failure, a
-// planner's refusal, an oracle evaluation's rejection, a validity check), it
+// planner's refusal, a validity check), it
 // calls passMachineErrors first, which throws a machine error on as a
 // MachineError; the job fails, and the pool runs it again in a fresh worker
-// with recording on (replay/pool.mjs, oracle/oracle.mjs). There the catch
+// with recording on (replay/pool.mjs). There the catch
 // records it as it records any other exception, so only an error that
 // happens again in a fresh worker is recorded. Node's argument checks
 // (RangeErrors with an ERR_ code, such as a buffer read past its end) are

@@ -55,7 +55,7 @@ export const keyCount = (records) => new Set(records.map((u) => u.cred)).size;
 export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']);
 
 // The parts each adapter's replay path covers, by adapter module:
-//   csl   csl-lf, csl-ri, csl-lf-pure, csl-ri-pure: every part
+//   csl   csl-lf, csl-ri: every part
 //         (methods/csl.mjs, its replay path)
 //   evo   evo-lf (and the survey's evo-unfrack): every part, collateral as
 //         the library chooses it, since it cannot be given the UTxO the

@@ -9,8 +9,6 @@
 //
 //   csl-lf, csl-ri      methods/csl.mjs: cardano-serialization-lib's
 //                       LargestFirstMultiAsset and RandomImproveMultiAsset
-//   csl-lf-pure,        the same with prefer_pure_change set, the battery's
-//   csl-ri-pure         sensitivity arm on change policy
 //   cjs-rrri            methods/cjs.mjs: cardano-js-sdk's
 //                       roundRobinRandomImprove
 //   evo-lf              methods/evo.mjs: the Evolution SDK's builder at its
@@ -61,13 +59,11 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'csl-lf-pure', 'csl-ri-pure', 'cjs-rrri', 'evo-lf']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
   ['csl-ri', baseline('csl-ri', (T) => cslMethod(T, { strategy: 'ri' }))],
-  ['csl-lf-pure', baseline('csl-lf-pure', (T) => cslMethod(T, { strategy: 'lf', preferPureChange: true }))],
-  ['csl-ri-pure', baseline('csl-ri-pure', (T) => cslMethod(T, { strategy: 'ri', preferPureChange: true }))],
   ['cjs-rrri', baseline('cjs-rrri', (T) => cjsMethod(T))],
   ['evo-lf', baseline('evo-lf', (T) => evoMethod({ T }))],
   ['test-largest-first', (T) => testLargestMethod(T)],

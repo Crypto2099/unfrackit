@@ -13,7 +13,7 @@ import { outputBytes } from '../../src/kit/assemble.mjs';
 import { utxoFromCbor } from '../../src/state/utxo.mjs';
 import { makeState } from '../../src/state/state.mjs';
 import { batteryIntent } from '../../src/state/intent.mjs';
-import { recipientAddress } from '../../src/battery/recipients.mjs';
+import { recipientAddress } from '../../src/kit/recipients.mjs';
 import { parseAddress, addressBytes } from '../../src/history/address.mjs';
 
 export const ADA = 1000000n;

@@ -2,8 +2,8 @@
 // Copyright 2026 Adam K. Dean
 
 // "Infeasible by balance" for a replayed intent (setting infeasible 'exact'):
-// the H-12 rule's exact test of "the balance suffices" (battery/suffices.mjs)
-// with the intent's implicit values and fixed inputs counted. It holds when:
+// the H-12 rule's exact test of "the balance suffices", with the intent's
+// implicit values and fixed inputs counted. It holds when:
 //   - the arm's spendable UTxOs, the intent's fixed inputs and its mints hold
 //     every asset the requested outputs and the burns take;
 //   - their coin, with the withdrawals and refunds, is at least the requested
@@ -21,12 +21,13 @@
 // keeps are still classified over its whole holding.
 
 import { treatmentParams } from '../treatment/bridge.mjs';
-import { selectAdapterFor } from '../battery/suffices.mjs';
+import { adapterFor } from '../treatment/wallet.mjs';
 import { spendable } from '../state/state.mjs';
 import { maxFee } from '../kit/fee.mjs';
 import { fixedInputValues } from '../kit/replay.mjs';
 
 const key = (a) => `${a.policy}.${a.name}`;
+const selectAdapterFor = (T, state, tp) => adapterFor(T, state.changeAddress, tp, 'select');
 
 export function replaySuffices(T, state, params, intent, { settings = {}, aside = null } = {}) {
   const tp = treatmentParams(T, params);

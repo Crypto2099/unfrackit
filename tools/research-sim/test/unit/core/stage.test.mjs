@@ -269,7 +269,7 @@ test('the machine label: letters, digits, - and _, at most 64, local by default;
   assert.equal(parseArgs(['--machine', 'spare-1'], 'replay').machine, 'spare-1');
   assert.throws(() => parseArgs(['--machine', 'spare.lan'], 'replay'), /--machine takes a label of letters, digits, - and _ \(at most 64\), not "spare.lan" for replay/);
   assert.equal(parseArgs(['--machine', 'b2'], 'study').machine, 'b2');
-  assert.throws(() => parseArgs(['--machine', 'x'], 'battery'), /unknown option --machine for battery/);
+  assert.throws(() => parseArgs(['--machine', 'x'], 'census'), /unknown option --machine for census/);
   await assert.rejects(open('bad-label', { machine: '../x' }), /--machine takes a label/);
   assert.equal(existsSync(runDir('synthetic', 'bad-label')), false, 'a refused label writes nothing');
 }));

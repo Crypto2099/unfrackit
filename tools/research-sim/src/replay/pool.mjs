@@ -13,9 +13,6 @@
 //
 //   replay   24 hours per (wallet, arm, selector, repetition) replay; the
 //            replay runs again from its start
-//   battery  30 minutes per method answer for one wallet and spend, counted
-//            from the method's start to its return; the wallet's battery
-//            resumes at that answer (job.skip lists the runs already done)
 //
 // Workers are child processes (child_process.fork, with an IPC channel and
 // the V8 serializer, so messages carry what structured clone carries),
@@ -25,7 +22,7 @@
 // Memory. The pool has a budget (`memoryBudget`, bytes; by default 80% of
 // the memory available when it starts, /proc/meminfo MemAvailable). Each job
 // has an estimate (jobEstimate: a base, a UTxO term and an event term, from
-// job.memory, which runReplays and runBatteries set from the wallet), raised
+// job.memory, which runReplays sets from the wallet), raised
 // for the job's wallet when a job of it was measured above it. After each
 // job the pool reads the worker's resident size (VmRSS) and its peak during
 // the job (VmHWM, reset before each job) from /proc/<pid>/status, and the
@@ -76,7 +73,6 @@ import { performance } from 'node:perf_hooks';
 import os from 'node:os';
 
 export const REPLAY_WATCHDOG_MS = 24 * 3600 * 1000;
-export const ANSWER_WATCHDOG_MS = 30 * 60 * 1000;
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
@@ -168,7 +164,7 @@ function resetPeak(pid) {
 
 const exitText = ({ code, signal }) => (signal ? `the worker was killed by ${signal}` : code === null ? 'the worker could not be started' : `the worker exited with code ${code}`);
 
-// A job named for a message: a replay's key, or the wallet of a battery.
+// A job named for a message: a replay's key, or its wallet.
 export function jobName(job) {
   const k = job && job.key;
   if (k) return `wallet ${k.wallet} ${k.arm}/${k.variant} ${k.method} change ${k.change} collateral ${k.collateral} repetition ${k.repetition}`;
@@ -499,8 +495,7 @@ export class Pool {
   }
 
   // One attempt of a job on worker w. arm: the watchdog armed at the start
-  // (milliseconds), or null; on(m, watchdog) sees each other message of the
-  // job and may arm the watchdog (watchdog(ms)) or clear it (watchdog(null)).
+  // (milliseconds), or null.
   // Resolves, with ms, the attempt's time:
   //   { kind: 'done', result, memory }
   //   { kind: 'error', error, stop, machine, memory }  the job threw
@@ -508,7 +503,7 @@ export class Pool {
   //   { kind: 'watchdog' }            the watchdog stopped it
   // memory: the worker's report (cslBytes, cslCeilingBytes, rss and V8's
   // heap). The caller finishes, releases or renews the slot.
-  attempt(w, task, job, extra, { arm = null, on = () => {} } = {}) {
+  attempt(w, task, job, extra, { arm = null } = {}) {
     const id = ++this.seq;
     const t0 = performance.now();
     resetPeak(w.pid);
@@ -530,7 +525,6 @@ export class Pool {
         if (!m || m.id !== id) return;
         if (m.event === 'done') end({ kind: 'done', result: m.result, memory: m.memory || null });
         else if (m.event === 'error') end({ kind: 'error', error: m.error, stop: !!m.stop, machine: !!m.machine, memory: m.memory || null });
-        else on(m, watchdog);
       };
       w.proc.on('message', onMessage);
       w.ended.then((exit) => end({ kind: 'died', error: w.fatal || exitText(exit), exit }));
@@ -581,76 +575,6 @@ export class Pool {
         this.stats.machineReruns++;
         note({ event: 'machine rerun', cause: 'machine error', error: r.error });
         record = true;
-      }
-      slot = await this.renew(slot);
-    }
-  }
-
-  // One wallet's battery job. onSpend(k, result) is called for each run as it
-  // ends, once per run. Resolves { ok: true, result, ms } or { ok: false,
-  // error, stop, ms }. A run's position is its number; the wallet's setup
-  // before its first answer is -1. A machine rerun records machine errors up
-  // to the position where the error happened (job.recordMachineThrough). A
-  // worker's deaths are counted per position: the job runs again with its
-  // estimate doubled after the first there, alone after the second, and
-  // fails at the third.
-  async battery(job, { watchdogMs = ANSWER_WATCHDOG_MS, onSpend = () => {}, note = () => {} } = {}) {
-    const t0 = performance.now();
-    const doneK = new Set(job.skip || []);
-    const watchdogs = new Map();
-    let through = null;
-    const deaths = new Map();
-    let estimate = this.estimateOf(job);
-    let slot = await this.admit({ estimate, note });
-    for (;;) {
-      let at = -1;
-      const r = await this.attempt(slot.worker, 'battery', { ...job, skip: [...doneK], recordMachineThrough: through }, {}, {
-        on: (m, watchdog) => {
-          if (m.event === 'answering') {
-            at = m.spend;
-            watchdog(watchdogs.get(m.spend) ?? watchdogMs);
-          } else if (m.event === 'answered') {
-            watchdog(null);
-          } else if (m.event === 'spend') {
-            doneK.add(m.spend);
-            onSpend(m.spend, m.result);
-          }
-        }
-      });
-      const recorded = through !== null && at <= through;
-      if (r.kind === 'done' || (r.kind === 'error' && (!r.machine || recorded))) {
-        this.finish(slot, r, job, { retire: through !== null });
-        return r.kind === 'done' ? { ok: true, result: r.result, ms: performance.now() - t0 } : { ok: false, error: r.error, stop: r.stop, ms: performance.now() - t0 };
-      }
-      if (this.closed) {
-        this.release(slot);
-        return { ok: false, error: 'the pool closed', stop: false, ms: performance.now() - t0 };
-      }
-      if (r.kind === 'died') {
-        const n = (deaths.get(at) || 0) + 1;
-        deaths.set(at, n);
-        this.release(slot);
-        if (n === 3) {
-          this.pump();
-          return { ok: false, error: `${jobName(job)}: its worker died three times at run ${at}, the last: ${r.error}`, stop: false, ms: performance.now() - t0 };
-        }
-        if (n === 1) estimate *= 2;
-        this.stats.machineReruns++;
-        this.stats.outOfMemoryReruns++;
-        note({ event: 'machine rerun', run: at, cause: 'worker died', error: r.error, estimateBytes: estimate, alone: n === 2 });
-        through = through === null ? at : Math.max(through, at);
-        slot = await this.admit({ estimate, alone: n === 2, front: true, fresh: true, note });
-        continue;
-      }
-      if (r.kind === 'watchdog') {
-        const ms = watchdogs.get(at) ?? watchdogMs;
-        this.stats.watchdogStops++;
-        note({ event: 'watchdog stop', run: at, watchdogMs: ms, ms: r.ms });
-        watchdogs.set(at, ms * 2);
-      } else {
-        this.stats.machineReruns++;
-        note({ event: 'machine rerun', run: at, cause: 'machine error', error: r.error });
-        through = through === null ? at : Math.max(through, at);
       }
       slot = await this.renew(slot);
     }

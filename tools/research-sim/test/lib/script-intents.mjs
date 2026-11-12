@@ -13,7 +13,7 @@ import { executionFee } from '../../src/history/params.mjs';
 import { addressBytes } from '../../src/history/address.mjs';
 import { encUint, encInt, encBytes, encArray, encMap } from '../../src/history/cbor.mjs';
 import { blake2b224 } from '../../src/history/blake2b.mjs';
-import { recipientAddress } from '../../src/battery/recipients.mjs';
+import { recipientAddress } from '../../src/kit/recipients.mjs';
 
 const ADA = 1000000n;
 

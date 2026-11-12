@@ -32,7 +32,7 @@ import { cslMethod } from '../../src/methods/csl.mjs';
 import { cjsMethod } from '../../src/methods/cjs.mjs';
 import { evoMethod, evoUtxo, evoProtocolParameters } from '../../src/methods/evo.mjs';
 import { shapeState } from '../../src/shapes/shapes.mjs';
-import { standardBattery, h10Battery, SHAPE_POOLS } from '../../src/battery/battery.mjs';
+import { paymentIntent, adaPayrollIntent, adaShareIntent } from '../lib/payments.mjs';
 import { surveyFixture } from '../../src/survey/fixture.mjs';
 import { makeState } from '../../src/state/state.mjs';
 
@@ -218,13 +218,13 @@ test('one constructed failure per class per adapter', { skip, timeout: 30 * 60 *
   };
   // change-minimum: M7's ADA payment.
   const m7 = shapeState(T, 'M7').state;
-  const m7pay = standardBattery(T, m7, P, { pools: SHAPE_POOLS }).find((x) => x.id === 'ada-payment');
+  const m7pay = paymentIntent(T, m7, P, { id: 'ada-payment', coin: 2n * ADA });
   for (const m of adapters) assert.equal(note(m, 'M7 ada-payment', await built(m, m7, m7pay)), CLASSES.changeMinimum);
   // tx-size or max-inputs: M2's payrolls and its smallest H-10 payment.
   const m2 = shapeState(T, 'M2').state;
-  const m2b = [...standardBattery(T, m2, P, { pools: SHAPE_POOLS }), ...h10Battery(T, m2, P)];
-  for (const id of ['payroll-10', 'payroll-100', 'h10-0.25']) {
-    const it = m2b.find((x) => x.id === id);
+  const m2b = [adaPayrollIntent(T, m2, P, 10), adaPayrollIntent(T, m2, P, 100), adaShareIntent(T, m2, P, [1n, 4n], 'h10-0.25')];
+  for (const it of m2b) {
+    const id = it.id;
     for (const m of adapters) note(m, `M2 ${id}`, await built(m, m2, it));
   }
   for (const m of adapters) assert.ok(Object.entries(seen[m.name]).some(([l, c]) => l.startsWith('M2') && (c === CLASSES.txSize || c === CLASSES.maxInputs)), `${m.name}: a size or input-count failure on M2`);

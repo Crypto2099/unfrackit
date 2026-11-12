@@ -9,8 +9,8 @@
 // generator (tools/preprod-seeder/src/shapes.mjs in this repository, at
 // commit a230e5b), which generates the same wallets as the treatment's
 // measurement harness; a test compares them with the harness's own
-// generators byte for byte. The four further shapes model the wallets the
-// standard battery's last two spends are for:
+// generators byte for byte. The four further shapes model the wallets of token
+// claimers and merchants:
 //
 //   CL1  one year of token claims (73 epochs): 73 claim UTxOs and pure-ADA
 //        UTxOs of 25 and 75 ADA

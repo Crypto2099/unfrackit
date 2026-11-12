@@ -55,7 +55,7 @@ import { encodeOutput, unspentOutput } from '../history/output.mjs';
 import { addressBytes, parseAddress } from '../history/address.mjs';
 import { utxoFromOutput, addressTextOf } from '../state/utxo.mjs';
 import { makeState } from '../state/state.mjs';
-import { recipientAddress } from '../battery/recipients.mjs';
+import { recipientAddress } from '../kit/recipients.mjs';
 import { SYNTHETIC_PARAMS } from '../kit/params.mjs';
 import { executionFee } from '../history/params.mjs';
 import { blake2b224, blake2b256 } from '../history/blake2b.mjs';

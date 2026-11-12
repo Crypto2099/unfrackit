@@ -13,8 +13,6 @@
 //   rrri    cardano-js-sdk round-robin Random-Improve, seeded
 //   evo     the Evolution SDK default (deterministic)
 //   h12     UnFrack.It's H-12 input rule, with UnFrack.It's own change
-//   lf-pure, ri-pure  lf and ri with prefer_pure_change set: the sensitivity
-//           arm on change policy, in the snapshot battery only
 //
 // The study's replay plan answers two questions, in both windows alike. Every
 // arm replays the wallet's observed state, under one collateral rule (a job
@@ -37,10 +35,9 @@
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
-export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', h12: 'unfrackit-h12', 'lf-pure': 'csl-lf-pure', 'ri-pure': 'csl-ri-pure' });
-export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', h12: 'test-largest-first', 'lf-pure': 'test-largest-first', 'ri-pure': 'test-largest-first' });
-const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'lf-pure', 'h12']);
-const BASELINES = ['lf', 'ri', 'rrri'];
+export const STUDY_ROLES = Object.freeze({ lf: 'csl-lf', ri: 'csl-ri', rrri: 'cjs-rrri', evo: 'evo-lf', h12: 'unfrackit-h12' });
+export const TEST_ROLES = Object.freeze({ lf: 'test-largest-first', ri: 'test-largest-first', rrri: 'test-largest-first', evo: 'test-largest-first', h12: 'test-largest-first' });
+const DETERMINISTIC_ROLES = new Set(['lf', 'evo', 'h12']);
 
 const H1 = { arms: ['observed', 'tidy-once', 'maintained-tidy'], controls: ['naive-tidy', 'random-tidy'] };
 const H2 = ['default', 'grouping-arrival', 'grouping-policy-arrival', 'grouping-random', 'byte-optimal'];
@@ -98,19 +95,6 @@ export function expandJobs(entries, { roles, needsCollateral, collateralRules = 
     }
   }
   return jobs;
-}
-
-// The battery's selectors at the snapshot: the four of H-7 and H-12, the
-// sensitivity arm on change policy (both CSL strategies with
-// prefer_pure_change set, each scored against the oracle's csl-ppc
-// reference), and the H-12 rule with absorption on and off. Repetitions as
-// above. Each method names the batteries it runs: the three baselines run the
-// standard battery and H-10's, the others the standard battery only.
-export function batteryPlan({ roles = STUDY_ROLES, reps = 30, h12 = true } = {}) {
-  const methods = [];
-  for (const role of ['lf', 'ri', 'rrri', 'evo', 'lf-pure', 'ri-pure']) methods.push({ name: roles[role], role, opts: [{ changePolicy: 'default' }], repetitions: DETERMINISTIC_ROLES.has(role) ? 1 : reps, batteries: BASELINES.includes(role) ? ['standard', 'h10'] : ['standard'] });
-  if (h12) methods.push({ name: 'unfrackit-h12', role: 'h12', opts: [{ changePolicy: 'default', absorb: true }, { changePolicy: 'default', absorb: false }], repetitions: 1, batteries: ['standard'] });
-  return methods;
 }
 
 // The engine's test plan (never a study plan): every starting layout and

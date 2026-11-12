@@ -8,7 +8,7 @@
 //
 //   live-fire --run-id sim-<id> --extraction-run <id> --purpose <text>
 //             --expect-network <name> --treatment <dir> [--treatment-pins <file>]
-//             [--workers <n>] [--oracle-workers <n>] [--bytes tx_cbor|immutable]
+//             [--workers <n>] [--bytes tx_cbor|immutable]
 //             [--immutable-dir <dir>] [--immutable-host <host>] [--keep-for-debug]
 //   live-fire --cleanup --run-id sim-<id> --network <name>
 //
@@ -26,19 +26,18 @@
 // 3. The start entry (sim-live-fire-start), before any wallet is read.
 // 4. The stages, in the study's stage layout (study.mjs): each in its own run
 //    directory <run id>/<stage> under the private root, run by the command
-//    the study runs for it (STAGE_COMMAND), in order: history-recent,
-//    history-peak and history-snapshot over every picked wallet at the pick's
-//    snapshot block, with the windows computed from it; battery-pools over the
-//    recent files; replay-recent and replay-peak; the battery with its study
-//    selectors and the oracle. Validity checks are on throughout. A stage that
+//    the study runs for it (STAGE_COMMAND), in order: history-recent and
+//    history-peak over every picked wallet at the pick's snapshot block, with
+//    the windows computed from it; replay-recent and replay-peak. Validity
+//    checks are on throughout. A stage that
 //    throws stops the run; a stage that finishes with a failed check is a
 //    failed step, and the run goes on.
 // 5. The end entry (sim-live-fire), naming the start: the outcome, the error
 //    redacted, the run time, each step's outcome, error class and time, and
 //    three checks, each true, false or null (not reached), over the whole run:
 //    every intent parsed, every built transaction passed the ledger checks,
-//    and a watchdog set work aside (a replay, answer or oracle call stopped
-//    and run again to completion). Then what became of the
+//    and a watchdog set work aside (a replay stopped and run again to
+//    completion). Then what became of the
 //    wallet-level output: the run directory (history files, records, logs) is
 //    deleted whether the run succeeded or failed, unless --keep-for-debug is
 //    given and a step failed; a kept run is deleted later by --cleanup, which
@@ -48,25 +47,24 @@
 //
 // Nothing counted reaches the log, the progress lines or what the command
 // prints: the stages' totals are read in memory for the three checks only.
-// The repetitions are one of each (LIVE_FIRE_REPS) and the watchdogs are the
+// The repetitions are one of each (LIVE_FIRE_REPS) and the watchdog is the
 // study's; both are recorded in the start entry.
 
 import { existsSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { runDir, historyDir } from '../history/paths.mjs';
 import { Refusal, connect } from '../history/db.mjs';
 import { IntentCheck } from '../history/rebuild.mjs';
 import { formatHashList } from '../hash.mjs';
 import { DEFAULT_PINS } from '../treatment/bridge.mjs';
-import { REPLAY_WATCHDOG_MS, ANSWER_WATCHDOG_MS } from '../replay/pool.mjs';
-import { ORACLE_SETTINGS, ORACLE_WATCHDOG_MS } from '../oracle/settings.mjs';
+import { REPLAY_WATCHDOG_MS } from '../replay/pool.mjs';
 import { STAGE_COMMAND } from './study.mjs';
 import { LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS } from '../options.mjs';
 import { readPick, readLog, appendEntry, sanitizeError, redactCommand, unclosedStarts, keptRun, isSimRunId, SIM_GATE, SIM_LIVE_FIRE_START, SIM_LIVE_FIRE, KEPT } from './checklog.mjs';
 
-export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak', 'history-snapshot', 'battery-pools', 'replay-recent', 'replay-peak', 'battery']);
+export const LIVE_FIRE_STAGES = Object.freeze(['history-recent', 'history-peak', 'replay-recent', 'replay-peak']);
 // One repetition of every arm, variant and random selector: each code path a
 // study run takes runs at least once, and a run over ten mainnet wallets ends
 // in hours at most.
@@ -116,7 +114,6 @@ export function liveFireOptions(opts) {
     treatment: resolve(text(opts.treatment, '--treatment', 'dir')),
     treatmentPins: opts.treatmentPins === undefined ? DEFAULT_PINS : resolve(text(opts.treatmentPins, '--treatment-pins', 'file')),
     workers: positive(opts.workers, '--workers'),
-    oracleWorkers: positive(opts.oracleWorkers, '--oracle-workers'),
     keepForDebug: opts.keepForDebug === undefined ? false : opts.keepForDebug
   };
   if (o.keepForDebug !== false && o.keepForDebug !== true) throw new Refusal('refusing: --keep-for-debug takes no value');
@@ -136,21 +133,18 @@ export function liveFireOptions(opts) {
 export function planOf(o) {
   return {
     stages: [...LIVE_FIRE_STAGES],
-    repetitions: { replay: LIVE_FIRE_REPS.reps, battery: LIVE_FIRE_REPS.reps },
-    watchdogs_ms: { replay: REPLAY_WATCHDOG_MS, answer: ANSWER_WATCHDOG_MS, oracle: ORACLE_WATCHDOG_MS },
-    oracle_budget: { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, program_work: ORACLE_SETTINGS.maxProgramWork },
-    oracle: true,
+    repetitions: { replay: LIVE_FIRE_REPS.reps },
+    watchdogs_ms: { replay: REPLAY_WATCHDOG_MS },
     validity: true,
     workers: o.workers,
-    oracle_workers: o.oracleWorkers,
     keep_for_debug: o.keepForDebug
   };
 }
 
 // The options each stage's command runs with: the study's stage layout
 // (run ID <run id>/<stage>), every picked wallet in each history stage, the
-// pick's block by hash, one repetition, the study's watchdogs (the commands'
-// defaults), validity checks, and the oracle in the battery.
+// pick's block by hash, one repetition, the study's watchdog (the command's
+// default) and validity checks.
 export function liveFireStageOptions(stage, o, pick, network) {
   const id = (s) => `${o.runId}/${s}`;
   const runId = id(stage);
@@ -160,17 +154,12 @@ export function liveFireStageOptions(stage, o, pick, network) {
   switch (stage) {
     case 'history-recent':
     case 'history-peak':
-    case 'history-snapshot':
       return { runId, ...loads, ...db, wallet, window: stage.slice('history-'.length) };
-    case 'battery-pools':
-      return { runId, network, historyRun: id('history-recent') };
     case 'replay-recent':
     case 'replay-peak': {
       const w = stage.slice('replay-'.length);
       return { runId, ...loads, history: [historyDir(network, id(`history-${w}`))], plan: w, reps: String(LIVE_FIRE_REPS.reps), collateralRule: LIVE_FIRE_COLLATERAL_RULE, workers: String(o.workers), validity: true };
     }
-    case 'battery':
-      return { runId, ...loads, history: [historyDir(network, id('history-snapshot'))], pools: join(runDir(network, id('battery-pools')), 'battery-pools.json'), reps: String(LIVE_FIRE_REPS.reps), workers: String(o.workers), oracle: true, oracleWorkers: String(o.oracleWorkers), validity: true };
     default:
       throw new Error(`unknown stage ${stage}`);
   }
@@ -192,13 +181,12 @@ export function errorClass(e) {
 // each true, false, or null when the stages that settle it did not all
 // finish. intents: every spend of every history stage read into its event,
 // and each history file completed (a history check failing makes it false).
-// transactions: every transaction the replays and the battery built passed
-// the validity checks (no validity failure). setAside: a watchdog stopped a
-// replay, an answer or an oracle call, which then ran again to completion
-// (the pools' counts in the replay and battery printouts).
+// transactions: every transaction the replays built passed the validity
+// checks (no validity failure). setAside: a watchdog stopped a replay, which
+// then ran again to completion (the pool's count in the replay printouts).
 export function checksOf(results, failure) {
-  const history = ['history-recent', 'history-peak', 'history-snapshot'];
-  const built = ['replay-recent', 'replay-peak', 'battery'];
+  const history = ['history-recent', 'history-peak'];
+  const built = ['replay-recent', 'replay-peak'];
   const print = (s) => (results[s] && results[s].print) || null;
   const totals = (s) => (print(s) && print(s).totals) || null;
   let intents = history.every((s) => results[s]) ? true : null;
@@ -207,8 +195,7 @@ export function checksOf(results, failure) {
   const transactions = validity.some((v) => v && v.failed > 0) ? false : validity.every((v) => v) ? true : null;
   const stops = built.map((s) => {
     const p = print(s);
-    const counts = p ? [p.workers, p.oracle].filter(Boolean).map((x) => x.watchdogStops) : [];
-    return counts.length && counts.every(Number.isInteger) ? counts.reduce((a, b) => a + b, 0) : null;
+    return p && p.workers && Number.isInteger(p.workers.watchdogStops) ? p.workers.watchdogStops : null;
   });
   const setAside = stops.some((n) => n > 0) ? true : stops.every((n) => n !== null) ? false : null;
   return { every_intent_parsed: intents, every_built_transaction_passed_ledger_checks: transactions, work_set_aside: setAside };
@@ -354,7 +341,7 @@ export function cleanupLiveFire(opts, { argv = [], now = () => new Date() } = {}
 // the history command given the pick so that it takes the live-fire path.
 export async function cmdLiveFire(opts, { argv = [] } = {}) {
   if (opts.cleanup !== undefined) return runLiveFire(opts, { argv });
-  const [h, r, rc] = await Promise.all([import('../history/commands.mjs'), import('../history/reports.mjs'), import('../replay/commands.mjs')]);
-  const commands = (pick) => ({ history: (o) => h.cmdHistory(o, { liveFire: pick }), 'battery-pools': r.cmdBatteryPools, replay: rc.cmdReplay, battery: rc.cmdBattery });
+  const [h, rc] = await Promise.all([import('../history/commands.mjs'), import('../replay/commands.mjs')]);
+  const commands = (pick) => ({ history: (o) => h.cmdHistory(o, { liveFire: pick }), replay: rc.cmdReplay });
   return runLiveFire(opts, { commands, argv });
 }

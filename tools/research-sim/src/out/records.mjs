@@ -5,8 +5,8 @@
 //
 // A run writes under
 //   ${XDG_DATA_HOME:-$HOME/.local/share}/unfrackit-research/sim/<network>/<run-id>/
-// (RESEARCH_SIM_HOME overrides the root), never in the repository. A
-// battery run (RunOutput) writes:
+// (RESEARCH_SIM_HOME overrides the root), never in the repository. A run
+// directory (RunOutput) holds:
 //   run.json        what the run ran under: its command and plan, the
 //                   settings, the treatment's pins, the parameters, the Node
 //                   version, the analysis-freeze transaction when it was given
@@ -21,7 +21,7 @@
 // first (Segment), uncompressed, in its spool directory.
 // Directories are created 0700 and files 0600.
 //
-// Every record carries the key of the replay or battery spend it belongs to:
+// Every record carries the key of the replay spend it belongs to:
 //   wallet      db-sync's stake-credential id (an integer), or a shape's name
 //   window      'recent', 'peak', 'snapshot', or 'synthetic'
 //   arm         the starting layout and its maintenance
@@ -42,7 +42,7 @@ import { join } from 'node:path';
 import { openSync, readSync, closeSync, unlinkSync } from 'node:fs';
 import { runDir, ensureDir, writeJson, JsonLines, toJson } from '../history/paths.mjs';
 
-export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'battery', 'h12', 'snapshot-plan', 'refused']);
+export const RECORD_KINDS = Object.freeze(['spend', 'plan', 'burst', 'trigger', 'wallet-arm', 'refused']);
 export const KEY_FIELDS = Object.freeze(['wallet', 'window', 'arm', 'variant', 'method', 'change', 'collateral', 'repetition']);
 
 const BECH32_ADDR = /(addr|addr_test|stake|stake_test)1[02-9ac-hj-np-z]{20,}/;
@@ -203,8 +203,7 @@ class RecordLines {
   }
 }
 
-// A run's directory and its files (the battery's; a replay stage's are
-// out/stage.mjs's).
+// A run's directory and its files (a replay stage's are out/stage.mjs's).
 export class RunOutput extends RecordLines {
   constructor(network, runId, header) {
     const dir = ensureDir(runDir(network, runId));

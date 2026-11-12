@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Mesh's default against the cjs-rrri baseline, on the battery spends of the
+// Mesh's default against the cjs-rrri baseline, on payment spends of the
 // synthetic shapes. The study reports Mesh's default as covered by the
 // baseline because both run the same input-selection code (0.14.28 and
 // 0.14.35 share their source tree); but Mesh sums the requested outputs into

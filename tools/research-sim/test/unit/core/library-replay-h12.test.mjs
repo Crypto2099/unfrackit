@@ -11,8 +11,8 @@
 // and off; constructed intents for a burn, a deregistration with its refund
 // and a reward withdrawal and no requested output, a treasury donation, and a
 // body field the kit cannot write; a script spend the rule must chain; and a
-// battery spend given as a replayed intent, which the treatment writes byte
-// for byte as it builds the battery spend. Every built transaction passes the
+// payment intent given as a replayed intent, which the treatment writes byte
+// for byte as it builds the payment. Every built transaction passes the
 // treatment's checks and the kit's (selectState and the engine run them), its
 // four negative controls are caught, and its fee is the ledger's minimum for
 // its size and script fee.
@@ -35,9 +35,9 @@ import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
 import { encUint, encInt, encBytes, encArray, encMap } from '../../../src/history/cbor.mjs';
 import { blake2b224 } from '../../../src/history/blake2b.mjs';
-import { recipientAddress } from '../../../src/battery/recipients.mjs';
+import { recipientAddress } from '../../../src/kit/recipients.mjs';
 import { shapeState } from '../../../src/shapes/shapes.mjs';
-import { standardBattery, h10Battery, SHAPE_POOLS } from '../../../src/battery/battery.mjs';
+import { paymentIntent, nftHoldings, adaShareIntent } from '../../lib/payments.mjs';
 import { spendable, holdings } from '../../../src/state/state.mjs';
 import { settle } from '../../../src/kit/heap.mjs';
 
@@ -205,7 +205,7 @@ test('the H-12 rule chains a script spend it cannot pay in one transaction: the 
   const s1 = loadSource(T, { kind: 'shape', name: 'S1', stream: 'synthetic' });
   const t6 = s1.events.find((e) => e.kind === 'intent' && e.intent.type === 'T6' && !e.intent.invalid).intent;
   const m5 = shapeState(T, 'M5').state;
-  const pay = h10Battery(T, m5, P).find((x) => x.id === 'h10-0.9');
+  const pay = adaShareIntent(T, m5, P, [9n, 10n]);
   const intent = { ...t6, id: 'c1'.padEnd(64, '0'), time: { slot: 10, blockTime: 10, blockIndex: 0, epoch: 0, block: 10 }, requested: [...t6.requested, ...pay.requested.map((o) => ({ ...o, index: null, from: null, inflow: false }))] };
   const source = sourceOf(m5, [intent], 20);
   for (const absorb of [true, false]) {
@@ -225,10 +225,12 @@ test('the H-12 rule chains a script spend it cannot pay in one transaction: the 
   await settle();
 });
 
-test('a battery spend given as a replayed intent is written byte for byte as the battery spend', { skip }, async () => {
+test('a payment intent given as a replayed intent is written byte for byte as the payment', { skip }, async () => {
   const s3 = shapeState(T, 'S3').state;
   const m = h12Method(T);
-  for (const it of standardBattery(T, s3, P, { pools: SHAPE_POOLS }).slice(0, 6)) {
+  const nft = nftHoldings(T, s3)[0];
+  const payments = [paymentIntent(T, s3, P, { id: 'ada-payment', coin: 2000000n }), paymentIntent(T, s3, P, { id: 'ada-payment-20', coin: 20000000n }), ...(nft ? [paymentIntent(T, s3, P, { id: 'one-nft', tokens: [{ ...nft, qty: 1n }] })] : [])];
+  for (const it of payments) {
     const plain = m.build(s3, it, P, { changePolicy: 'default', absorb: true });
     const replayed = m.build(s3, { ...it, source: 'replay' }, P, { changePolicy: 'default', absorb: true });
     assert.equal(replayed.ok, plain.ok, it.id);

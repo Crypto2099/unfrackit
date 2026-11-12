@@ -6,10 +6,11 @@
 // for its own reason; CSL reads each back to the same bytes, and the kit's
 // sizes are CSL's. Every transaction, the treatment's and the kit's, pays
 // exactly the ledger's minimum fee on the ledger's size. The transactions: the planner's plan of every shape
-// under every settings variant; and every battery spend (the standard battery
-// and H-10's on the observed layout, H-10's on the tidy layout) by the H-12
-// rule with absorption on and off and by the test method under the
-// layout-preserving, single and naive change policies. A transaction the
+// under every settings variant; and a set of payments (test/lib/payments.mjs
+// paymentSet: ADA payments, one NFT and shares of the ADA balance, on the
+// observed layout and on the tidy layout) by the H-12 rule with absorption on
+// and off and by the test method under the layout-preserving, single and
+// naive change policies. A transaction the
 // treatment builds that fails either its own checks or the kit's stops the
 // run (treatment/run.mjs StopPoint), so reaching the end means none did.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
@@ -23,9 +24,9 @@ import { shapeState, shapeSettings, SHAPE_NAMES, variantsOf } from '../../src/sh
 import { planState } from '../../src/treatment/run.mjs';
 import { checkAndApply } from '../../src/kit/apply.mjs';
 import { inspectTx } from '../../src/kit/inspect.mjs';
-import { standardBattery, h10Battery, SHAPE_POOLS } from '../../src/battery/battery.mjs';
-import { balanceSuffices } from '../../src/battery/suffices.mjs';
-import { runSpend } from '../../src/battery/run.mjs';
+import { replaySuffices } from '../../src/replay/feasible.mjs';
+import { paymentSet } from '../lib/payments.mjs';
+import { runSpend } from '../lib/run-spend.mjs';
 import { h12Method } from '../../src/methods/h12.mjs';
 import { testLargestMethod } from '../../src/methods/test-largest.mjs';
 import { settle } from '../../src/kit/heap.mjs';
@@ -71,9 +72,8 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
       if (variant === 'default') tidy = p.after;
     }
     const intents = [
-      ...standardBattery(T, s, P, { pools: SHAPE_POOLS }).map((it) => [s, it]),
-      ...h10Battery(T, s, P).map((it) => [s, it]),
-      ...h10Battery(T, tidy, P, { observed: s }).map((it) => [tidy, it])
+      ...paymentSet(T, s, P).map((it) => [s, it]),
+      ...paymentSet(T, tidy, P, { observed: s }).map((it) => [tidy, it])
     ];
     for (const [state, it] of intents) {
       if (it.unsettled) {
@@ -81,7 +81,7 @@ test('every transaction built on the 21 shapes meets the kit\'s checks, and ever
         continue;
       }
       if (it.meta && it.meta.raised) counts.raised[it.meta.raised.rule] = (counts.raised[it.meta.raised.rule] || 0) + 1;
-      const suf = balanceSuffices(T, state, P, it).suffices;
+      const suf = replaySuffices(T, state, P, it).suffices;
       for (const [m, opts, label] of methods) {
         const r = await runSpend(T, { state, params: P, intent: it, method: m, opts });
         counts.spends++;

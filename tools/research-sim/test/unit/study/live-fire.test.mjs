@@ -11,7 +11,6 @@
 // cleanup; a run killed midway. The extraction tool's own reader runs over
 // these logs in live-fire-corpus.test.mjs.
 
-import { ORACLE_SETTINGS } from '../../../src/oracle/settings.mjs';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readdirSync, chmodSync } from 'node:fs';
@@ -47,7 +46,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const opts = (runId, extractionRun, extra = {}) => ({ _: [], runId, extractionRun, purpose: 'confirm the replays run on real data', expectNetwork: 'mainnet', treatment: join(root, 'treatment'), workers: '8', oracleWorkers: '4', ...extra });
+const opts = (runId, extractionRun, extra = {}) => ({ _: [], runId, extractionRun, purpose: 'confirm the replays run on real data', expectNetwork: 'mainnet', treatment: join(root, 'treatment'), workers: '8', ...extra });
 const run = (o, stub = {}, more = {}) => runLiveFire(o, { commands: liveFireStubs(stub), gate: async () => {}, manifest: () => 'stand-in manifest\n', say: () => {}, argv: ['--run-id', o.runId], ...more });
 // A run's entries: those naming its run ID, and those closing one of them.
 const simEntries = (runId) => {
@@ -111,8 +110,9 @@ test('a refused database gate is a failed query, never a live-fire run', async (
     [opts('sim-x', 'gate-1', { purpose: true }), /--purpose <text> is required/],
     [opts('sim-x', 'gate-1', { keepForDebug: 'yes' }), /--keep-for-debug takes no value/]
   ]) assert.throws(() => liveFireOptions(o), (e) => e instanceof Refusal && re.test(e.message));
-  // Worker counts have no cap: they change no record.
-  assert.deepEqual([liveFireOptions(opts('sim-x', 'gate-1', { workers: '48', oracleWorkers: '16' })).workers, liveFireOptions(opts('sim-x', 'gate-1', { workers: '48', oracleWorkers: '16' })).oracleWorkers], [48, 16]);
+  // The worker count has no cap: it changes no record. The oracle's worker count is gone.
+  assert.equal(liveFireOptions(opts('sim-x', 'gate-1', { workers: '48' })).workers, 48);
+  assert.throws(() => liveFireOptions(opts('sim-x', 'gate-1', { oracleWorkers: '4' })), (e) => e instanceof Refusal && /does not take --oracle-workers/.test(e.message));
 });
 
 test('a clean run: its stages in order on the pick, a start and an end entry in the chain, its output deleted, nothing counted', async () => {
@@ -121,7 +121,7 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
   const r = await run(opts('sim-clean', 'clean-1'), { calls });
   assert.deepEqual(calls.map(([s]) => s), [...LIVE_FIRE_STAGES]);
   const by = new Map(calls);
-  for (const s of ['history-recent', 'history-peak', 'history-snapshot']) {
+  for (const s of ['history-recent', 'history-peak']) {
     const o = by.get(s);
     assert.deepEqual(o.wallet, wallets.map((w) => w.stake_address), s);
     assert.equal(o.snapshot, SNAP.hash);
@@ -130,10 +130,7 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
     assert.equal(o.runId, `sim-clean/${s}`);
     assert.equal(o.extractionRun, undefined);
   }
-  assert.equal(by.get('battery-pools').historyRun, 'sim-clean/history-recent');
   for (const s of ['replay-recent', 'replay-peak']) assert.deepEqual([by.get(s).reps, by.get(s).collateralRule, by.get(s).workers, by.get(s).validity], ['1', 'ledger', '8', true]);
-  const b = by.get('battery');
-  assert.deepEqual([b.reps, b.oracle, b.workers, b.oracleWorkers, b.validity, b.oracleLimitMs], ['1', true, '8', '4', true, undefined]);
   for (const o of by.values()) for (const k of ['limitMs', 'answerLimitMs']) assert.equal(o[k], undefined, k);
 
   const es = simEntries('sim-clean');
@@ -144,11 +141,12 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
   assert.equal(g.outcome, 'succeeded');
   assert.ok(g.seq < st.seq);
   assert.deepEqual([st.purpose, st.test_h, st.extraction_run, st.command], ['confirm the replays run on real data', TEST_H, 'clean-1', 'live-fire --run-id sim-clean']);
-  assert.deepEqual(st.plan.repetitions, { replay: 1, battery: 1 });
-  assert.deepEqual(st.plan.watchdogs_ms, { replay: 24 * 3600000, answer: 30 * 60000, oracle: 3600000 });
+  assert.deepEqual(st.plan.repetitions, { replay: 1 });
+  assert.deepEqual(st.plan.watchdogs_ms, { replay: 24 * 3600000 });
   assert.equal('limits_ms' in st.plan, false);
-  assert.deepEqual(st.plan.oracle_budget, { candidate_sets: ORACLE_SETTINGS.maxCandidateSets, program_work: ORACLE_SETTINGS.maxProgramWork });
-  assert.deepEqual([st.plan.oracle, st.plan.validity, st.plan.workers, st.plan.oracle_workers, st.plan.stages], [true, true, 8, 4, [...LIVE_FIRE_STAGES]]);
+  assert.deepEqual([st.plan.validity, st.plan.workers, st.plan.stages], [true, 8, [...LIVE_FIRE_STAGES]]);
+  assert.deepEqual(LIVE_FIRE_STAGES, ['history-recent', 'history-peak', 'replay-recent', 'replay-peak']);
+  for (const k of ['oracle', 'oracle_budget', 'oracle_workers']) assert.equal(k in st.plan, false, k);
   assert.deepEqual(Object.keys(end), ['seq', 'prev', 'date', 'type', 'run_id', 'start_seq', 'command', 'purpose', 'test_h', 'extraction_run', 'code', 'outcome', 'error', 'run_ms', 'steps', 'checks', 'wallet_level_output']);
   assert.equal(end.start_seq, st.seq);
   assert.deepEqual([end.outcome, end.error], ['succeeded', null]);
@@ -173,15 +171,12 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
 
 test('the three checks: a validity failure, work a watchdog set aside, a history check failing, another failure', async () => {
   seedPick('mainnet', 'checks-1');
-  const v = await run(opts('sim-validity', 'checks-1'), { validityFailed: { battery: 2 }, stops: { 'replay-peak': 1 } });
+  const v = await run(opts('sim-validity', 'checks-1'), { validityFailed: { 'replay-recent': 2 }, stops: { 'replay-peak': 1 } });
   const e1 = v.entry;
   assert.equal(e1.outcome, 'failed');
-  assert.equal(e1.error, 'stage battery: a validity check failed');
-  assert.deepEqual(e1.steps.find((s) => s.name === 'battery'), { name: 'battery', ok: false, ms: e1.steps.find((s) => s.name === 'battery').ms, error_class: 'check' });
+  assert.equal(e1.error, 'stage replay-recent: a validity check failed');
+  assert.deepEqual(e1.steps.find((s) => s.name === 'replay-recent'), { name: 'replay-recent', ok: false, ms: e1.steps.find((s) => s.name === 'replay-recent').ms, error_class: 'check' });
   assert.deepEqual(e1.checks, { every_intent_parsed: true, every_built_transaction_passed_ledger_checks: false, work_set_aside: true });
-  // An oracle call the watchdog stopped is work set aside too.
-  const o = await run(opts('sim-oracle-stop', 'checks-1'), { oracleStops: { battery: 1 } });
-  assert.equal(o.entry.checks.work_set_aside, true);
   assert.ok(!JSON.stringify(e1).includes('"failed":2'));
   const h = await run(opts('sim-intent', 'checks-1'), { throws: { stage: 'history-peak', error: new IntentCheck('transaction ' + 'ab'.repeat(32) + ': an output the intent cannot place') } });
   assert.deepEqual(h.entry.steps.map((s) => [s.name, s.ok, s.error_class]), [['history-recent', true, null], ['history-peak', false, 'history-check']]);
@@ -239,7 +234,7 @@ test('deletion on success and on failure; --keep-for-debug keeps a failed run un
   assert.ok(!existsSync(runDir('mainnet', 'sim-keep')));
   assert.equal(keptRun(logEntries('mainnet'), 'sim-keep'), false);
   // A deletion that fails is logged as failed.
-  const stuck = await run(opts('sim-stuck', 'keep-1'), { readOnly: 'battery' });
+  const stuck = await run(opts('sim-stuck', 'keep-1'), { readOnly: 'replay-peak' });
   assert.match(stuck.entry.wallet_level_output, /^deletion failed: /);
   chmodSync(runDir('mainnet', 'sim-stuck'), 0o700);
   const c2 = cleanupLiveFire({ _: [], cleanup: true, runId: 'sim-stuck', network: 'mainnet' });

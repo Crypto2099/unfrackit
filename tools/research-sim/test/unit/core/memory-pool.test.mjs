@@ -164,10 +164,6 @@ test('out of memory: a third death fails the job with a message naming it, and t
   assert.equal(d.error, 'wallet S1 observed/default csl-lf change default collateral ledger repetition 2: its worker died three times, the last: the worker was killed by SIGKILL');
   assert.ok(ok.ok);
   assert.equal(pool.stats.outOfMemoryReruns, 2);
-  // The battery counts deaths at each run.
-  const b = await pool.battery({ counter: counter(), est: 100, source: { kind: 'shape', name: 'M2' }, runs: 3, attempts: [{ die: 1 }] });
-  assert.equal(b.ok, false);
-  assert.equal(b.error, 'wallet M2: its worker died three times at run 1, the last: the worker exited with code 3');
 }, { size: 2, memoryBudget: 1000 * MiB }));
 
 test('the estimate: a wallet\'s rises to the peak measured when a job passed it, and only that wallet\'s', () => withPool(async (pool) => {

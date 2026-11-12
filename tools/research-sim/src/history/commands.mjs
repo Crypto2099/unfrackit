@@ -2,7 +2,7 @@
 // Copyright 2026 Adam K. Dean
 
 // The commands that read a database: history files and snapshot states, and
-// the census, near-cap, collateral and battery-pool reports.
+// the census, near-cap and collateral reports.
 //
 // Every command connects read only, reads mainnet only through the gate
 // (db.mjs), and writes only under the private run directory (paths.mjs).

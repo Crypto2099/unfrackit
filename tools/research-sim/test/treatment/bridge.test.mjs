@@ -32,7 +32,10 @@ import { SYNTHETIC_PARAMS } from '../../src/kit/params.mjs';
 import { shapeState, shapeSettings, HARNESS_SHAPES, variantsOf } from '../../src/shapes/shapes.mjs';
 import { planState, selectState } from '../../src/treatment/run.mjs';
 import { checkAndApply } from '../../src/kit/apply.mjs';
-import { balanceSuffices, selectAdapterFor } from '../../src/battery/suffices.mjs';
+import { replaySuffices } from '../../src/replay/feasible.mjs';
+import { adapterFor } from '../../src/treatment/wallet.mjs';
+import { outputBytes } from '../../src/kit/assemble.mjs';
+import { ZERO_IMPLICIT } from '../../src/state/intent.mjs';
 import { treatmentParams } from '../../src/treatment/bridge.mjs';
 import { inspectTx } from '../../src/kit/inspect.mjs';
 import { settle } from '../../src/kit/heap.mjs';
@@ -176,7 +179,8 @@ function harnessBattery(utxos, adapter, EXT, payee) {
   return reqs;
 }
 
-const asIntent = (request) => ({ requested: request.outputs.map((o) => ({ address: o.address, coin: o.coin, assets: o.tokens })) });
+const selectAdapterFor = (T, state, tp) => adapterFor(T, state.changeAddress, tp, 'select');
+const asIntent = (request) => ({ implicit: ZERO_IMPLICIT, fixed: null, requested: request.outputs.map((o) => ({ cbor: outputBytes(T, { address: o.address, coin: o.coin, assets: o.tokens }).toString('hex'), address: o.address, coin: o.coin, assets: o.tokens })) });
 
 function rungsOf(utxos, settings) {
   const s = T.planner.mergeSettings(settings);
@@ -204,7 +208,7 @@ test('the H-12 rule\'s battery results and "the balance suffices" equal a fresh 
     const adapter = selectAdapterFor(T, s.state, tp);
     const utxos = T.adapter.decodeWallet(s.hex.map((h) => T.adapter.decodeUtxo(h)));
     for (const { label, request } of harnessBattery(utxos, adapter, EXT, payee)) {
-      const suf = balanceSuffices(T, s.state, P, asIntent(request), { settings });
+      const suf = replaySuffices(T, s.state, P, asIntent(request), { settings });
       for (const absorb of [false, true]) {
         const row = select2.rows.find((r) => r.shape === name && r.request === label && r.absorb === absorb);
         assert.ok(row, `${name}: ${label}, absorb ${absorb} in the harness's results`);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The worker process every replay and battery spend runs in, forked by
+// The worker process every replay runs in, forked by
 // replay/pool.mjs with an IPC channel; its argument is the JSON of
 // { treatmentDir, pinsPath }. CSL's calls are synchronous, so work that hangs
 // can only be stopped by killing its process; the parent does that when a
@@ -15,11 +15,7 @@
 // spool's counts, the refusal, the validity summary and H-6's fields, never
 // the records themselves. Messages:
 //   in   { id, task: 'replay', job, recordMachineErrors }
-//        { id, task: 'battery', job }  (job.recordMachineThrough)
 //   out  { event: 'ready' }  the treatment is loaded
-//        { id, event: 'answering', spend }  a method is about to answer
-//        { id, event: 'answered', spend }   it returned
-//        { id, event: 'spend', spend, result }  a battery spend's result
 //        { id, event: 'done', result, memory }
 //        { id, event: 'error', error, stop, machine, memory }
 //        { event: 'fatal', error }  an uncaught exception; the worker exits
@@ -35,7 +31,6 @@ import { loadTreatment } from '../treatment/bridge.mjs';
 import { makeMethod } from '../methods/registry.mjs';
 import { replay } from './engine.mjs';
 import { loadSource } from './source.mjs';
-import { batteryWallet } from '../battery/runner-core.mjs';
 import { spoolJob } from './run.mjs';
 import { StopPoint } from '../treatment/run.mjs';
 import { recordMachineErrors, isMachineError } from '../kit/machine.mjs';
@@ -59,7 +54,7 @@ const csl = cslMemory(T);
 
 process.on('message', async ({ id, task, job, recordMachineErrors: record = false }) => {
   try {
-    recordMachineErrors(task === 'replay' ? record : job.recordMachineThrough !== null && job.recordMachineThrough !== undefined);
+    recordMachineErrors(record);
     const source = loadSource(T, job.source);
     if (task === 'replay') {
       if (!job.spool) throw new Error('a replay job names its spool files');
@@ -67,14 +62,6 @@ process.on('message', async ({ id, task, job, recordMachineErrors: record = fals
       const result = await replay(T, source.params, source, { ...job, method });
       result.method = { name: method.name, version: method.version, deterministic: method.deterministic };
       send({ id, event: 'done', result: spoolJob(result, job), memory: memoryReport(csl) });
-    } else if (task === 'battery') {
-      const hooks = {
-        answering: (spend) => send({ id, event: 'answering', spend }),
-        answered: (spend) => send({ id, event: 'answered', spend }),
-        result: (spend, result) => send({ id, event: 'spend', spend, result })
-      };
-      const result = await batteryWallet(T, source, job, hooks);
-      send({ id, event: 'done', result, memory: memoryReport(csl) });
     } else {
       throw new Error(`unknown task ${task}`);
     }

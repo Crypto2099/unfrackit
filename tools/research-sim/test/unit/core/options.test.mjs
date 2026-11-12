@@ -23,10 +23,9 @@ const refused = (argv, command, re) => assert.throws(() => parseArgs(argv, comma
 function sample(key, command) {
   if (key === 'plan') return command === 'study' ? 'synthetic' : 'recent';
   if (key === 'fromStudy') return 'random';
-  if (key === 'methods') return 'test';
   if (key === 'bytes') return 'tx_cbor';
   if (key === 'window') return 'blocks:10-20';
-  if (['workers', 'oracleWorkers', 'reps', 'testReps', 'days', 'batch'].includes(key)) return '3';
+  if (['workers', 'reps', 'testReps', 'days', 'batch'].includes(key)) return '3';
   if (key === 'collateralRule') return 'ledger';
   if (key === 'shard') return '1/3';
   if (key === 'memoryBudget') return '2.5';
@@ -83,9 +82,8 @@ test('hash and help take no option', () => {
 test('an unknown option: a near miss is suggested, and an = is explained', () => {
   refused(['--run-id', 'x', '--from-studdy'], 'census', /unknown option --from-studdy for census; did you mean --from-study\?$/);
   refused(['--test-rep', '1'], 'replay', /unknown option --test-rep for replay; did you mean --test-reps\?/);
-  refused(['--rep', '1'], 'battery', /unknown option --rep for battery; did you mean --reps\?/);
-  refused(['--oracle-worker', '4'], 'battery', /did you mean --oracle-workers\?/);
-  refused(['--workers=4'], 'battery', /unknown option --workers=4 for battery; did you mean --workers\?; write the option and its value as two words$/);
+  refused(['--rep', '1'], 'replay', /unknown option --rep for replay; did you mean --reps\?/);
+  refused(['--workers=4'], 'replay', /unknown option --workers=4 for replay; did you mean --workers\?; write the option and its value as two words$/);
   refused(['--set=a=1'], 'history', /write the option and its value as two words/);
   refused(['--qqqqqqq'], 'history', /unknown option --qqqqqqq for history$/);
 });
@@ -107,7 +105,6 @@ test('a flag given a value leaves a stray word, which is refused', () => {
 test('an option given twice is refused, flags included, except the repeatable ones', () => {
   refused(['--run-id', 'a', '--run-id', 'b'], 'history', /--run-id given more than once for history/);
   refused(['--validity', '--validity'], 'replay', /--validity given more than once for replay/);
-  refused(['--oracle', '--oracle'], 'battery', /--oracle given more than once/);
   refused(['--from-study', '--from-study'], 'near-cap', /--from-study given more than once/);
   refused(['--keep-for-debug', '--keep-for-debug'], 'live-fire', /given more than once/);
   assert.deepEqual(COMMANDS.flatMap((c) => COMMAND_OPTIONS[c].repeat).filter((v, i, a) => a.indexOf(v) === i).sort(), ['history', 'set', 'wallet', 'window']);
@@ -138,9 +135,7 @@ test('--from-study takes random or all for history and study, and is a flag for 
   }
 });
 
-test('closed values: methods, bytes, plan and window', () => {
-  assert.equal(parseArgs(['--methods', 'study'], 'battery').methods, 'study');
-  refused(['--methods', 'tset'], 'battery', /--methods takes study \| test, not "tset" for battery/);
+test('closed values: bytes, plan and window', () => {
   for (const c of ['history', 'census', 'near-cap', 'collateral', 'study', 'live-fire']) {
     assert.equal(parseArgs(['--bytes', 'immutable'], c).bytes, 'immutable');
     refused(['--bytes', 'cbor'], c, /--bytes takes tx_cbor \| immutable/);
@@ -158,7 +153,7 @@ test('closed values: methods, bytes, plan and window', () => {
 });
 
 test('whole-number options: positive whole numbers only', () => {
-  const byCommand = { replay: ['workers', 'testReps', 'reps'], battery: ['workers', 'oracleWorkers', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'reps'], 'live-fire': ['workers', 'oracleWorkers'] };
+  const byCommand = { replay: ['workers', 'testReps', 'reps'], collateral: ['days', 'batch'], study: ['workers', 'reps'], 'live-fire': ['workers'] };
   for (const [command, keys] of Object.entries(byCommand)) {
     for (const k of keys) {
       assert.equal(parseArgs([flagOf(k), '12'], command)[k], '12');
@@ -167,12 +162,12 @@ test('whole-number options: positive whole numbers only', () => {
   }
 });
 
-test('--memory-budget: a positive number of GiB, for replay, battery and study, and a machine option', () => {
-  for (const command of ['replay', 'battery', 'study']) {
+test('--memory-budget: a positive number of GiB, for replay and study, and a machine option', () => {
+  for (const command of ['replay', 'study']) {
     for (const v of ['16', '2.5', '.5', '0.25']) assert.equal(parseArgs(['--memory-budget', v], command).memoryBudget, v);
     for (const bad of ['0', '0.0', '-1', 'x', '', '1e3', '1,5', '2GiB']) refused(['--memory-budget', bad], command, new RegExp(`--memory-budget takes a positive number of GiB, not ${JSON.stringify(bad).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} for ${command}`));
   }
-  for (const command of COMMANDS.filter((c) => !['replay', 'battery', 'study'].includes(c))) refused(['--memory-budget', '4'], command, /unknown option --memory-budget/);
+  for (const command of COMMANDS.filter((c) => !['replay', 'study'].includes(c))) refused(['--memory-budget', '4'], command, /unknown option --memory-budget/);
   assert.ok(MACHINE_OPTIONS.includes('memoryBudget'));
   assert.deepEqual([memoryBudgetOf(undefined), memoryBudgetOf('2'), memoryBudgetOf('0.5'), memoryBudgetOf(1.5)], [null, 2 * 1024 ** 3, 512 * 1024 ** 2, 1.5 * 1024 ** 3]);
 });
@@ -182,9 +177,8 @@ test('a value never begins with --', () => {
 });
 
 test('an option an earlier version took is refused with the reason, wherever it appears', () => {
-  for (const c of ['battery', 'study', 'replay']) refused(['--oracle-limit-ms', '5000'], c, /--oracle-limit-ms is gone: the oracle stops on its work budget/);
   // The time limits: no time limit decides a result.
-  for (const c of ['replay', 'study', 'battery', 'live-fire']) {
+  for (const c of ['replay', 'study', 'live-fire']) {
     refused(['--limit-ms', '300000'], c, /--limit-ms is gone: no time limit decides a result/);
     refused(['--answer-limit-ms', '60000'], c, /--answer-limit-ms is gone: no time limit decides a result/);
   }
@@ -231,4 +225,15 @@ test('an unknown command still prints the usage and exits 2', () => {
   const r = spawnSync(process.execPath, [CLI, 'nope'], { encoding: 'utf8' });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /^unknown command nope\n/);
+});
+
+test('the snapshot battery, its pools and the oracle are gone: no command and no option names them', () => {
+  assert.deepEqual(COMMANDS.filter((c) => c === 'battery' || c === 'battery-pools'), []);
+  for (const c of ['battery', 'battery-pools']) refused([], c, /unknown command/);
+  for (const c of ['replay', 'study', 'live-fire']) {
+    refused(['--oracle-workers', '4'], c, /unknown option --oracle-workers/);
+    refused(['--oracle'], c, /unknown option --oracle/);
+  }
+  const all = new Set(COMMANDS.flatMap((c) => [...COMMAND_OPTIONS[c].flags, ...COMMAND_OPTIONS[c].values, ...COMMAND_OPTIONS[c].repeat]));
+  for (const gone of ['oracle', 'oracleWorkers', 'oracleSettings', 'oracleLimitMs', 'pools', 'methods', 'historyRun']) assert.equal(all.has(gone), false, gone);
 });

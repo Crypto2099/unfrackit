@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { record, assertClean, scrubText, RunOutput, IdentifierInRecord } from '../../../src/out/records.mjs';
-import { windowPlan, mergePlan, expandJobs, testPlan, STUDY_ROLES, batteryPlan } from '../../../src/arms/plan.mjs';
+import { windowPlan, mergePlan, expandJobs, testPlan, STUDY_ROLES } from '../../../src/arms/plan.mjs';
 import { replayJobOpts } from '../../../src/replay/run.mjs';
 import { armSettings, VARIANTS } from '../../../src/arms/arms.mjs';
 import { eligibleCollateral, collateralAvailability, totalCollateralFor } from '../../../src/replay/collateral.mjs';
@@ -107,8 +107,6 @@ test('run plans: the refocused arms, the same in both windows, 46 jobs per walle
   assert.throws(() => windowPlan('recent', { reps: 0 }), /positive whole number/);
   assert.throws(() => windowPlan('snapshot'), /no replay plan/);
   assert.ok(testPlan().length > 20);
-  const b = batteryPlan();
-  assert.deepEqual(b.map((m) => [m.name, m.repetitions]), [['csl-lf', 1], ['csl-ri', 30], ['cjs-rrri', 30], ['evo-lf', 1], ['csl-lf-pure', 1], ['csl-ri-pure', 30], ['unfrackit-h12', 1]]);
 });
 
 test('run plans: L/own and L/layout of one repetition draw the same seed; the rule\'s jobs carry the absorption setting and differ in their keys', () => {
@@ -263,7 +261,7 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
   const { inspectTx } = await import('../../../src/kit/inspect.mjs');
   const { utxoFromOutput } = await import('../../../src/state/utxo.mjs');
   const { addressBytes } = await import('../../../src/history/address.mjs');
-  const { recipientAddress } = await import('../../../src/battery/recipients.mjs');
+  const { recipientAddress } = await import('../../../src/kit/recipients.mjs');
   const { blake2b224, blake2b256 } = await import('../../../src/history/blake2b.mjs');
   const { encBytes, encArray, encTag } = await import('../../../src/history/cbor.mjs');
   const { ZERO_IMPLICIT } = await import('../../../src/state/intent.mjs');
@@ -296,7 +294,7 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
     meta: null
   };
   const sourceOf = (start) => ({ wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start, events: [{ kind: 'intent', txId: 1, intent }], arrival: new Map(), windowStart: 0, windowEnd: 20, params: SP });
-  const LARGEST_FIRST = new Set(['csl-lf', 'csl-lf-pure', 'evo-lf', 'test-largest-first']);
+  const LARGEST_FIRST = new Set(['csl-lf', 'evo-lf', 'test-largest-first']);
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);
     for (const name of [...BASELINE_METHODS, 'test-largest-first']) {

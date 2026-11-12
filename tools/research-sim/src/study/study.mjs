@@ -25,9 +25,7 @@
 //              gate (history/db.mjs), elsewhere --extraction-run.
 // The two replay stages run the refocused arms (arms/plan.mjs): per library
 // its own change and UnFrack.It's change on its inputs, and UnFrack.It's
-// H-12 rule with absorption on and off. The study's snapshot battery, its
-// oracle and the stages only the battery read (history-snapshot and
-// battery-pools) are not in any plan; the battery command remains.
+// H-12 rule with absorption on and off.
 // The database stages come first, so the database is needed only at the
 // start. The fidelity check reads the recent and peak history files of the
 // exploration split (and those that carry no split, as on a test network);
@@ -144,19 +142,16 @@ export const PLANS = Object.freeze({
 });
 
 // The command each stage runs: the study's stages and the live-fire
-// command's, which still runs the snapshot battery (study/live-fire.mjs).
+// command's.
 export const STAGE_COMMAND = Object.freeze({
   'history-recent': 'history',
   'history-peak': 'history',
-  'history-snapshot': 'history',
   census: 'census',
   'near-cap': 'near-cap',
   collateral: 'collateral',
   fidelity: 'fidelity',
-  'battery-pools': 'battery-pools',
   'replay-recent': 'replay',
-  'replay-peak': 'replay',
-  battery: 'battery'
+  'replay-peak': 'replay'
 });
 
 // Options by use (the lists are in ../options.mjs). Paths are made absolute
@@ -458,7 +453,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     if (!resuming) writeJson(headerPath, header);
     const done = ended(StudyLog.entries(logPath));
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), oracleWorkers: 0, memoryBudgetBytes: memoryBudgetOf(o.memoryBudget) }) });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), memoryBudgetBytes: memoryBudgetOf(o.memoryBudget) }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {

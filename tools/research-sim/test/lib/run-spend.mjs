@@ -1,32 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// One battery spend by one method: the method's answer, the ledger kit's
-// checks on every transaction in order, and, after the spend, the frozen
-// planner's plan for the wallet's resulting state at its default settings,
-// whose fee, transaction count and the post-spend UTxO count are recorded
-// (the spend-plus-tidy cost of H-12).
+// One payment by one method, for the treatment tests: the method's answer, the
+// ledger kit's checks on every transaction in order, and, after the payment,
+// the frozen planner's plan for the wallet's resulting state, whose fee,
+// transaction count and the post-payment UTxO count are returned.
 //
 // A method's exception is a build failure of class 'other' with its text; a
 // StopPoint (the treatment and the kit disagree) stops the run, and an error
-// the machine can cause is thrown on unless this attempt records them
-// (kit/machine.mjs). The CSL heap
-// is settled before each spend (kit/heap.mjs), and the method's time is
+// the machine can cause is thrown on (kit/machine.mjs). The CSL heap is
+// settled before each payment (kit/heap.mjs), and the method's time is
 // measured after it.
 
-import { checkAndApply } from '../kit/apply.mjs';
-import { planState, StopPoint } from '../treatment/run.mjs';
-import { checkResult, checkOptions } from '../methods/contract.mjs';
-import { CLASSES } from '../kit/check.mjs';
-import { settle } from '../kit/heap.mjs';
-import { passMachineErrors } from '../kit/machine.mjs';
+import { checkAndApply } from '../../src/kit/apply.mjs';
+import { planState, StopPoint } from '../../src/treatment/run.mjs';
+import { checkResult, checkOptions } from '../../src/methods/contract.mjs';
+import { CLASSES } from '../../src/kit/check.mjs';
+import { settle } from '../../src/kit/heap.mjs';
+import { passMachineErrors } from '../../src/kit/machine.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
-// opts: the method options; tidySettings: the planner settings of the plan
-// after the spend (the defaults in the study); notWallet: as
-// state/state.mjs applyTx takes it; validity: an accumulator of
-// kit/validity.mjs, fed with the spend's transactions.
 export async function runSpend(T, { state, params, intent, method, opts, tidySettings = {}, notWallet = null, validity = null }) {
   checkOptions(opts);
   await settle();

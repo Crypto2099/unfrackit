@@ -43,12 +43,8 @@ import { record } from '../out/records.mjs';
 import { spoolPaths, spoolRecords, Frontier } from '../out/spool.mjs';
 import { loadSource } from './source.mjs';
 import { expandJobs } from '../arms/plan.mjs';
-import { batteryRuns, batterySpends } from '../battery/runner-core.mjs';
-import { countPopulation } from '../battery/population.mjs';
-import { SHAPE_POOLS } from '../battery/battery.mjs';
 import { CONFIRMATORY_RULES } from './collateral.mjs';
 import { sumValidity } from '../kit/validity.mjs';
-import { ORACLE_SETTINGS, admitsIncumbent } from '../oracle/settings.mjs';
 import { walletMemory } from './pool.mjs';
 
 const MONTH = 30 * 86400;
@@ -369,166 +365,9 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
   return out.finish();
 }
 
-// The unseeded runs kept beside a reference: per method, in the order the
-// runs came, { name, runs, below, least }, below counting the runs whose fee
-// is under the reference's fee, or every run when the reference has none.
-export function unseededBeside(runs, refFee) {
-  const by = new Map();
-  for (const r of runs) {
-    const fee = BigInt(r.fee);
-    if (!by.has(r.name)) by.set(r.name, { name: r.name, runs: 0, below: 0, least: fee });
-    const m = by.get(r.name);
-    m.runs++;
-    if (refFee === null || refFee === undefined || fee < BigInt(refFee)) m.below++;
-    if (fee < m.least) m.least = fee;
-  }
-  return [...by.values()];
-}
-
 // One log note per failure of a validity summary, naming the record's key and
 // the transaction's position.
 export function noteValidity(out, key, v) {
   for (const f of v.failures || []) out.note({ event: 'validity failure', ...key, ...f });
   if (v.failed > (v.failures || []).length) out.note({ event: 'validity failures not detailed', ...key, count: v.failed - (v.failures || []).length });
-}
-
-// The batteries over a set of wallets: every run's result as a 'battery'
-// record (an H-12 run also as 'h12'), every answer having run to completion
-// (the pool's watchdog stops an answer that hangs, and the wallet's battery
-// resumes at it in a fresh worker; replay/pool.mjs), and, when an oracle is
-// given, its reference per wallet, standard-battery spend and distinct
-// oracle change policy, with the single
-// transaction of every run under that policy by a method the oracle's
-// incumbents rule admits as an incumbent (under the default,
-// 'seeded-methods', the seeded methods'). The passing runs of the other
-// methods are kept beside the reference (`unseeded`: per method, the runs,
-// how many have a fee below the reference's, every one of them when the
-// reference has no fee, and the least fee) and never seed it. The hook:
-//   oracle.policyOf(methodName, changePolicy)  the oracle's change policy of
-//       a method's change, or null when the oracle has none for it
-//   oracle.reference(state, intent, params, policy, { incumbents })
-//       the reference for one spend, run however the oracle runs it;
-//       incumbents are [{ name, seeded, walletInputs, bytes, fee }]
-//   oracle.settings  the oracle's settings (the defaults when absent)
-// The oracle prices the standard battery's spends only. The wallet's state and
-// battery intents are rebuilt in this thread for it; both are deterministic,
-// so they are the worker's.
-// A wallet carries `population` ({ kind, batteries: { standard, h10 } },
-// battery/population.mjs): its job builds only those batteries, a wallet with
-// none starts no job, and a wallet of the recent random sample whose snapshot
-// state holds no native asset is counted in `tokenless` (not filtered). A
-// wallet with the standard battery also gets one 'snapshot-plan' record.
-// watchdogMs: the answer watchdog (the pool's default when absent).
-export async function runBatteries(T, pool, { wallets, methods, out, watchdogMs, pools, oracle = null, tidySettings = {}, validity = false }) {
-  const totals = { wallets: 0, runs: 0, oracle: 0, tokenless: 0, population: countPopulation(wallets) };
-  const validities = [];
-  const oracleRules = oracle ? oracle.settings || ORACLE_SETTINGS : null;
-  // One task per wallet: its battery job, then its oracle calls. Up to
-  // pool.size tasks are in flight, so a wallet's oracle calls overlap the
-  // other wallets' methods. A task buffers its records; they are written in
-  // wallet order, a wallet's only after every earlier wallet's, so a repeated
-  // run writes the same records in the same order whatever the pool size.
-  const buffers = wallets.map(() => null);
-  let flushed = 0;
-  const flush = () => {
-    while (flushed < wallets.length && buffers[flushed]) {
-      for (const rec of buffers[flushed]) out.write(rec);
-      buffers[flushed] = null;
-      flushed++;
-    }
-  };
-  const task = async (wi) => {
-    const w = wallets[wi];
-    if (!(w.population ? w.population.batteries.standard || w.population.batteries.h10 : true)) {
-      buffers[wi] = [];
-      flush();
-      return;
-    }
-    const recs = [];
-    const emit = (rec) => recs.push(rec);
-    const source = loadSource(T, w.spec);
-    if (source.split === 'confirmation') out.note({ event: 'confirmation-split wallet run', wallet: source.wallet, analysisFreezeTx: source.analysisFreezeTx });
-    const keyOf = (res) => ({ wallet: source.wallet, window: 'snapshot', arm: res.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: res.method.name, change: res.opts.changePolicy, collateral: 'none-needed', repetition: res.repetition });
-    const byK = new Map();
-    const population = w.population || { kind: 'no-sample', batteries: { standard: true, h10: true } };
-    const job = { source: w.spec, memory: walletMemory(source), methods, batteries: population.batteries, pools, tidySettings, validity };
-    const r = await pool.battery(job, {
-      watchdogMs,
-      note: (e) => out.note({ ...e, wallet: source.wallet }),
-      onSpend: (k, res) => {
-        totals.runs++;
-        byK.set(k, res);
-      }
-    });
-    if (!r.ok) throw new Error(`battery failed for wallet ${source.wallet}: ${r.error}`);
-    totals.wallets++;
-    const runs = batteryRuns(r.result.spends.map((s) => ({ n: s.n, battery: s.battery, intent: s.unsettled ? null : { id: s.id } })), methods);
-    if (population.batteries.standard) {
-      // The snapshot plan of a wallet that runs the standard battery, for the
-      // recoverable-ADA measure: the default plan's transactions and fee, and
-      // the coin and minimum ADA over the token UTxOs it can spend, before and
-      // after it.
-      const L = r.result.tidyLedger;
-      emit(record('snapshot-plan', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'snapshot-plan', change: 'none', collateral: 'none-needed', repetition: 1 }, { txs: r.result.tidyPlan.txs, fee: r.result.tidyPlan.fee, tokenUtxosBefore: L.before.utxos, coinBefore: L.before.coin, minimumBefore: L.before.minimum, tokenUtxosAfter: L.after.utxos, coinAfter: L.after.coin, minimumAfter: L.after.minimum }));
-      if (population.kind === 'standard-and-h10' && !source.start.some((u) => u.assets.length)) totals.tokenless++;
-    }
-    const spendOf = new Map(r.result.spends.map((s) => [s.n, s]));
-    for (const run of runs) {
-      const res = byK.get(run.k);
-      if (!res) continue;
-      const { incumbent, k: _k, id, method, opts, repetition: _r, spend: _n, ...rest } = res;
-      if (res.validity) {
-        validities.push(res.validity);
-        noteValidity(out, keyOf(res), res.validity);
-      }
-      const fields = { spend: id, absorb: opts.absorb ?? null, methodVersion: method.version, ...rest };
-      emit(record('battery', keyOf(res), fields));
-      if (method.name === 'unfrackit-h12') emit(record('h12', keyOf(res), { spend: id, absorb: opts.absorb, completed: res.ok, chain: res.ok ? res.answer === 'chain' : null, txs: res.txs ?? null, chainFee: res.fee ?? null, tidyFee: res.tidyFee ?? null, utxosAfter: res.utxosAfter ?? null, suffices: res.suffices }));
-    }
-    for (const s of r.result.spends) if (s.unsettled) emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: s.layout === 'tidy' ? 'tidy-once' : 'observed', variant: 'default', method: 'none', change: 'none', collateral: 'none-needed', repetition: 1 }, { spend: s.id, unsettled: s.unsettled }));
-    if (oracle) {
-      const built = batterySpends(T, source, source.params, { pools: job.pools || SHAPE_POOLS, batteries: population.batteries });
-      const groups = new Map();
-      for (const run of runs) {
-        const res = byK.get(run.k);
-        const s = spendOf.get(run.spend);
-        if (s.layout !== 'observed' || s.battery !== 'standard') continue;
-        const policy = oracle.policyOf(run.method, run.opts.changePolicy);
-        if (!policy) continue;
-        const g = `${run.spend}|${policy}`;
-        if (!groups.has(g)) groups.set(g, { spend: run.spend, policy, incumbents: [], unseeded: [] });
-        if (!res || !res.ok || !res.incumbent) continue;
-        if (admitsIncumbent(oracleRules, res.method)) groups.get(g).incumbents.push({ name: res.method.name, seeded: res.method.seeded === true, ...res.incumbent });
-        else groups.get(g).unseeded.push({ name: res.method.name, fee: res.incumbent.fee });
-      }
-      // The calls run together, so that an oracle with several workers uses
-      // them; the records are written in group order.
-      const list = [...groups.values()];
-      const refs = await Promise.all(list.map((g) => oracle.reference(built.observed, built.spends[g.spend].intent, source.params, g.policy, { incumbents: g.incumbents })));
-      list.forEach((g, i) => {
-        totals.oracle++;
-        emit(record('battery', { wallet: source.wallet, window: 'snapshot', arm: 'observed', variant: 'default', method: 'oracle', change: g.policy, collateral: 'none-needed', repetition: 1 }, { spend: built.spends[g.spend].intent.id, incumbents: g.incumbents.length, unseeded: unseededBeside(g.unseeded, refs[i] ? refs[i].fee : null), oracle: refs[i] }));
-      });
-    }
-    buffers[wi] = recs;
-    flush();
-  };
-  // A failure stops the run: no further wallet starts, the tasks in flight
-  // finish, and the first error is thrown.
-  let next = 0;
-  let failure = null;
-  const lane = async () => {
-    while (!failure && next < wallets.length) {
-      const wi = next++;
-      try {
-        await task(wi);
-      } catch (e) {
-        failure = failure || e;
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(pool.size, wallets.length)) }, lane));
-  if (failure) throw failure;
-  if (validity) totals.validity = sumValidity(validities);
-  return totals;
 }

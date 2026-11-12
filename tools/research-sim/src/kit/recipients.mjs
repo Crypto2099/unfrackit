@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// External recipients of the battery spends (setting recipients
+// External recipients of the synthetic shapes and the survey (setting recipients
 // 'synthetic-base'): base addresses with a key payment part and a key stake
 // part (CIP-0019, "Shelley Addresses", header type 0), 57 bytes, each part the
 // BLAKE2b-224 of a fixed text, so no key controls them. Recipient i has its own

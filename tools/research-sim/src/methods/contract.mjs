@@ -14,8 +14,7 @@
 //            seed. False for a method whose draws come from a generator no
 //            caller can seed (cardano-serialization-lib's
 //            RandomImproveMultiAsset, csl.mjs), whose runs cannot be
-//            repeated; the oracle takes incumbents only from seeded methods
-//            (oracle/settings.mjs incumbents)
+//            repeated
 //
 //   opts     { seed, changePolicy ('default' | 'layout' | 'single' |
 //            'naive'), collateralRule, absorb, collateral, random }

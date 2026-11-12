@@ -140,7 +140,7 @@ test('payments carrying a network id and an empty auxiliary data replay without 
   const { inspectTx } = await import('../../../src/kit/inspect.mjs');
   const { outputBytes } = await import('../../../src/kit/assemble.mjs');
   const { SYNTHETIC_PARAMS: P } = await import('../../../src/kit/params.mjs');
-  const { recipientAddress } = await import('../../../src/battery/recipients.mjs');
+  const { recipientAddress } = await import('../../../src/kit/recipients.mjs');
   const { shapeState } = await import('../../../src/shapes/shapes.mjs');
   const ADA = 1000000n;
   const state = shapeState(T, 'S8').state;

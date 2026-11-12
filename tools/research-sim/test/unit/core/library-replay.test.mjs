@@ -23,7 +23,7 @@ import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { parseAddress, addressBytes } from '../../../src/history/address.mjs';
 import { encUint, encInt, encBytes, encArray, encMap } from '../../../src/history/cbor.mjs';
 import { blake2b224 } from '../../../src/history/blake2b.mjs';
-import { recipientAddress } from '../../../src/battery/recipients.mjs';
+import { recipientAddress } from '../../../src/kit/recipients.mjs';
 import { shapeState } from '../../../src/shapes/shapes.mjs';
 import { spendable, holdings } from '../../../src/state/state.mjs';
 

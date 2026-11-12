@@ -7,8 +7,8 @@
 
 import { formatHashList } from './hash.mjs';
 import { parseArgs, cmdHistory } from './history/commands.mjs';
-import { cmdCensus, cmdNearCap, cmdCollateral, cmdBatteryPools } from './history/reports.mjs';
-import { cmdReplay, cmdBattery, cmdPlanShards } from './replay/commands.mjs';
+import { cmdCensus, cmdNearCap, cmdCollateral } from './history/reports.mjs';
+import { cmdReplay, cmdPlanShards } from './replay/commands.mjs';
 import { cmdMergeStage } from './out/merge.mjs';
 import { cmdFidelity } from './fidelity/fidelity.mjs';
 import { cmdStudy } from './study/study.mjs';
@@ -20,11 +20,9 @@ const COMMANDS = {
   census: async (o) => report(await cmdCensus(o)),
   'near-cap': async (o) => report(await cmdNearCap(o)),
   collateral: async (o) => report(await cmdCollateral(o)),
-  'battery-pools': async (o) => report(await cmdBatteryPools(o)),
   replay: async (o) => report(await cmdReplay(o)),
   'plan-shards': async (o) => report(await cmdPlanShards(o)),
   'merge-stage': async (o) => report(await cmdMergeStage(o)),
-  battery: async (o) => report(await cmdBattery(o)),
   fidelity: async (o) => report(await cmdFidelity(o)),
   study: async (o) => report(await cmdStudy(o)),
   'live-fire': async (o, argv) => report(await cmdLiveFire(o, { argv })),
@@ -38,11 +36,9 @@ const HELP = `research-sim <command> [options]
   census           the H-8 census over a set of wallets at the snapshot
   near-cap         near-cap prevalence at every epoch boundary over a set of wallets
   collateral       the collateral measurement over the recent window
-  battery-pools    the T1 amounts and T5 shares of a run's history files
   replay           a run plan's arms replayed over history files or the shapes' synthetic streams
   plan-shards      a replay's wallets split between machines: one wallet index file per machine
   merge-stage      the shards of one replay stage, written on several machines, joined into one stage
-  battery          the standard and H-10 batteries at the snapshot over snapshot files or the shapes
   fidelity         observed spends that run no script rebuilt by the ledger kit, their minimum fees against the observed ones
   study            the study's run: a plan's stages in order under one run id, resumable
   live-fire        before the final freeze, the simulator's steps on an extraction live-fire run's picked wallets, logged in the check log

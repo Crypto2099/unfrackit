@@ -8,8 +8,7 @@
 // again once in a fresh worker that records machine errors, and only what
 // happens there stands; a dead worker makes it run again in a fresh worker
 // that records them, then alone, and a third death fails it; any other error
-// fails the job at once. A battery resumes at the answer that was stopped,
-// and each run is reported once. Also which errors are the machine's
+// fails the job at once. Also which errors are the machine's
 // (src/kit/machine.mjs). The pool's memory rules are in memory-pool.test.mjs.
 
 import { test, after } from 'node:test';
@@ -115,28 +114,3 @@ test('replay: jobs in parallel each run to completion, one stopped among them', 
   assert.deepEqual([pool.stats.watchdogStops, pool.stats.machineReruns], [1, 1]);
   assert.ok(pool.live.size <= 2);
 }, { size: 2 }));
-
-test('battery: a stopped answer resumes at that run with its watchdog doubled; each run is reported once', () => withPool(async (pool) => {
-  const seen = [];
-  const notes = [];
-  const r = await pool.battery({ counter: counter(), runs: 4, attempts: [{ stall: { 1: 300 } }] }, { watchdogMs: 100, onSpend: (k, res) => seen.push([k, res.attempt]), note: (e) => notes.push(e) });
-  assert.equal(r.ok, true);
-  assert.deepEqual(seen, [[0, 1], [1, 3], [2, 3], [3, 3]]);
-  assert.deepEqual(notes.map((e) => [e.event, e.run, e.watchdogMs]), [['watchdog stop', 1, 100], ['watchdog stop', 1, 200]]);
-  assert.equal(pool.stats.watchdogStops, 2);
-}));
-
-test('battery: a machine error at a run resumes there in a fresh worker that records them up to that run', () => withPool(async (pool) => {
-  const seen = [];
-  const r = await pool.battery({ counter: counter(), runs: 4, attempts: [{ machine: 2 }, {}] }, { onSpend: (k, res) => seen.push([k, res.attempt, res.through]) });
-  assert.equal(r.ok, true);
-  assert.deepEqual(seen, [[0, 1, null], [1, 1, null], [2, 2, 2], [3, 2, 2]]);
-  assert.equal(pool.stats.machineReruns, 1);
-  const twice = await pool.battery({ counter: counter(), runs: 3, attempts: [{ machine: 1 }] });
-  assert.equal(twice.ok, false);
-  const died = await pool.battery({ counter: counter(), runs: 3, attempts: [{ die: 0 }, {}] });
-  assert.equal(died.ok, true);
-  const dead = await pool.battery({ counter: counter(), runs: 3, attempts: [{ die: 1 }] });
-  assert.equal(dead.ok, false);
-  assert.match(dead.error, /exited with code 3/);
-}));
