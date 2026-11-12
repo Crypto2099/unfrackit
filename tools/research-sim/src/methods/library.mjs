@@ -83,6 +83,10 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   cometa cometa-lf: every part, through the library's operations and types
 //         where they write it and on its transaction after the build
 //         otherwise (methods/cometa.mjs)
+//   lace  lace-rrri: every part, through the builder's operations where one
+//         writes it and on its transaction after the build otherwise; a
+//         redeemer no operation can attach is not replayable
+//         (methods/lace.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -94,7 +98,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   typhon: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   helios: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   cml: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  cometa: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  cometa: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  lace: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

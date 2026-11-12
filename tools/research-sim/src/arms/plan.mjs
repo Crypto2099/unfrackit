@@ -28,6 +28,8 @@
 //              improvement phase
 //   cometa-lf  Cometa's transaction builder, cardano-c's large-first
 //              selector (deterministic)
+//   lace-rrri  Lace's TransactionBuilder with its round-robin random-improve
+//              selector, built from the wallet's source, seeded
 //   h12        UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
@@ -48,7 +50,7 @@
 // L/layout alike, so the two arms share one seed sequence (common random
 // numbers; replay/run.mjs replayJobOpts). Per wallet and window that is 2 jobs
 // per deterministic library, 20 per random one and 2 for the rule: with the
-// twelve libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 2 = 98.
+// thirteen libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2 = 118.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
@@ -65,7 +67,8 @@ export const LIBRARY_TABLE = Object.freeze([
   { role: 'helios-sf', method: 'helios-sf', random: false },
   { role: 'cml-lf', method: 'cml-lf', random: false },
   { role: 'cml-ri', method: 'cml-ri', random: true },
-  { role: 'cometa-lf', method: 'cometa-lf', random: false }
+  { role: 'cometa-lf', method: 'cometa-lf', random: false },
+  { role: 'lace-rrri', method: 'lace-rrri', random: true }
 ].map((r) => Object.freeze(r)));
 const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 

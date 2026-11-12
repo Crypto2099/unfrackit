@@ -28,6 +28,9 @@
 //                       LargestFirstMultiAsset and RandomImproveMultiAsset
 //   cometa-lf           methods/cometa.mjs: Cometa's transaction builder at
 //                       its defaults, cardano-c's large-first selector
+//   lace-rrri           methods/lace.mjs: Lace's TransactionBuilder from the
+//                       wallet's source (scripts/build-lace.mjs), its
+//                       round-robin random-improve selector, seeded
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -53,6 +56,7 @@ import { typhonMethod } from './typhon.mjs';
 import { heliosMethod } from './helios.mjs';
 import { cmlMethod } from './cml.mjs';
 import { cometaMethod } from './cometa.mjs';
+import { laceMethod } from './lace.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -81,7 +85,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -96,6 +100,7 @@ const FACTORIES = new Map([
   ['cml-lf', baseline('cml-lf', (T) => cmlMethod(T, { strategy: 'lf' }))],
   ['cml-ri', baseline('cml-ri', (T) => cmlMethod(T, { strategy: 'ri' }))],
   ['cometa-lf', baseline('cometa-lf', (T) => cometaMethod(T))],
+  ['lace-rrri', baseline('lace-rrri', (T) => laceMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]
