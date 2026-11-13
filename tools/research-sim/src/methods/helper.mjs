@@ -36,7 +36,9 @@
 //     { op: 'build', schema: 1, id, library,
 //       network       the run's network: 'mainnet', 'preprod' or 'synthetic'
 //       networkId     the change address's network id (0 or 1)
-//       at            { slot, time } the spend's slot and block time, or nulls
+//       at            { slot, time } the spend's slot and block time (the
+//                     intent's time), or the state's where the intent has
+//                     none, or nulls
 //       stakeCred     the wallet's stake credential (hex)
 //       changeAddress bech32
 //       utxos         the wallet's spendable UTxOs in the state's order
@@ -343,6 +345,14 @@ export function helperSeed(opts) {
   return BigInt(opts.seed).toString();
 }
 
+// The spend's slot and block time: the intent's, else the state's.
+const known = (x) => x !== undefined && x !== null;
+export function spendTime(state, intent) {
+  const t = intent.time || {};
+  const at = state.at || {};
+  return { slot: known(t.slot) ? t.slot : known(at.slot) ? at.slot : null, time: known(t.blockTime) ? t.blockTime : known(at.time) ? at.time : null };
+}
+
 // The build request of one spend (schema 1).
 export function buildRequest(proc, { library, state, intent, params, opts, pool, collateral, seeded }) {
   const utxos = pool.map((u) => {
@@ -356,7 +366,7 @@ export function buildRequest(proc, { library, state, intent, params, opts, pool,
     library,
     network: state.network,
     networkId: addressBytes(state.changeAddress)[0] & 0x0f,
-    at: { slot: state.at && state.at.slot !== undefined ? state.at.slot : null, time: state.at && state.at.time !== undefined ? state.at.time : null },
+    at: spendTime(state, intent),
     stakeCred: state.stakeCred,
     changeAddress: state.changeAddress,
     utxos,
