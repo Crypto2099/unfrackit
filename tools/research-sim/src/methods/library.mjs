@@ -25,9 +25,9 @@
 //               treasury fields, auxiliary data and witnesses
 //   collateral  collateral for a script spend: the UTxO the engine set aside
 //               under the arm's rule before selection (opts.collateral), or,
-//               for the Evolution SDK and Lucid Evolution, the collateral the
-//               library chooses from the whole pool (methods/contract.mjs
-//               choosesOwnCollateral)
+//               for the Evolution SDK, Lucid Evolution and Scalus, the
+//               collateral the library chooses from the whole pool
+//               (methods/contract.mjs choosesOwnCollateral)
 //   implicit    withdrawals, refunds, deposits, a donation, a mint or a burn
 //   outputData  a requested output that carries a datum or a script reference
 // Each adapter states which of them its replay path covers (REPLAY_COVERAGE),
@@ -98,6 +98,9 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //         collateral set aside; a redeemer the builder cannot attach (a
 //         certificate's, a vote's, a proposal's) is not replayable
 //         (methods/apollo.mjs)
+//   scalus scalus-pool: every part, through the builder's steps, collateral
+//         as the library chooses it, since it cannot be given the UTxO the
+//         engine would set aside (methods/jvm.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -113,7 +116,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   lace: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   adalite: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   yoroi: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  apollo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  apollo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  scalus: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

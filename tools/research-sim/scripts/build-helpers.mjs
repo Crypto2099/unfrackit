@@ -28,9 +28,23 @@
 //           alone, not on the repository's commit, and the release's commit
 //           is checked against the module's origin as the module proxy
 //           records it.
+//   jvm     Maven: cardano-client-lib 0.7.3 and Scalus 1.5.0 in one shaded
+//           jar (helpers/jvm/pom.xml, every dependency and plugin at an exact
+//           version; the helper's Scala source compiled by scala-maven-plugin
+//           with Scala 3.3.9, the version Scalus 1.5.0 is built with). Maven
+//           3.9 or later as `mvn` and Java 21 or later as `java` must be on the
+//           PATH (RESEARCH_SIM_MAVEN and RESEARCH_SIM_JAVA may name them
+//           instead). Artifacts are downloaded into RESEARCH_SIM_MAVEN_REPO (or
+//           Maven's default local repository) with strict checksums against the
+//           repository's checksum files, and every resolved runtime artifact's
+//           SHA-256 is checked against helpers/jvm/maven.lock; `--lock` writes
+//           that file from what was resolved instead of checking it. The build
+//           runs in build/helpers/jvm/target, outside the source, with a fixed
+//           output timestamp (project.build.outputTimestamp), so the jar
+//           depends on the source and the toolchain alone.
 
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { TOOL, HELPER_SOURCE_DIR, HELPER_BUILD_DIR, BUILD_RECORD, HELPER_SCHEMA, helperSourceFiles, helperSourceHash } from '../src/methods/helper.mjs';
@@ -42,6 +56,26 @@ const run = (cmd, args, opts) => execFileSync(cmd, args, { encoding: 'utf8', max
 const APOLLO_MODULE = 'github.com/Salvionied/apollo/v2';
 const APOLLO_VERSION = 'v2.2.1';
 const APOLLO_COMMIT = '12d4a1c77cc1f991231d6ffca306ceef61dbabd0';
+
+// Scala artifacts carry the Scala binary version after an underscore.
+const SCALA_BINARY = '3';
+const JVM_PINS = {
+  'com.bloxbean.cardano:cardano-client-lib': '0.7.3',
+  [`org.scalus:scalus-cardano-ledger_${SCALA_BINARY}`]: '1.5.0'
+};
+
+// The runtime artifacts Maven resolved, by file name in the local repository
+// (artifact-version.jar), with their SHA-256: [{ file, sha256 }].
+function resolvedArtifacts(mvn, src, env, repoArgs, out) {
+  const cpFile = join(out, 'classpath.txt');
+  run(mvn, ['-B', '-q', '-C', ...repoArgs, '-f', join(src, 'pom.xml'), `-Djvm.helper.target=${join(out, 'target')}`, 'dependency:build-classpath', '-Dmdep.includeScope=runtime', `-Dmdep.outputFile=${cpFile}`], { cwd: out, env });
+  const files = readFileSync(cpFile, 'utf8').trim().split(':').filter(Boolean);
+  rmSync(cpFile);
+  return files.map((f) => {
+    const parts = f.split('/');
+    return { file: parts[parts.length - 1], sha256: sha256(readFileSync(f)) };
+  });
+}
 
 const HELPERS = {
   apollo: {
@@ -68,10 +102,63 @@ const HELPERS = {
   }
 };
 
+HELPERS.jvm = {
+  executable: 'jvm-helper.jar',
+  build(src, out, { lock }) {
+    const mvn = process.env.RESEARCH_SIM_MAVEN || 'mvn';
+    const java = process.env.RESEARCH_SIM_JAVA || 'java';
+    const env = { ...process.env, MAVEN_OPTS: process.env.MAVEN_OPTS || '' };
+    const repo = process.env.RESEARCH_SIM_MAVEN_REPO;
+    const repoArgs = repo ? [`-Dmaven.repo.local=${repo}`] : [];
+    let toolchain;
+    try {
+      const m = run(mvn, ['-B', '-v'], { cwd: out, env }).split('\n')[0].trim();
+      const j = spawnSync(java, ['-version'], { encoding: 'utf8' });
+      if (j.error) throw j.error;
+      toolchain = `${m}; ${String(j.stderr || j.stdout).split('\n')[0].trim()}`;
+    } catch (e) {
+      if (e.code === 'ENOENT') throw new Error(`Maven 3.9 or later as \`mvn\` and Java 21 or later as \`java\` must be on the PATH to build the jvm helper (or RESEARCH_SIM_MAVEN and RESEARCH_SIM_JAVA must name them); ${e.path || 'a command'} was not found`);
+      throw e;
+    }
+    const target = join(out, 'target');
+    run(mvn, ['-B', '-q', '-C', ...repoArgs, '-f', join(src, 'pom.xml'), `-Djvm.helper.target=${target}`, 'package'], { cwd: out, env });
+    const arts = resolvedArtifacts(mvn, src, env, repoArgs, out);
+    const lockFile = join(src, 'maven.lock');
+    const lines = arts.map((a) => `${a.file} ${a.sha256}`).sort();
+    if (lock) {
+      writeFileSync(lockFile, `${lines.join('\n')}\n`);
+      throw new Error('wrote helpers/jvm/maven.lock from what Maven resolved; review it and run node scripts/build-helpers.mjs jvm');
+    } else {
+      let want;
+      try {
+        want = readFileSync(lockFile, 'utf8').trim().split('\n');
+      } catch {
+        throw new Error('helpers/jvm/maven.lock is missing; run node scripts/build-helpers.mjs jvm --lock to write it from what Maven resolves');
+      }
+      const have = new Set(lines);
+      const missing = want.filter((l) => !have.has(l));
+      const extra = lines.filter((l) => !want.includes(l));
+      if (missing.length || extra.length) throw new Error(`the resolved artifacts differ from helpers/jvm/maven.lock: ${[...missing.map((l) => `locked ${l}`), ...extra.map((l) => `resolved ${l}`)].slice(0, 6).join('; ')}`);
+    }
+    const modules = {};
+    for (const [id, version] of Object.entries(JVM_PINS)) {
+      const artifact = id.split(':')[1];
+      const a = arts.find((x) => x.file === `${artifact}-${version}.jar`);
+      if (!a) throw new Error(`${id} ${version} was not resolved`);
+      modules[id] = { version, sha256: a.sha256 };
+    }
+    renameSync(join(target, this.executable), join(out, this.executable));
+    rmSync(target, { recursive: true, force: true });
+    return { toolchain, modules, artifacts: arts.length };
+  }
+};
+
 function main() {
-  const args = process.argv.slice(2);
-  if (args.length !== 1 || !HELPERS[args[0]]) {
-    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}>`);
+  const all = process.argv.slice(2);
+  const lock = all.includes('--lock');
+  const args = all.filter((a) => a !== '--lock');
+  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm')) {
+    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock)`);
     process.exit(1);
   }
   const name = args[0];
@@ -82,7 +169,7 @@ function main() {
   const files = Object.fromEntries(helperSourceFiles(name).map((f) => [f, sha256(readFileSync(join(src, f)))]));
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
-  const facts = h.build(src, out);
+  const facts = h.build(src, out, { lock });
   if (helperSourceHash(name) !== sourceHash) throw new Error(`the source under ${HELPER_SOURCE_DIR}/${name} changed during the build (a lockfile the toolchain rewrote?)`);
   const exe = join(out, h.executable);
   chmodSync(exe, 0o755);

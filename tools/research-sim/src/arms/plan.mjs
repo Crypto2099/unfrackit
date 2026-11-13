@@ -37,6 +37,8 @@
 //              with prefer_pure_change (deterministic)
 //   apollo-macs  Apollo's transaction builder, its MACS selector, in a Go
 //              helper process (deterministic)
+//   scalus-pool  Scalus's TxBuilder.complete, in the JVM helper process
+//              (deterministic)
 //   h12        UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
@@ -57,8 +59,8 @@
 // L/layout alike, so the two arms share one seed sequence (common random
 // numbers; replay/run.mjs replayJobOpts). Per wallet and window that is 2 jobs
 // per deterministic library, 20 per random one and 2 for the rule: with the
-// sixteen libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 2
-// + 2 + 2 = 124.
+// seventeen libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 2
+// + 2 + 2 + 2 = 126.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
@@ -79,7 +81,8 @@ export const LIBRARY_TABLE = Object.freeze([
   { role: 'lace-rrri', method: 'lace-rrri', random: true },
   { role: 'adalite-lp', method: 'adalite-lp', random: false },
   { role: 'yoroi-lf', method: 'yoroi-lf', random: false },
-  { role: 'apollo-macs', method: 'apollo-macs', random: false }
+  { role: 'apollo-macs', method: 'apollo-macs', random: false },
+  { role: 'scalus-pool', method: 'scalus-pool', random: false }
 ].map((r) => Object.freeze(r)));
 const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 
