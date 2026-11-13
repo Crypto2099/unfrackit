@@ -1,0 +1,18 @@
+# SHA-256 of every treatment file the simulator imports, one
+# "<64 hex><two spaces><file name>" per line. The simulator refuses a
+# treatment directory whose files differ from these. Until the hypotheses
+# record exists, these are the digests of the treatment as it stood on
+# 2026-11-10, on cardano-serialization-lib 17.0.0 (the Node.js
+# WebAssembly build); the record's rows replace them.
+604415cbc7dd703bf8edc9f715ec1df128818d3424c7b00486acf865cee097cf  planner2.mjs
+80856e26d3209efd1dad39234385ef79402bd682f856ee1920ebf92f12ab2f67  labels.mjs
+47719dcb1759ff0cf9b46674823b05099d731876f1973bc5a66d2800fa9de022  adapter2.mjs
+38e475933dd09f6991245e1b0f861d49bb64065f14c151e03fbbab36a48ec984  build.mjs
+70b064bc8a4370f05837cd8707ec8a0993c74276340f308a62fea33ca5c53fcd  build2.mjs
+7ca010779cf3589516b01b973dd9f79d0d2225687d773a93e812fe0efd147329  cslkit.mjs
+2d9db3a84cf137fd6a061df47f97e871bd39bf82214369e1c57fddccea3694cb  conform.mjs
+fe75d76fd2c4d69d579e7788c60c08e3f56eeece459e77b41cb4928891fc656f  apply.mjs
+0f22b3d5a991822d08088fd93df0179449f5da1be8f63420391b9e07a364302d  select2.mjs
+20c5c370455f2630ec013d0480a0bc2749c99e9b2b620d15fe5827e75730365d  select2-csl.mjs
+dbfe6dc2807f6b2464d668e86d465de10a5fda482aab3559b472e3964ef5370f  package.json
+854baef069b4073b7cc6c0bd18ce5079afc886b89ba94f5867ce0b839743a124  package-lock.json

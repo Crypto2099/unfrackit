@@ -1,0 +1,197 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Adam K. Dean
+--
+-- The cardano-wallet helper of the simulator's bridge (src/methods/helper.mjs).
+-- It links cardano-balance-tx (cardano-foundation/cardano-balance-transaction
+-- at 897577325745729552495a9add56c713630c497e) and cardano-coin-selection
+-- (cardano-foundation/cardano-coin-selection at
+-- 176611048d5b9f33df19d106cd925d63a7858bb2), pinned as cardano-wallet pins them
+-- at cardano-wallet@f293d922f1930714aca7ede3cbb5ebf3fb710af6. Every stanza below
+-- the helper's own `packages:` line is copied unchanged from that commit's
+-- cabal.project; each block names the lines it copies. Left out are the
+-- wallet's own packages (:58-86), its program-options (:255-259), its
+-- cabal-lib-version (:261) and its test settings (:265, :267-335, :340), which
+-- configure the wallet's local packages and pin nothing, and its three other
+-- source-repository-package stanzas (servant-openapi3 and openapi3, :88-108,
+-- and cardano-ledger-read, :122-132), packages that neither
+-- cardano-balance-tx nor cardano-coin-selection depends on. A constraint or
+-- flag on a package outside the helper's plan has no effect. The `--sha256`
+-- lines are read by haskell.nix only; cabal ignores them.
+--
+-- The toolchain is cardano-balance-transaction's development shell at the same
+-- commit (its flake's devShells.default, GHC 9.12.3 as nix/project.nix:41 sets
+-- it, the compiler cardano-wallet builds with at nix/haskell.nix:122), which
+-- scripts/haskell-prep.sh realizes. That repository's own cabal.project pins
+-- the same CHaP repository, index-state and cardano-coin-selection commit, and
+-- each ledger package it constrains at the version the wallet's block below
+-- constrains.
+
+packages: .
+
+-- cardano-wallet@f293d92 cabal.project:40-49
+repository cardano-haskell-packages
+  url: https://chap.intersectmbo.org/
+  secure: True
+  root-keys:
+    3e0cce471cf09815f930210f7827266fd09045445d65923e6d0238a6cd15126f
+    443abb7fb497a134c343faf52f0b659bd7999bc06b7f63fa76dc99d631f9bea1
+    a86a1f6ce86c449c46666bda44268677abf29b5b2d2eb5ec7af903ec2f117a82
+    bcec67e8e99cabfa7764d75ad9b158d72bfacf70ca1d0ec8bc6b4406d1bf8413
+    c00aae8461a256275598500ea0e187588c35a5d5d7454fb57eac18d9edb86a56
+    d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
+
+-- cardano-wallet@f293d92 cabal.project:51-56
+-- repeating the index-state for hackage to work around hackage.nix parsing limitation
+index-state: 2026-08-14T13:38:07Z
+
+index-state:
+  , hackage.haskell.org 2026-08-14T13:38:07Z
+  , cardano-haskell-packages 2026-09-23T18:57:23Z
+
+-- cardano-wallet@f293d92 cabal.project:110-120
+--------------------------------------------------------------------------------
+-- BEGIN cardano-coin-selection
+
+source-repository-package
+  type: git
+  location: https://github.com/cardano-foundation/cardano-coin-selection
+  tag: 176611048d5b9f33df19d106cd925d63a7858bb2
+  --sha256: 1a5vssp9qva1yibrllg4dhxhs5fjcaf0maa721qvqbfr32kmd6g0
+
+-- END cardano-coin-selection
+--------------------------------------------------------------------------------
+
+-- cardano-wallet@f293d92 cabal.project:134-144
+--------------------------------------------------------------------------------
+-- BEGIN cardano-balance-tx
+
+source-repository-package
+  type: git
+  location: https://github.com/cardano-foundation/cardano-balance-transaction
+  tag: 897577325745729552495a9add56c713630c497e
+  --sha256: 1qdhdz3k2nc87xz2gqriy4yvmch8r2jb1g096skwvarkk1y96ykm
+
+-- END cardano-balance-tx
+--------------------------------------------------------------------------------
+
+-- cardano-wallet@f293d92 cabal.project:146-231
+--------------------------------------------------------------------------------
+-- BEGIN Constraints tweaking section
+
+allow-newer:
+    async-timer:unliftio-core
+  , servant-openapi3:*
+  , ekg-wai:time
+  , plutus-core:cardano-crypto
+  , cardano-wallet-read:cardano-crypto
+  , cardano-ledger-byron-test:cardano-ledger-byron
+  , cardano-coin-selection:random
+  -- cardano-lmdb 0.4.0.3 CHaP revision relaxes base bound for
+  -- GHC 9.12 but the revision is not visible at CHaP index-state
+  -- 2026-03-23. Pulled in transitively by ouroboros-consensus.
+  , cardano-lmdb:base
+  , cardano-cli:cardano-api
+  , hkd:base
+  , delta-store:io-classes
+constraints:
+    base >= 4.18.2.0 && < 5
+  , openapi3 >= 3.2.0
+  , persistent ^>= 2.14.6.0
+  , text >= 2.0 && < 2.2
+  -- bytesmith 0.3.14.0 uses text API incompatible with text-2.x
+  , bytesmith < 0.3.14
+  , delta-types ==1.0.0.0
+  , delta-store ==1.0.0.0
+
+  -- Cardano Node 11.1.1 dependencies:
+  , cardano-api ==11.6.0.0
+  , cardano-binary ==1.9.1.0
+  , cardano-cli ==11.2.3.0
+  , cardano-crypto ==1.3.0
+  , cardano-crypto-class ==2.5.1.0
+  , cardano-crypto-praos ==2.2.4.0
+  , cardano-crypto-wrapper ==1.7.0.0
+  , cardano-data ==1.3.1.0
+  , cardano-ledger-allegra ==1.10.1.0
+  , cardano-ledger-alonzo ==1.16.0.0
+  , cardano-ledger-api ==1.14.0.0
+  , cardano-ledger-babbage ==1.14.0.0
+  , cardano-ledger-binary ==1.9.1.0
+  , cardano-ledger-byron ==1.3.0.0
+  , cardano-ledger-conway ==1.23.0.0
+  , cardano-ledger-core ==1.21.0.0
+  , cardano-ledger-mary ==1.11.0.0
+  , cardano-ledger-shelley ==1.19.0.1
+  , cardano-prelude ==0.2.2.0
+  , cardano-protocol-tpraos ==1.6.0.0
+  , cardano-slotting ==0.2.2.0
+  , cardano-strict-containers ==0.1.6.0
+  , cardano-diffusion ==1.1.1.0
+  , io-classes ==1.8.0.1
+  , io-classes -asserts
+  , ouroboros-consensus ==4.2.1.0
+  , ouroboros-network ==1.2.0.0
+  , typed-protocols ==1.2.1.0
+  , network-mux ==0.11.0.0
+  , io-sim ==1.8.0.1
+  , cardano-ledger-dijkstra ==0.3.0.0
+  , small-steps ==1.1.4.0
+  , vector-map ==1.2.1.0
+  , mempack ==0.2.1.0
+  , plutus-core ==1.70.0.0
+  , plutus-ledger-api ==1.70.0.0
+  , plutus-tx ==1.70.0.0
+
+  -- Keep the TLS chain current. Nothing in the cardano-node 11.1.1 pin set
+  -- requires an old tls, but with no lower bound the solver settled on
+  -- tls-1.9.0 + warp-tls-3.4.9, whose server side cannot negotiate a cipher
+  -- with a modern client (DRep WorkerSpec HTTPS tests fail with
+  -- HandshakeFailed "no cipher in common with the client").
+  --
+  -- 2.2 is the exact floor that excludes warp-tls-3.4.9, which declares
+  -- tls >= 1.7 && < 2.2 and is what makes the downgrade reachable at all.
+  -- A looser ">= 2" would still admit warp-tls-3.4.9 with tls-2.0/2.1.
+  -- Upstream caps the chain at < 2.3 (crypton-connection, tls-session-manager),
+  -- so this resolves to tls-2.2.2, matching master.
+  , tls >= 2.2
+
+-- Related to: https://github.com/haskell/cabal/issues/8554
+if impl(ghc == 8.10.7)
+  constraints: process == 1.6.13.2
+
+-- END Constraints tweaking section
+--------------------------------------------------------------------------------
+
+-- cardano-wallet@f293d92 cabal.project:239-248
+-- Using RDRAND instead of /dev/urandom as an entropy source for key
+-- generation is dubious. Set the flag so we use /dev/urandom by default.
+package cryptonite
+  flags: -support_rdrand
+
+package cardano-config
+  flags: -systemd
+
+package cardano-node
+  flags: -systemd
+
+-- cardano-wallet@f293d92 cabal.project:274-275
+package cardano-coin-selection
+  tests: False
+
+-- cardano-wallet@f293d92 cabal.project:342-357
+-- -------------------------------------------------------------------------
+
+package bitvec
+   flags: -simd
+
+-- -------------------------------------------------------------------------
+
+-- cardano-coin-selection is pinned as a source-repository-package and is pure
+-- Haskell -- it carries no node pin set, so there is nothing to bump. GHC 9.12
+-- (arriving with the 11.1.0 pin set) promotes -Wdata-kinds-tc, and that repo's
+-- Cardano.CoinSelection.Types.Hash uses `Symbol` in a kind without an explicit
+-- DataKinds. The source is not ours to edit from here.
+-- Flag verified accepted by this GHC, with a bogus-flag negative control.
+-- Remove when the fix lands upstream in cardano-foundation/cardano-coin-selection.
+package cardano-coin-selection
+  ghc-options: -Wno-data-kinds-tc -Wno-unused-imports -Wno-unused-top-binds

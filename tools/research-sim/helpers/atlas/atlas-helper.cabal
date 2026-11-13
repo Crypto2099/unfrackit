@@ -1,0 +1,39 @@
+cabal-version: 3.0
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Adam K. Dean
+--
+-- The Atlas helper of the simulator's bridge (src/methods/helper.mjs, schema
+-- 1). Its dependencies are what the adapter calls: atlas-cardano's transaction
+-- builder, the cardano-api and ledger packages that decode the request's CBOR
+-- and encode the transaction, and MonadRandom and random, the source of the
+-- random-improve selection's draws, which the adapter seeds from the request.
+-- Every one of them is in atlas-cardano's own dependency closure.
+name:          atlas-helper
+version:       0.1.0.0
+license:       Apache-2.0
+copyright:     2026 Adam K. Dean
+build-type:    Simple
+
+executable atlas-helper
+  main-is:          Main.hs
+  hs-source-dirs:   .
+  default-language: Haskell2010
+  ghc-options:      -threaded -rtsopts
+  build-depends:
+    , aeson
+    , atlas-cardano
+    , base
+    , base16-bytestring
+    , bytestring
+    , cardano-api
+    , cardano-ledger-api
+    , cardano-ledger-binary
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-slotting
+    , containers
+    , data-default
+    , MonadRandom
+    , random
+    , text
+    , transformers
