@@ -60,11 +60,24 @@
 //           environmentHash), so its own SHA-256, the helper's in the build
 //           record, identifies both; the method checks both again when it
 //           loads.
+//   tx3     Rust: tx3-resolver, tx3-cardano and tx3-lang 0.25.0 (the release
+//           tag's commit f2cadfdb80dbdb72c111ec770e3f233fcbbff2db) over
+//           tx3-tir 0.19.0 (d46c33eb4419fe15b6dbee11b92f139bbe9576da). Cargo
+//           and Rust 1.88 or later must be on the PATH as `cargo`
+//           (RESEARCH_SIM_CARGO may name the cargo command instead). Crates
+//           are downloaded into cargo's home and checked against Cargo.lock
+//           (--locked), each Tx3 crate's commit is read from the
+//           .cargo_vcs_info.json crates.io packages it with, and the build
+//           runs in release mode with the paths of the source, cargo's home
+//           and the build directory remapped, so the executable depends on
+//           the helper's source and the toolchain alone. Cargo's build
+//           output stays in build/helpers/tx3/target, which a rebuild keeps.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { TOOL, HELPER_SOURCE_DIR, HELPER_BUILD_DIR, BUILD_RECORD, HELPER_SCHEMA, helperSourceFiles, helperSourceHash } from '../src/methods/helper.mjs';
 import { PYCARDANO_VERSION, PYCARDANO_COMMIT, PYCARDANO_PYTHON, SITE_PACKAGES, environmentHash, launcherText } from '../src/methods/pycardano.mjs';
 
@@ -195,6 +208,47 @@ HELPERS.pycardano = {
   }
 };
 
+HELPERS.tx3 = {
+  executable: 'tx3-helper',
+  keep: ['target'],
+  build(src, out) {
+    const cargo = process.env.RESEARCH_SIM_CARGO || 'cargo';
+    const env = { ...process.env };
+    let toolchain;
+    try {
+      toolchain = `${run(cargo, ['--version'], { cwd: src, env }).trim()}; ${run('rustc', ['--version'], { cwd: src, env }).trim()}`;
+    } catch (e) {
+      if (e.code === 'ENOENT') throw new Error(`cargo and Rust 1.88 or later must be on the PATH as \`cargo\` to build the tx3 helper (or RESEARCH_SIM_CARGO must name the cargo command); ${cargo} was not found`);
+      throw e;
+    }
+    run(cargo, ['fetch', '--locked'], { cwd: src, env });
+    const meta = JSON.parse(run(cargo, ['metadata', '--locked', '--format-version', '1'], { cwd: src, env }));
+    const modules = {};
+    for (const [name, pin] of Object.entries(TX3_CRATES)) {
+      const found = meta.packages.filter((p) => p.name === name);
+      if (found.length !== 1 || found[0].version !== pin.version) throw new Error(`Cargo.lock resolves ${name} to ${found.map((p) => p.version).join(', ') || 'nothing'}, not ${pin.version}`);
+      const vcs = JSON.parse(readFileSync(join(dirname(found[0].manifest_path), '.cargo_vcs_info.json'), 'utf8'));
+      if (vcs.git.sha1 !== pin.commit) throw new Error(`${name} ${pin.version} was packaged from commit ${vcs.git.sha1}, not ${pin.commit}`);
+      const lock = readFileSync(join(src, 'Cargo.lock'), 'utf8').split('[[package]]').find((b) => b.includes(`name = "${name}"\nversion = "${pin.version}"`));
+      const checksum = lock && /checksum = "([0-9a-f]{64})"/.exec(lock);
+      modules[name] = { version: pin.version, commit: vcs.git.sha1, checksum: checksum ? checksum[1] : null };
+    }
+    const target = join(out, 'target');
+    const home = process.env.CARGO_HOME || join(homedir(), '.cargo');
+    const remap = [[src, '/helper'], [home, '/cargo'], [target, '/target']].map(([from, to]) => `--remap-path-prefix=${from}=${to}`).join('\x1f');
+    run(cargo, ['build', '--release', '--locked', '--target-dir', target], { cwd: src, env: { ...env, CARGO_ENCODED_RUSTFLAGS: remap } });
+    copyFileSync(join(target, 'release', this.executable), join(out, this.executable));
+    return { toolchain, modules };
+  }
+};
+
+const TX3_CRATES = {
+  'tx3-resolver': { version: '0.25.0', commit: 'f2cadfdb80dbdb72c111ec770e3f233fcbbff2db' },
+  'tx3-cardano': { version: '0.25.0', commit: 'f2cadfdb80dbdb72c111ec770e3f233fcbbff2db' },
+  'tx3-lang': { version: '0.25.0', commit: 'f2cadfdb80dbdb72c111ec770e3f233fcbbff2db' },
+  'tx3-tir': { version: '0.19.0', commit: 'd46c33eb4419fe15b6dbee11b92f139bbe9576da' }
+};
+
 function main() {
   const all = process.argv.slice(2);
   const lock = all.includes('--lock');
@@ -209,8 +263,10 @@ function main() {
   const out = join(TOOL, HELPER_BUILD_DIR, name);
   const sourceHash = helperSourceHash(name);
   const files = Object.fromEntries(helperSourceFiles(name).map((f) => [f, sha256(readFileSync(join(src, f)))]));
-  rmSync(out, { recursive: true, force: true });
+  // The previous build is removed, but for what the helper keeps between
+  // builds (cargo's build directory).
   mkdirSync(out, { recursive: true });
+  for (const e of readdirSync(out)) if (!(h.keep || []).includes(e)) rmSync(join(out, e), { recursive: true, force: true });
   const facts = h.build(src, out, { lock });
   if (helperSourceHash(name) !== sourceHash) throw new Error(`the source under ${HELPER_SOURCE_DIR}/${name} changed during the build (a lockfile the toolchain rewrote?)`);
   const exe = join(out, h.executable);

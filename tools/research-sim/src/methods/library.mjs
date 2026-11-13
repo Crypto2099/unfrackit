@@ -106,6 +106,10 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   pycardano pycardano-lf: every part, through the builder's operations and
 //         fields; a bootstrap witness and a vote's or a proposal's redeemer
 //         are not replayable (methods/pycardano.mjs)
+//   tx3   tx3-vd: every part, each written by the spend's program; a
+//         redeemer, whose execution units Tx3 cannot write, and so the
+//         collateral, and the parts no program block writes are not
+//         replayable (methods/tx3.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -124,7 +128,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   apollo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   scalus: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   ccl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  pycardano: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  pycardano: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  tx3: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
