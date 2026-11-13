@@ -22,7 +22,8 @@
 //
 //   party Wallet; party Payee0; ...
 //   tx spend(<data arguments>) {
-//       input fixed0 { ref: 0x<txid>#<index>, }          the fixed inputs
+//       input fixed0 { ref: 0x<txid>#<index>, redeemer: r0, }   the fixed inputs
+//       collateral { ref: 0x<txid>#<index>, }           the UTxO set aside
 //       reference ref0 { ref: 0x<txid>#<index>, }        the reference inputs
 //       input* source {
 //           from: Wallet,
@@ -35,9 +36,10 @@
 //           amount: source + (<fixed inputs, withdrawals, mint>) - (<requested,
 //                   donation, burn>) - fees,
 //       }
-//       mint { amount: AnyAsset(...), }  burn { ... }
+//       mint { amount: AnyAsset(...), redeemer: r1, }  burn { ... }
 //       cardano::native_witness { script: 0x.., }
-//       cardano::withdrawal { from: 0x<reward account>, amount: N, }
+//       cardano::plutus_witness { version: v, script: 0x.., }
+//       cardano::withdrawal { from: 0x<reward account>, amount: N, redeemer: r2, }
 //       cardano::vote_delegation_certificate { drep: 0x.., stake: 0x.., }
 //       cardano::treasury_donation { coin: N, }
 //       signers { 0x<key hash>, }
@@ -69,15 +71,26 @@
 // at its other addresses are never selected. Outputs are mapped
 // to Tx3's UTxOs as Dolos maps them (crates/trp/src/mapping.rs:110-151).
 //
-// A part neither the program nor Tx3 can write is not replayable: a redeemer
-// (Tx3 writes every redeemer with fixed execution units, 2,000,000 memory and
-// 2,000,000,000 steps, tx3-cardano lib.rs:34-37, and its fee prices none of
-// them, lib.rs:91-98, so the observed units cannot be written and the spend's
-// collateral is never reached), a datum, bootstrap witness or other entry of
-// the witness set the compiler does not write (compile/mod.rs
-// compile_witness_set), a certificate other than a vote delegation to a key
-// DRep (compile_certs), votes, proposals, the current treasury value, auxiliary
-// scripts and metadata other than integers, text and bytes (coercion.rs
+// A script spend is written as Tx3 writes one: each redeemer's data on the
+// input, mint, burn or withdrawal it redeems, the scripts of the witness set
+// as plutus_witness blocks, and the collateral the engine set aside as the
+// program's collateral block. tx3-cardano writes every redeemer with fixed
+// execution units, 2,000,000 memory and 2,000,000,000 steps (lib.rs:34-37),
+// and its fee prices none of them (lib.rs:91-98, "TODO: add redeemer fees"):
+// the build response names the execution units as unpriced, and the kit
+// judges the transaction. A collateral query takes an ADA-only UTxO only
+// (inputs/approximate/filter.rs:11-13), so a set-aside UTxO holding a token
+// fails the query, class collateral.
+//
+// A part the language or tx3-cardano cannot hold is not replayable: a datum,
+// bootstrap witness or other entry of the witness set the compiler does not
+// write (compile/mod.rs compile_witness_set, plutus_data and
+// bootstrap_witness None), a certificate other than a vote delegation to a
+// key DRep (compile_certs), a certificate's, a vote's or a proposal's
+// redeemer (compile_redeemers chains spend, mint, burn and withdrawal
+// redeemers only), votes, proposals and the current treasury value
+// (compile_tx_body writes them None), auxiliary scripts and metadata other
+// than integers, text and bytes (compile_auxiliary_data, coercion.rs
 // expr_into_metadatum), and a requested output with a datum hash (outputs
 // carry inline datums only, compile_output_block).
 
@@ -185,7 +198,27 @@ struct Request {
     #[serde(default)]
     intent: Intent,
     #[serde(default)]
+    collateral: Option<FixedInput>,
+    #[serde(default)]
     vkeys: Vec<String>,
+}
+
+// The part a redeemer redeems, as the history reader records it.
+#[derive(Deserialize)]
+struct Target {
+    kind: String,
+    #[serde(default, rename = "ref")]
+    r: Option<String>,
+    #[serde(default)]
+    policy: Option<String>,
+    #[serde(default)]
+    account: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Redeemer {
+    target: Option<Target>,
+    data: String,
 }
 
 // A failed build: the library's error text, where it failed, and, for a part
@@ -245,9 +278,13 @@ fn answer(session: &mut Session, q: &Request) -> Value {
     }
     match q.op.as_str() {
         "build" => match build(session, q) {
-            Ok(tx) => {
+            Ok((tx, unpriced)) => {
                 session.last = Some(tx.clone());
-                json!({ "ok": true, "tx": hex::encode(tx) })
+                if unpriced {
+                    json!({ "ok": true, "tx": hex::encode(tx), "unpriced": ["execution units"] })
+                } else {
+                    json!({ "ok": true, "tx": hex::encode(tx) })
+                }
             }
             Err(f) => {
                 session.last = None;
@@ -558,9 +595,35 @@ fn program(q: &Request, wallet: &[u8], fixed_values: &[Amounts]) -> Result<Progr
     let f = q.intent.fixed.as_ref().unwrap_or(&empty);
     let imp = q.intent.implicit.as_ref();
 
-    // Parts nothing can write.
-    if !f.redeemers.is_empty() || f.witnesses.contains_key("5") {
-        return Err(not_replayable("execution units", "Tx3 writes every redeemer with fixed execution units (2,000,000 memory, 2,000,000,000 steps) and prices none of them, so the observed units cannot be written"));
+    // Redeemers, by the part each redeems, each as a data argument. Tx3
+    // attaches a redeemer to a spent input, a mint or burn, or a withdrawal
+    // only (compile/mod.rs compile_redeemers, "TODO: chain other
+    // redeemers"), and writes each with its fixed execution units.
+    let mut spend_r: HashMap<String, String> = HashMap::new();
+    let mut mint_r: HashMap<String, String> = HashMap::new();
+    let mut reward_r: HashMap<String, String> = HashMap::new();
+    for (i, v) in f.redeemers.iter().enumerate() {
+        let r: Redeemer = serde_json::from_value(v.clone()).map_err(|e| at_stage("replay parts", e))?;
+        let t = r.target.ok_or_else(|| at_stage("replay parts", "a redeemer with no target"))?;
+        let slot = match t.kind.as_str() {
+            "input" => (&mut spend_r, t.r),
+            "policy" => (&mut mint_r, t.policy),
+            "withdrawal" => (&mut reward_r, t.account),
+            k @ ("certificate" | "voter" | "proposal") => {
+                let part = match k {
+                    "certificate" => "certificate redeemer",
+                    "voter" => "vote redeemer",
+                    _ => "proposal redeemer",
+                };
+                return Err(not_replayable(part, "Tx3 attaches redeemers to spent inputs, mints and burns, and withdrawals only"));
+            }
+            k => return Err(at_stage("replay parts", format!("a redeemer of an unknown target {k}"))),
+        };
+        let b = hex::decode(&r.data).map_err(|e| at_stage("replay parts", e))?;
+        let d: PlutusData = minicbor::decode(&b).map_err(|e| at_stage("replay parts", e))?;
+        let arg = data_arg(&d).map_err(|e| not_replayable("redeemer data", format!("Tx3 holds a redeemer's integers in 128 bits: {e}")))?;
+        let name = p.arg(format!("r{i}"), "Bytes", arg);
+        slot.0.insert(slot.1.unwrap_or_default(), name);
     }
     for (k, why) in [("2", "bootstrap witnesses"), ("4", "witness datums")] {
         if f.witnesses.contains_key(k) {
@@ -568,7 +631,7 @@ fn program(q: &Request, wallet: &[u8], fixed_values: &[Amounts]) -> Result<Progr
         }
     }
     for k in f.witnesses.keys() {
-        if !["0", "1", "3", "6", "7"].contains(&k.as_str()) {
+        if !["0", "1", "3", "5", "6", "7"].contains(&k.as_str()) {
             return Err(not_replayable(&format!("witness set entry {k}"), format!("Tx3 writes no witness set entry {k}")));
         }
     }
@@ -662,7 +725,12 @@ fn program(q: &Request, wallet: &[u8], fixed_values: &[Amounts]) -> Result<Progr
 
     // Fixed and reference inputs.
     for (i, x) in f.inputs.iter().enumerate() {
-        p.body.push(format!("    input fixed{i} {{ ref: {}, }}", ref_lit(&x.r)?));
+        let redeemer = spend_r.remove(&x.r).map(|r| format!(" redeemer: {r},")).unwrap_or_default();
+        p.body.push(format!("    input fixed{i} {{ ref: {},{redeemer} }}", ref_lit(&x.r)?));
+    }
+    // The collateral the engine set aside for a script spend.
+    if let Some(c) = &q.collateral {
+        p.body.push(format!("    collateral {{ ref: {}, }}", ref_lit(&c.r)?));
     }
     for (i, x) in f.reference_inputs.iter().enumerate() {
         p.body.push(format!("    reference ref{i} {{ ref: {}, }}", ref_lit(&x.r)?));
@@ -720,11 +788,13 @@ fn program(q: &Request, wallet: &[u8], fixed_values: &[Amounts]) -> Result<Progr
     p.body.push(format!("    output change {{\n        to: Wallet,\n        amount: source{} - fees,\n    }}", grouped(&rest)));
 
     // Mint and burn, one block per policy.
-    for (_, a) in mints {
-        p.body.push(format!("    mint {{ amount: {}, }}", amount_expr(&a)));
+    for (policy, a) in mints {
+        let redeemer = mint_r.remove(&policy).map(|r| format!(" redeemer: {r},")).unwrap_or_default();
+        p.body.push(format!("    mint {{ amount: {},{redeemer} }}", amount_expr(&a)));
     }
-    for (_, a) in burns {
-        p.body.push(format!("    burn {{ amount: {}, }}", amount_expr(&a)));
+    for (policy, a) in burns {
+        let redeemer = mint_r.remove(&policy).map(|r| format!(" redeemer: {r},")).unwrap_or_default();
+        p.body.push(format!("    burn {{ amount: {},{redeemer} }}", amount_expr(&a)));
     }
 
     // Scripts of the witness set.
@@ -750,7 +820,8 @@ fn program(q: &Request, wallet: &[u8], fixed_values: &[Amounts]) -> Result<Progr
         for _ in 0..n {
             let acct = d.bytes().map_err(|e| at_stage("replay parts", e))?.to_vec();
             let amount = d.u64().map_err(|e| at_stage("replay parts", e))?;
-            p.body.push(format!("    cardano::withdrawal {{ from: 0x{}, amount: {amount}, }}", hex::encode(acct)));
+            let redeemer = reward_r.remove(&hex::encode(&acct)).map(|r| format!(" redeemer: {r},")).unwrap_or_default();
+            p.body.push(format!("    cardano::withdrawal {{ from: 0x{}, amount: {amount},{redeemer} }}", hex::encode(&acct)));
         }
     }
 
@@ -796,12 +867,15 @@ fn program(q: &Request, wallet: &[u8], fixed_values: &[Amounts]) -> Result<Progr
         }
         p.body.push(format!("    metadata {{{} }}", fields.concat()));
     }
+    if let Some(k) = spend_r.keys().chain(mint_r.keys()).chain(reward_r.keys()).next() {
+        return Err(at_stage("replay parts", format!("a redeemer for {k}, which no block of the program writes")));
+    }
     Ok(p)
 }
 
 // ---- The build.
 
-fn build(session: &mut Session, q: &Request) -> Result<Vec<u8>, Failure> {
+fn build(session: &mut Session, q: &Request) -> Result<(Vec<u8>, bool), Failure> {
     let wallet = Address::from_bech32(&q.change_address).map_err(|e| at_stage("request", e))?.to_vec();
     let mut store = Store { pool: HashSet::new(), utxos: HashMap::new() };
     for u in &q.utxos {
@@ -830,6 +904,12 @@ fn build(session: &mut Session, q: &Request) -> Result<Vec<u8>, Failure> {
             store.utxos.entry(r).or_insert(utxo);
         }
     }
+    // The collateral set aside resolves by reference and is never in the pool.
+    if let Some(c) = &q.collateral {
+        let b = hex::decode(&c.cbor).map_err(|e| at_stage("request", e))?;
+        let (r, out) = split_unspent(&b).map_err(|e| at_stage("request", e))?;
+        store.utxos.insert(r.clone(), tx3_utxo(r, &out).map_err(|e| at_stage("request", e))?);
+    }
     session.fee = (param(q, "minFeeA")?, param(q, "minFeeB")?);
     let prog = program(q, &wallet, &fixed_values)?;
     let src = prog.source();
@@ -855,18 +935,27 @@ fn build(session: &mut Session, q: &Request) -> Result<Vec<u8>, Failure> {
         Err(p) => return Err(at_stage("program", panic_text(p))),
     };
 
+    // The run holds no cost models. The compiler needs one for each Plutus
+    // language a transaction uses to write the script data hash
+    // (compile/script_data.rs:77-121); an empty one stands in, so the hash
+    // keeps its 32 bytes and only its value differs, which no check reads
+    // (the kit's own replay assembly hashes no cost models either).
     let network = if q.network_id == 1 { pallas::ledger::primitives::NetworkId::Mainnet } else { pallas::ledger::primitives::NetworkId::Testnet };
-    let pparams = tx3_cardano::PParams { network, min_fee_coefficient: param(q, "minFeeA")?, min_fee_constant: param(q, "minFeeB")?, coins_per_utxo_byte: param(q, "coinsPerUtxoByte")?, cost_models: HashMap::new() };
+    let pparams = tx3_cardano::PParams { network, min_fee_coefficient: param(q, "minFeeA")?, min_fee_constant: param(q, "minFeeB")?, coins_per_utxo_byte: param(q, "coinsPerUtxoByte")?, cost_models: HashMap::from([(0, Vec::new()), (1, Vec::new()), (2, Vec::new())]) };
     let at = q.at.as_ref();
     let slot = at.and_then(|a| a.slot.as_ref()).map(int_of).transpose()?.unwrap_or(0);
     let time = at.and_then(|a| a.time.as_ref()).map(int_of).transpose()?.unwrap_or(0);
     let mut compiler = tx3_cardano::Compiler::new(pparams, tx3_cardano::Config { extra_fees: None }, tx3_cardano::ChainPoint { slot: slot.max(0) as u64, hash: Vec::new(), timestamp: time.max(0) as u128 });
     let resolved = catch_unwind(AssertUnwindSafe(|| pollster::block_on(tx3_resolver::resolve_tx(AnyTir::V1Beta0(tx), &prog.args, &mut compiler, &store, OPTIMIZE_ROUNDS))));
     match resolved {
-        Ok(Ok(c)) => Ok(c.payload),
+        // Tx3's fee prices no execution units (lib.rs:91-98).
+        Ok(Ok(c)) => Ok((c.payload, q.intent.fixed.as_ref().is_some_and(|f| !f.redeemers.is_empty()))),
         Ok(Err(e)) => {
             let class = match &e {
                 tx3_resolver::Error::InputNotResolved(x) if x.name == "source" => Some("balance"),
+                // The set-aside UTxO is not one a collateral query takes (it
+                // holds a token; inputs/approximate/filter.rs:11-13).
+                tx3_resolver::Error::InputNotResolved(x) if x.name == "collateral" => Some("collateral"),
                 _ => None,
             };
             Err(Failure { error: e.to_string(), stage: Some("resolve"), not_replayable: None, class })

@@ -106,10 +106,10 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   pycardano pycardano-lf: every part, through the builder's operations and
 //         fields; a bootstrap witness and a vote's or a proposal's redeemer
 //         are not replayable (methods/pycardano.mjs)
-//   tx3   tx3-vd: every part, each written by the spend's program; a
-//         redeemer, whose execution units Tx3 cannot write, and so the
-//         collateral, and the parts no program block writes are not
-//         replayable (methods/tx3.mjs)
+//   tx3   tx3-vd: every part, each written by the spend's program, the
+//         collateral set aside by its collateral block; the parts the
+//         language or its compiler cannot hold are not replayable
+//         (methods/tx3.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),

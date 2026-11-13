@@ -53,34 +53,46 @@
 // Dolos's trp.submit writes a signer's (crates/trp/src/methods.rs:56-97).
 //
 // The replay path, each part written by the program:
-//   fixed inputs        `input fixedN { ref: ... }`, their value in the change
+//   fixed inputs        `input fixedN { ref, redeemer }`, their value in the
+//                       change, a script input's redeemer as a data argument
+//   collateral          `collateral { ref }`, the UTxO the engine set aside; a
+//                       collateral query takes an ADA-only UTxO only
+//                       (approximate/filter.rs:11-13), so one holding a token
+//                       fails it, class collateral
 //   reference inputs    `reference refN { ref: ... }`
 //   requested outputs   `output { to, amount, datum }`, an inline datum as a
 //                       data argument; one with a script reference as
 //                       `cardano::publish { to, amount, datum, version,
 //                       script }`
-//   mint and burn       one `mint` or `burn` block per policy
+//   mint and burn       one `mint` or `burn` block per policy, with the
+//                       policy's redeemer
 //   native scripts      `cardano::native_witness { script }`
-//   withdrawals         `cardano::withdrawal { from, amount }`
+//   Plutus scripts      `cardano::plutus_witness { version, script }`; a script
+//                       a reference input carries needs only the reference
+//   withdrawals         `cardano::withdrawal { from, amount, redeemer }`
 //   certificates        `cardano::vote_delegation_certificate { drep, stake }`
 //   donation            `cardano::treasury_donation { coin }`
 //   required signers    `signers { ... }`
 //   validity            `validity { since_slot, until_slot }`
 //   metadata            `metadata { label: value }`
+// Execution units: tx3-cardano writes every redeemer with fixed units,
+// 2,000,000 memory and 2,000,000,000 steps (lib.rs:34-37), and its fee prices
+// none of them (lib.rs:91-98, "TODO: add redeemer fees"). That is the
+// library's own: the build names the execution units as unpriced, and the
+// kit's checks judge the transaction. The run holds no cost models, which the
+// compiler needs for the script data hash (compile/script_data.rs:77-121); an
+// empty one stands in, so the hash keeps its size, as in the kit's own replay
+// assembly.
 // Not replayable, the part named (helpers/tx3/src/main.rs `program`):
-//   execution units     any redeemer: tx3-cardano writes every redeemer with
-//                       fixed units, 2,000,000 memory and 2,000,000,000 steps
-//                       (lib.rs:34-37), and its fee prices none of them
-//                       (lib.rs:91-98, "TODO: add redeemer fees"), so the
-//                       observed units cannot be written; a script spend's
-//                       collateral, which a `collateral` block could name, is
-//                       therefore never written
 //   witness datums, bootstrap witnesses, any other witness set entry the
 //                       compiler leaves empty (compile/mod.rs
 //                       compile_witness_set)
 //   certificates        any but a vote delegation to a key DRep
 //                       (compile_certs), and so any deposit or refund
-//   votes, proposals, current treasury value: no block writes them
+//   certificate, vote and proposal redeemers: compile_redeemers chains
+//                       spend, mint, burn and withdrawal redeemers only
+//   votes, proposals, current treasury value: compile_tx_body writes them
+//                       None
 //   auxiliary scripts, and metadata other than integers, text and bytes
 //                       (coercion.rs expr_into_metadatum)
 //   output datum hash   outputs carry inline datums only (compile_output_block)
@@ -95,6 +107,8 @@
 // Errors to failure classes (the rest 'other'):
 //   "input not resolved: source" (the wallet's candidates cannot cover the
 //   target; job.rs:67-77, assign/mod.rs:91-93)                  balance
+//   "input not resolved: collateral" (the set-aside UTxO holds a token)
+//                                                               collateral
 // Tx3 checks neither the size of the transaction nor an output's value size
 // nor the change's minimum beyond its target, so those fail the kit's checks
 // as the library's own.
@@ -106,7 +120,10 @@ import { helperMethod, helperBuild } from './helper.mjs';
 export const TX3_VERSION = '0.25.0';
 export const TX3_COMMIT = 'f2cadfdb80dbdb72c111ec770e3f233fcbbff2db';
 
-const ERROR_CLASSES = [[/^input not resolved: source$/, CLASSES.balance]];
+const ERROR_CLASSES = [
+  [/^input not resolved: source$/, CLASSES.balance],
+  [/^input not resolved: collateral$/, CLASSES.collateral]
+];
 
 export function classOfTx3Error(text) {
   for (const [re, cls] of ERROR_CLASSES) if (re.test(text)) return cls;

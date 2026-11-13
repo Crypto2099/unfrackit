@@ -7,13 +7,17 @@
 // (L/own) and UnFrack.It's layout change on the inputs Tx3 selected
 // (L/layout). It is deterministic; L/own and L/layout select the same inputs;
 // the program's change is one output at the change address holding
-// everything left; only the UTxOs at the change address are candidates; an input set that cannot fund the layout change fails with
-// class change-minimum; a library failure is the library's under both; any
-// other change policy is refused; a replayed spend's validity, required
-// signers, metadata, fixed inputs, withdrawal, donation and native-script
-// mint are written by the program; each part neither the program nor Tx3 can
-// write is not replayable. The tests that run the helper skip, naming the
-// build command, when it is not built.
+// everything left; only the UTxOs at the change address are candidates; an
+// input set that cannot fund the layout change fails with class
+// change-minimum; a library failure is the library's under both; any other
+// change policy is refused; a replayed spend's validity, required signers,
+// metadata, fixed inputs, withdrawal, donation and native-script mint are
+// written by the program; a Plutus mint and a script withdrawal are written
+// with their redeemers at Tx3's fixed execution units, named as unpriced, and
+// the collateral set aside; a set-aside UTxO holding a token fails Tx3's
+// collateral query; each part the language or its compiler cannot hold is not
+// replayable. The tests that run the helper skip, naming the build command,
+// when it is not built.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +36,7 @@ import { blake2b224 } from '../../../src/history/blake2b.mjs';
 import { constructState, policy, assetName, ADA } from '../../lib/construct.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { encUint, encInt, encArray, encMap, encBytes, encTag, decode, asUint } from '../../../src/history/cbor.mjs';
-import { replayIntent, payTo as payToOf, zeroRedeemerIntents } from '../../lib/script-intents.mjs';
+import { replayIntent, payTo as payToOf, zeroRedeemerIntents, EX_UNITS } from '../../lib/script-intents.mjs';
 import { treatment, skip as noTreatment } from '../../lib/treatment.mjs';
 
 const P = SYNTHETIC_PARAMS;
@@ -61,6 +65,7 @@ test('tx3-vd is deterministic, does not choose its own collateral, and names the
 
 test('the library\'s errors map to the failure classes', () => {
   assert.equal(classOfTx3Error('input not resolved: source'), CLASSES.balance);
+  assert.equal(classOfTx3Error('input not resolved: collateral'), CLASSES.collateral);
   assert.equal(classOfTx3Error('input not resolved: fixed0'), CLASSES.other);
   assert.equal(classOfTx3Error('Tx3 panicked: called `Option::unwrap()` on a `None` value'), CLASSES.other);
 });
@@ -206,7 +211,7 @@ test('a fixed input, a withdrawal, a donation and a native-script mint are writt
   }
 });
 
-test('each part neither the program nor Tx3 can write is not replayable', { skip }, async () => {
+test('each part the language or its compiler cannot hold is not replayable', { skip }, async () => {
   const m = makeMethod(T, 'tx3-vd');
   const whole = constructState(T, [{ coin: 30n * ADA, txid: 'pool' }, { coin: 5n * ADA, txid: 'collateral' }]);
   const coll = [...whole.utxos.values()].find((u) => u.coin === 5n * ADA);
@@ -235,13 +240,46 @@ test('each part neither the program nor Tx3 can write is not replayable', { skip
       assert.match(r.detail, re);
     }
   }
-  // A redeemer: Tx3 writes fixed execution units and prices none.
-  for (const it of zeroRedeemerIntents(T, s)) {
+  // A certificate's, a vote's or a proposal's redeemer.
+  const redeemed = (tag, target) => ({ ...p({ redeemers: [{ tag, target, data: '00', exUnits: EX_UNITS }] }), collateral: { required: true, observed: null } });
+  for (const [it, re] of [[redeemed(2, { kind: 'certificate', index: 0 }), /^certificate redeemer: /], [redeemed(4, { kind: 'voter', voter: '8201581c' + '00'.repeat(28) }), /^vote redeemer: /], [redeemed(5, { kind: 'proposal', index: 0 }), /^proposal redeemer: /]]) {
     for (const opts of [own, layout]) {
       const r = await m.build(s, it, P, { ...opts, collateral: coll });
       assert.deepEqual([r.ok, r.class], [false, NOT_REPLAYABLE], r.detail);
-      assert.match(r.detail, /^execution units: /);
+      assert.match(r.detail, re);
     }
+  }
+});
+
+test('a Plutus mint and a script withdrawal are written with their redeemers at Tx3\'s fixed units and the collateral set aside', { skip }, async () => {
+  const m = makeMethod(T, 'tx3-vd');
+  const whole = constructState(T, [{ coin: 30n * ADA, txid: 'pool' }, { coin: 5n * ADA, txid: 'collateral' }]);
+  const coll = [...whole.utxos.values()].find((u) => u.coin === 5n * ADA);
+  const pool = { ...whole, utxos: new Map([...whole.utxos].filter(([ref]) => ref !== coll.ref)) };
+  for (const it of zeroRedeemerIntents(T, pool)) {
+    const a = await m.build(pool, it, P, { ...own, collateral: coll });
+    assert.equal(a.ok, true, a.detail);
+    const tx = inspectTx(a.txs[0].bytes);
+    assert.deepEqual(tx.collateralInputs.map((x) => x.ref), [coll.ref]);
+    assert.equal(tx.redeemers.length, 1);
+    assert.deepEqual(tx.redeemers[0].exUnits.map(BigInt), [2000000n, 2000000000n]);
+    assert.deepEqual(a.library.unpriced, ['execution units']);
+    const l = await m.build(pool, it, P, { ...layout, collateral: coll });
+    assert.equal(l.ok, true, l.detail);
+    assert.deepEqual(l.txs[0].walletInputs, a.txs[0].walletInputs);
+    assert.deepEqual(inspectTx(l.txs[0].bytes).collateralInputs.map((x) => x.ref), [coll.ref]);
+    for (const r of [a, l]) {
+      const applied = checkAndApply(whole, P, r.txs, { implicit: it.implicit, scriptFee: it.fixed.scriptFee, fixed: it.fixed });
+      assert.equal(applied.ok, true, applied.failure && applied.failure.detail);
+    }
+  }
+  // A set-aside UTxO holding a token is not one Tx3's collateral query takes.
+  const tokened = constructState(T, [{ coin: 30n * ADA, txid: 'pool' }, { coin: 5n * ADA, txid: 'collateral', assets: [{ policy: policy('c'), name: assetName('t'), qty: 1n }] }]);
+  const tc = [...tokened.utxos.values()].find((u) => u.coin === 5n * ADA);
+  const tpool = { ...tokened, utxos: new Map([...tokened.utxos].filter(([ref]) => ref !== tc.ref)) };
+  for (const opts of [own, layout]) {
+    const r = await m.build(tpool, zeroRedeemerIntents(T, tpool)[0], P, { ...opts, collateral: tc });
+    assert.deepEqual([r.ok, r.class, r.detail], [false, CLASSES.collateral, 'resolve: input not resolved: collateral']);
   }
 });
 
