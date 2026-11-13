@@ -20,7 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { treatment, skip as noTreatment } from '../../lib/treatment.mjs';
-import { adaliteMethod, buildAdaLite, classOfAdaLiteFailure, adaliteRefusal, afterParts, adaliteBuildProblem, loadAdaLite, planTx, arrangeArgs } from '../../../src/methods/adalite.mjs';
+import { adaliteMethod, buildAdaLite, classOfAdaLiteFailure, adaliteRefusal, afterParts, adaliteBuildProblem, loadAdaLite, planTx, arrangeArgs, planParts } from '../../../src/methods/adalite.mjs';
 import { ADALITE_COMMIT, BUILD_SCRIPT } from '../../../src/methods/adalite-source.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
 import { REPLAY_PARTS, REPLAY_COVERAGE, inputOrder } from '../../../src/methods/library.mjs';
@@ -33,7 +33,8 @@ import { loadSource } from '../../../src/replay/source.mjs';
 import { constructState, payIntent, policy, assetName, ADA } from '../../lib/construct.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { addressBytes, addressText } from '../../../src/history/address.mjs';
-import { encUint, encBytes, encArray, encMap, encText } from '../../../src/history/cbor.mjs';
+import { encUint, encBytes, encArray, encMap, encText, decode, raw } from '../../../src/history/cbor.mjs';
+import { blake2b256 } from '../../../src/history/blake2b.mjs';
 import { replayIntent, payTo, EX_UNITS } from '../../lib/script-intents.mjs';
 
 const P = SYNTHETIC_PARAMS;
@@ -258,7 +259,7 @@ test('a wallet failure under the layout change is the wallet\'s, as under its ow
   assert.match(d.detail, /OutputTooSmall/);
 });
 
-test('a replayed spend: the wallet writes the validity, the other fixed parts go on after the build, named, and L/layout builds what L/own cannot balance', { skip }, () => {
+test('a replayed spend: the wallet writes the validity; required signers and metadata go on after the build, named', { skip }, () => {
   const s = constructState(T, [{ coin: 10n * ADA }, { coin: 20n * ADA }]);
   const signer = Buffer.alloc(28, 0x33);
   const meta = encMap([[encUint(674), encMap([[encText('msg'), encArray([encText('hello')])]])]]);
@@ -279,19 +280,103 @@ test('a replayed spend: the wallet writes the validity, the other fixed parts go
   const b = buildAdaLite(T, s, it, P, layout);
   assert.equal(b.ok, true, b.detail);
   assert.deepEqual(b.txs[0].walletInputs, a.txs[0].walletInputs);
-  // A withdrawal the wallet cannot balance: L/own leaves it out of the
-  // balance, so the kit's conservation check fails; L/layout builds it.
-  const acct = Buffer.concat([Buffer.from([0xe1]), Buffer.alloc(28, 0x44)]);
-  const w = replayIntent('wd', 10, { type: 'T1', requested: [payTo(T, 0, 3n * ADA)], fixed: { body: { 5: encMap([[encBytes(acct), encUint(2n * ADA)]]).toString('hex') } }, implicit: { withdrawals: 2n * ADA } });
-  const c = buildAdaLite(T, s, w, P, own);
+});
+
+// The wallet's stake credential (the state's change address's) and a reward
+// account on it.
+const stakeOf = (s) => {
+  const b = addressBytes(s.changeAddress);
+  return { hash: b.subarray(29, 57), account: Buffer.concat([Buffer.from([0xe0 | (b[0] & 0x0f)]), b.subarray(29, 57)]) };
+};
+const certBytes = (kind, hash, ...rest) => encArray([encUint(kind), encArray([encUint(0), encBytes(hash)]), ...rest]);
+
+test('a delegation spend goes through the plan: registration and delegation in the planner, their deposit in its balance and fee', { skip }, () => {
+  const s = constructState(T, [{ coin: 10n * ADA }, { coin: 20n * ADA }]);
+  const { hash } = stakeOf(s);
+  const certs = encArray([certBytes(0, hash), certBytes(2, hash, encBytes(Buffer.alloc(28, 0x55))), certBytes(9, hash, encArray([encUint(2)]))]);
+  const it = replayIntent('dg', 10, { type: 'T1', requested: [], fixed: { body: { 4: certs.toString('hex') } }, implicit: { deposits: 2n * ADA } });
+  const L = loadAdaLite();
+  const parts = planParts(L, it, s.changeAddress);
+  assert.deepEqual(parts.certificates.map((c) => c.type), [0, 2, 9]);
+  assert.deepEqual([...parts.typed], ['certificates']);
+  const a = buildAdaLite(T, s, it, P, own);
+  assert.equal(a.ok, true, a.detail);
+  assert.deepEqual(a.library.unpriced, []);
+  // The wallet wrote the three certificates; the 2 ADA deposit is in its
+  // balance and the transaction passes the kit.
+  const d = inspectTx(a.txs[0].bytes);
+  assert.equal(d.tx.body.fields.has(4), true);
+  assert.ok(a.library.fee >= a.library.finalMinFee);
+  const applied = checkAndApply(s, P, a.txs, { implicit: it.implicit, fixed: it.fixed });
+  assert.equal(applied.ok, true, applied.failure && applied.failure.detail);
+  const b = buildAdaLite(T, s, it, P, layout);
+  assert.equal(b.ok, true, b.detail);
+  assert.deepEqual(b.txs[0].walletInputs, a.txs[0].walletInputs);
+  assert.equal(checkAndApply(s, P, b.txs, { implicit: it.implicit, fixed: it.fixed }).ok, true);
+  // A vote delegation to a key DRep has no planner type: the whole list goes
+  // after the build, named, and its deposit is outside the wallet's balance.
+  const keyDrep = encArray([certBytes(0, hash), certBytes(9, hash, encArray([encUint(0), encBytes(Buffer.alloc(28, 0x66))]))]);
+  const other = replayIntent('dk', 10, { type: 'T1', requested: [], fixed: { body: { 4: keyDrep.toString('hex') } }, implicit: { deposits: 2n * ADA } });
+  assert.deepEqual(planParts(L, other, s.changeAddress).certificates, []);
+  const c = buildAdaLite(T, s, other, P, own);
   assert.equal(c.ok, true, c.detail);
-  assert.deepEqual(c.library.unpriced, ['withdrawals']);
-  const applied = checkAndApply(s, P, c.txs, { implicit: w.implicit, fixed: w.fixed });
-  assert.equal(applied.ok, false);
-  assert.equal(applied.failure.cls, CLASSES.balance);
-  const d = buildAdaLite(T, s, w, P, layout);
-  assert.equal(d.ok, true, d.detail);
-  assert.equal(checkAndApply(s, P, d.txs, { implicit: w.implicit, fixed: w.fixed }).ok, true);
+  assert.deepEqual(c.library.unpriced, ['certificates']);
+  assert.equal(checkAndApply(s, P, c.txs, { implicit: other.implicit, fixed: other.fixed }).failure.cls, CLASSES.balance);
+});
+
+test('a withdrawal spend goes through the plan: the rewards in its inputs, a witness priced; rewards under the fee are the wallet\'s refusal', { skip }, () => {
+  const s = constructState(T, [{ coin: 10n * ADA }, { coin: 20n * ADA }]);
+  const { account } = stakeOf(s);
+  const wd = (amount) => replayIntent(`wd${amount}`, 10, { type: 'T1', requested: [payTo(T, 0, 3n * ADA)], fixed: { body: { 5: encMap([[encBytes(account), encUint(amount)]]).toString('hex') } }, implicit: { withdrawals: amount } });
+  const w = wd(2n * ADA);
+  const L = loadAdaLite();
+  const parts = planParts(L, w, s.changeAddress);
+  assert.equal(parts.withdrawals.length, 1);
+  assert.equal(parts.withdrawals[0].rewards.toFixed(), '2000000');
+  for (const opts of [own, layout]) {
+    const r = buildAdaLite(T, s, w, P, opts);
+    assert.equal(r.ok, true, r.detail);
+    const applied = checkAndApply(s, P, r.txs, { implicit: w.implicit, fixed: w.fixed });
+    assert.equal(applied.ok, true, applied.failure && applied.failure.detail);
+  }
+  const a = buildAdaLite(T, s, w, P, own);
+  assert.deepEqual(a.library.unpriced, []);
+  // One input and the withdrawal priced: two witnesses.
+  assert.equal(a.library.priced, a.txs[0].walletInputs.length + 1);
+  // Rewards under the fee: validateTxPlan's RewardsBalanceTooLow
+  // (computeTxPlan.ts:360-379), under both changes.
+  for (const opts of [own, layout]) {
+    const r = buildAdaLite(T, s, wd(1000n), P, opts);
+    assert.deepEqual([r.ok, r.class], [false, CLASSES.other]);
+    assert.match(r.detail, /RewardsBalanceTooLow/);
+  }
+});
+
+test('a Catalyst registration is the planner\'s auxiliary data; other metadata goes after the build', { skip }, () => {
+  const s = constructState(T, [{ coin: 10n * ADA }, { coin: 20n * ADA }]);
+  const dest = addressBytes(s.changeAddress);
+  const reg = encMap([[encUint(1), encBytes(Buffer.alloc(32, 1))], [encUint(2), encBytes(Buffer.alloc(32, 2))], [encUint(3), encBytes(dest)], [encUint(4), encUint(12345)]]);
+  const meta = encMap([[encUint(61284), reg], [encUint(61285), encMap([[encUint(1), encBytes(Buffer.alloc(64, 3))]])]]);
+  const it = replayIntent('ct', 10, { type: 'T1', requested: [payTo(T, 0, 3n * ADA)], fixed: { auxiliaryData: meta.toString('hex') } });
+  const L = loadAdaLite();
+  const parts = planParts(L, it, s.changeAddress);
+  assert.equal(parts.auxiliaryData.type, 'CATALYST_VOTING');
+  assert.deepEqual([...parts.typed], ['auxiliary data']);
+  const a = buildAdaLite(T, s, it, P, own);
+  assert.equal(a.ok, true, a.detail);
+  assert.deepEqual(a.library.unpriced, []);
+  // The wallet's form of the registration, [metadata, []], and its hash.
+  const buf = Buffer.from(a.txs[0].bytes, 'hex');
+  const [body, , , auxNode] = decode(buf).items;
+  const auxBytes = raw(buf, auxNode);
+  assert.equal(auxBytes.toString('hex'), encArray([meta, encArray([])]).toString('hex'));
+  const hashNode = body.entries.find(([k]) => Number(k.value) === 7)[1];
+  assert.equal(raw(buf, hashNode).toString('hex'), encBytes(blake2b256(auxBytes)).toString('hex'));
+  // A registration with another key, or other labels, goes after the build.
+  const extra = encMap([[encUint(61284), reg], [encUint(61285), encMap([[encUint(1), encBytes(Buffer.alloc(64, 3))]])], [encUint(674), encText('x')]]);
+  const o = replayIntent('cx', 10, { type: 'T1', requested: [payTo(T, 0, 3n * ADA)], fixed: { auxiliaryData: extra.toString('hex') } });
+  assert.equal(planParts(L, o, s.changeAddress).auxiliaryData, null);
+  assert.deepEqual(buildAdaLite(T, s, o, P, own).library.unpriced, ['auxiliary data']);
 });
 
 test('a redeemer, and so a script spend\'s collateral, is not replayable', { skip }, () => {

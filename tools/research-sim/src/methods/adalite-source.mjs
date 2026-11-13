@@ -19,7 +19,9 @@
 // validateTxPlan (computeTxPlan.ts:37-381). The method runs that planner on
 // each spend's requested outputs (methods/adalite.mjs): Account's arrangeUtxos
 // and selectMinimalTxPlan's loop over the bundle's computeTxPlan and
-// validateTxPlan, and getTxPlan itself for the tests that compare the two.
+// validateTxPlan, with the certificates, withdrawals and Catalyst
+// registration its types hold, and getTxPlan itself for the tests that
+// compare the two.
 // The transaction is ShelleyTxAux
 // (wallet/shelley/shelley-transaction.ts:54-130), which Account.prepareTxAux
 // (wallet/account.ts:240-268) fills from the plan, and
@@ -72,7 +74,7 @@ export const BUILD_SCRIPT = 'scripts/build-adalite.mjs';
 // What the bundle exports, from the entry the build script writes in
 // app/frontend.
 export const ENTRY = `export { Account } from './wallet/account';
-export { ShelleyTxAux, ShelleySignedTransactionStructured, cborizeTxWitnesses } from './wallet/shelley/shelley-transaction';
+export { ShelleyTxAux, ShelleySignedTransactionStructured, cborizeTxWitnesses, cborizeTxCertificates, cborizeTxAuxiliaryVotingData } from './wallet/shelley/shelley-transaction';
 export { encodeCbor } from './wallet/helpers/cbor';
 export { computeMinUtxoLovelaceAmount, txFeeFunction } from './wallet/shelley/transaction/utils';
 export { computeTxPlan, validateTxPlan } from './wallet/shelley/transaction/computeTxPlan';

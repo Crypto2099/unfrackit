@@ -44,9 +44,36 @@
 //   the same test of the base fee against the fee, which compares the
 //   wallet's BigNumber objects by identity (computeTxPlan gives both fields
 //   one object except when it burns a leftover into the fee, :156-157), and
-//   the last result when the list is exhausted (:221-222). Like the send
-//   action's draft, the request carries no certificate, withdrawal or
-//   auxiliary data into the plan.
+//   the last result when the list is exhausted (:221-222). The draft's
+//   certificates, withdrawals and auxiliary data are the spend's own where
+//   the planner's types hold them (planParts), so their deposits, refunds,
+//   withdrawn rewards and bytes enter its fee and balance:
+//     certificates (types.ts:49-55, wallet/types.ts:90-125): a stake
+//     registration, deregistration or delegation, and a vote delegation to
+//     always-abstain (TxDRepType, wallet/types.ts:112-117), each for a key
+//     credential, as the wallet's own delegation and withdrawal drafts make
+//     them (shelley-transaction-planner.ts:63-153); each must encode to the
+//     spend's bytes through the wallet's cborizer (shelley-transaction.ts:
+//     170-200, :247-278), and a list with any other certificate goes after the
+//     build whole, as the other adapters do. A pool registration
+//     (:202-245) is left out: the wallet only witnesses a pool registration
+//     an operator built (actions/poolOwner.ts), and never plans one. The
+//     planner counts a 2 ADA key deposit and refund (computeRequiredDeposit,
+//     utils.ts:57-70) and one 139-byte witness per certificate
+//     (estimateTxSize.ts:58, :77-78);
+//     withdrawals (wallet/types.ts:127-130): every reward account, its
+//     rewards added to the inputs (computeTxPlan.ts:45-48) and one witness
+//     priced (estimateTxSize.ts:59, :77-78); validateTxPlan refuses a plan
+//     whose rewards are under its fee, or which burns a leftover into the fee,
+//     unless it deregisters (RewardsBalanceTooLow, computeTxPlan.ts:360-379);
+//     auxiliary data (wallet/types.ts:132-145): a Catalyst registration
+//     (labels 61284 and 61285, the voting draft of :155-174), when the
+//     spend's metadata is exactly that and encodes back to its bytes through
+//     cborizeTxAuxiliaryVotingData (shelley-transaction.ts:355-379); the
+//     transaction then carries the wallet's form of it and its hash, as the
+//     signer writes them (shelley-js-crypto-provider.ts:202-223). The
+//     estimate prices the registration with a placeholder signature that
+//     decodes to no bytes (estimateTxSize.ts:22-32), 64 bytes short.
 //   computeTxPlan (computeTxPlan.ts:37-287): no change on an exact fit
 //   (:100-116); an ADA-only leftover under its minimum to the fee
 //   (:141-162); otherwise one ADA-only change output (:167-183), or, with
@@ -94,11 +121,11 @@
 // Every other fixed part is one the wallet can neither write nor price, so it
 // is written on the wallet's transaction after the build, unpriced and named
 // in library.unpriced (afterParts): fixed inputs (added to body field 0),
-// reference inputs (18, a tag-258 set in order), certificates (4),
-// withdrawals (5), the mint field (9), required signers (14), network id
-// (15), votes (19), proposals (20), the treasury value (21), the donation
-// (22), auxiliary data with its hash (7), and the witness set's scripts,
-// datums and bootstrap witnesses. The value such a part moves (a fixed input,
+// reference inputs (18, a tag-258 set in order), a certificate list the
+// planner's types do not hold (4), the mint field (9), required signers (14),
+// network id (15), votes (19), proposals (20), the treasury value (21), the
+// donation (22), auxiliary data other than a Catalyst registration, with its
+// hash (7), and the witness set's scripts, datums and bootstrap witnesses. The value such a part moves (a fixed input,
 // a withdrawal, a mint, a deposit) is not in the wallet's balance, so its
 // transaction fails the kit's balance check; the record names the part.
 //
@@ -122,6 +149,7 @@
 //   OutputTooBig (:349-358), an output over 4,000 bytes         value-size
 //   TxTooBig thrown by estimateTxSize (estimateTxSize.ts:93)    tx-size
 //   CoinAmountError (:313-324)                                  other
+//   RewardsBalanceTooLow (:360-379)                             other
 //
 // The layout change (opts.changePolicy 'layout'): the same plan and
 // transaction as for its own change; the wallet inputs are read from that
@@ -144,6 +172,7 @@ import { decodeOutputBytes } from '../history/output.mjs';
 import { assetMap, mergeAssets } from '../history/value.mjs';
 import { minFee } from '../kit/fee.mjs';
 import { decode, raw, head, encUint, encBytes, encArray, encTag, asUint, asBytes } from '../history/cbor.mjs';
+import { addressBytes, addressText } from '../history/address.mjs';
 import { cmpRef } from '../state/state.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
 import { buildWithChange } from './change.mjs';
@@ -236,13 +265,102 @@ export function arrangeArgs(L, intent) {
   return { txType: TxType.SEND_ADA, sendAmount: { assetFamily: AssetFamily.ADA, fieldValue: '', coins: big(L, 0) } };
 }
 
+const hexOf = (b) => Buffer.from(b).toString('hex');
+const networkName = (header) => ((header & 0x0f) === 1 ? 'mainnet' : 'testnet');
+
+// A certificate as the planner's type, when its kind has one for a key
+// credential and the wallet's cborizer gives back its bytes; else null.
+function certificateOf(L, b, stakeText) {
+  const n = decode(b);
+  const kind = Number(asUint(n.items[0], 'certificate kind'));
+  if (![0, 1, 2, 9].includes(kind)) return null;
+  const cred = n.items[1];
+  if (cred.mt !== 4 || Number(asUint(cred.items[0], 'credential')) !== 0) return null;
+  const stakingAddress = stakeText(asBytes(cred.items[1], 'stake key hash'));
+  let c;
+  if (kind === 0) c = { type: 0, stakingAddress };
+  else if (kind === 1) c = { type: 1, stakingAddress };
+  else if (kind === 2) c = { type: 2, stakingAddress, poolHash: hexOf(asBytes(n.items[2], 'pool')) };
+  else {
+    const d = n.items[2];
+    if (d.mt !== 4 || d.items.length !== 1 || Number(asUint(d.items[0], 'drep')) !== 2) return null;
+    c = { type: 9, stakingAddress, dRep: { type: 2 } };
+  }
+  return hexOf(L.A.encodeCbor(L.A.cborizeTxCertificates([c])[0])) === hexOf(b) ? c : null;
+}
+
+// The metadata map of an auxiliary data that holds no script, or null.
+function metadataNode(aux) {
+  const n = decode(aux);
+  if (n.mt === 5) return n;
+  if (n.mt === 4 && n.items.length === 2 && n.items[1].mt === 4 && !n.items[1].items.length) return n.items[0];
+  if (n.mt === 6 && n.tag === 259n && n.item.mt === 5 && n.item.entries.every(([k]) => Number(k.value) === 0)) return n.item.entries.length ? n.item.entries[0][1] : null;
+  return null;
+}
+
+// A Catalyst registration as the planner's auxiliary data and the wallet's
+// encoding of it with the spend's signature, when the metadata is exactly
+// that and encodes back to its bytes; else null.
+function catalystOf(L, auxHex) {
+  const aux = Buffer.from(auxHex, 'hex');
+  const m = metadataNode(aux);
+  if (!m || m.entries.length !== 2) return null;
+  const byLabel = new Map(m.entries.map(([k, v]) => [Number(k.value), v]));
+  const reg = byLabel.get(61284);
+  const sig = byLabel.get(61285);
+  if (!reg || !sig || reg.mt !== 5 || sig.mt !== 5 || reg.entries.length !== 4 || sig.entries.length !== 1) return null;
+  const field = (node, k) => {
+    const e = node.entries.find(([x]) => x.mt === 0 && Number(x.value) === k);
+    return e ? e[1] : null;
+  };
+  const [vote, stake, dest, nonce, signature] = [field(reg, 1), field(reg, 2), field(reg, 3), field(reg, 4), field(sig, 1)];
+  if (!vote || !stake || !dest || !nonce || !signature || vote.mt !== 2 || stake.mt !== 2 || dest.mt !== 2 || nonce.mt !== 0 || signature.mt !== 2) return null;
+  if (dest.value.length < 1 || dest.value[0] >> 4 === 8) return null;
+  const plan = { type: 'CATALYST_VOTING', votingPubKey: hexOf(vote.value), stakePubKey: hexOf(stake.value), nonce: nonce.value, rewardDestinationAddress: { address: addressText(dest.value, networkName(dest.value[0])) } };
+  const cbor = L.A.cborizeTxAuxiliaryVotingData(plan, hexOf(signature.value));
+  if (hexOf(L.A.encodeCbor(cbor[0])) !== hexOf(raw(aux, m))) return null;
+  return { plan, cbor };
+}
+
+// The spend's fixed parts the planner's types hold: { certificates,
+// withdrawals, auxiliaryData (the plan's), txAuxiliaryData (the wallet's
+// encoding, or null), typed (the names afterParts leaves out) }.
+export function planParts(L, intent, changeAddress) {
+  const f = intent.source === 'replay' ? intent.fixed : null;
+  const out = { certificates: [], withdrawals: [], auxiliaryData: null, txAuxiliaryData: null, typed: new Set() };
+  if (!f) return out;
+  const header = addressBytes(changeAddress)[0] & 0x0f;
+  const stakeText = (hash) => addressText(Buffer.concat([Buffer.from([0xe0 | header]), hash]), networkName(header));
+  if (f.body[4] !== undefined) {
+    const certs = listItems(f.body[4]).map((b) => certificateOf(L, b, stakeText));
+    if (certs.every(Boolean)) {
+      out.certificates = certs;
+      out.typed.add('certificates');
+    }
+  }
+  if (f.body[5] !== undefined) {
+    out.withdrawals = decode(Buffer.from(f.body[5], 'hex')).entries.map(([k, v]) => {
+      const account = asBytes(k, 'reward account');
+      return { stakingAddress: addressText(account, networkName(account[0])), rewards: big(L, asUint(v, 'withdrawal')) };
+    });
+    out.typed.add('withdrawals');
+  }
+  if (f.auxiliaryData) {
+    const c = catalystOf(L, f.auxiliaryData);
+    if (c) {
+      out.auxiliaryData = c.plan;
+      out.txAuxiliaryData = c.cbor;
+      out.typed.add('auxiliary data');
+    }
+  }
+  return out;
+}
+
 // selectMinimalTxPlan (shelley-transaction-planner.ts:194-223) with the
-// request's outputs where the draft has its outputs (:199), and the draft's
-// empty certificates and withdrawals and null auxiliary data.
-export function planLoop(L, utxos, outputs, changeAddress) {
-  const certificates = [];
-  const withdrawals = [];
-  const auxiliaryData = null;
+// request's outputs where the draft has its outputs (:199), and the spend's
+// certificates, withdrawals and auxiliary data the planner's types hold
+// (planParts) where the draft has its own.
+export function planLoop(L, utxos, outputs, changeAddress, { certificates = [], withdrawals = [], auxiliaryData = null } = {}) {
   const change = {
     isChange: false,
     address: changeAddress,
@@ -267,10 +385,10 @@ export function planLoop(L, utxos, outputs, changeAddress) {
 
 // The wallet's plan for the request: its arrangement of the UTxOs, then the
 // loop. Throws what the wallet throws (TxTooBig).
-export function planTx(L, intent, utxos, changeAddress) {
+export function planTx(L, intent, utxos, changeAddress, parts = planParts(L, intent, changeAddress)) {
   const { outputs } = requestOf(L, intent);
   const arranged = L.account._arrangeUtxos(utxos, arrangeArgs(L, intent));
-  return planLoop(L, arranged, outputs, changeAddress);
+  return planLoop(L, arranged, outputs, changeAddress, parts);
 }
 
 // Why the intent is not replayable by the wallet, or null.
@@ -293,9 +411,10 @@ const inputBytes = (ref) => {
   return encArray([encBytes(Buffer.from(ref.slice(0, i), 'hex')), encUint(Number(ref.slice(i + 1)))]);
 };
 
-// The fixed parts written after the build: { inputs [bytes], body Map,
-// witnesses Map, aux, unpriced [names] }.
-export function afterParts(intent) {
+// The fixed parts written after the build, leaving out those the planner's
+// types hold (typed, from planParts): { inputs [bytes], body Map, witnesses
+// Map, aux, unpriced [names] }.
+export function afterParts(intent, typed = new Set()) {
   const f = intent.source === 'replay' ? intent.fixed : null;
   const out = { inputs: [], body: new Map(), witnesses: new Map(), aux: null, unpriced: [] };
   if (!f) return out;
@@ -311,11 +430,11 @@ export function afterParts(intent) {
     name('reference inputs');
   }
   for (const [k, n] of BODY_AFTER) {
-    if (f.body[k] === undefined) continue;
+    if (f.body[k] === undefined || typed.has(n)) continue;
     out.body.set(k, Buffer.from(f.body[k], 'hex'));
     name(n);
   }
-  if (f.auxiliaryData) {
+  if (f.auxiliaryData && !typed.has('auxiliary data')) {
     out.aux = Buffer.from(f.auxiliaryData, 'hex');
     out.body.set(7, encBytes(blake2b256(out.aux)));
     name('auxiliary data');
@@ -397,9 +516,9 @@ const failureText = (failure) => (failure instanceof Error ? `${failure.name}: $
 // see: a balance failure of the plan names them, as a failure that follows a
 // part written after the build does (the engine's unpricedText).
 const VALUE_PARTS = ['fixed inputs', 'withdrawals', 'mint', 'certificates', 'proposals', 'treasury value', 'donation'];
-const valuePartsText = (intent, cls) => {
+const valuePartsText = (intent, cls, typed) => {
   if (cls !== CLASSES.balance && cls !== CLASSES.changeMinimum) return '';
-  const names = afterParts(intent).unpriced.filter((n) => VALUE_PARTS.includes(n));
+  const names = afterParts(intent, typed).unpriced.filter((n) => VALUE_PARTS.includes(n));
   return names.length ? `; parts the library did not price: ${names.join(', ')}` : '';
 };
 
@@ -417,16 +536,18 @@ export function buildAdaLite(T, state, intent, params, opts, { name = 'adalite-l
   const f = intent.source === 'replay' ? intent.fixed : null;
   const fixedRefs = new Set(f ? f.inputs.map((x) => x.ref) : []);
   const pool = inputOrder(state).filter((u) => !fixedRefs.has(u.ref));
+  let parts;
   let result;
   try {
-    result = planTx(L, intent, pool.map((u) => utxoOf(L, u)), state.changeAddress);
+    parts = planParts(L, intent, state.changeAddress);
+    result = planTx(L, intent, pool.map((u) => utxoOf(L, u)), state.changeAddress, parts);
   } catch (e) {
     passMachineErrors(e);
     return { ok: false, class: classOfAdaLiteFailure(L, e, { pool, intent }), detail: `planner: ${failureText(e)}` };
   }
   if (!result.success) {
     const cls = classOfAdaLiteFailure(L, result, { pool, intent });
-    return { ok: false, class: cls, detail: `planner: ${failureText(result)}${valuePartsText(intent, cls)}` };
+    return { ok: false, class: cls, detail: `planner: ${failureText(result)}${valuePartsText(intent, cls, parts.typed)}` };
   }
   const plan = result.txPlan;
   let tx;
@@ -440,7 +561,7 @@ export function buildAdaLite(T, state, intent, params, opts, { name = 'adalite-l
       ttl: slotOf(L, f, 3),
       certificates: plan.certificates,
       withdrawals: plan.withdrawals,
-      auxiliaryDataHash: '',
+      auxiliaryDataHash: parts.txAuxiliaryData ? hexOf(blake2b256(L.A.encodeCbor(parts.txAuxiliaryData))) : '',
       auxiliaryData: null,
       validityIntervalStart: slotOf(L, f, 8)
     });
@@ -452,12 +573,12 @@ export function buildAdaLite(T, state, intent, params, opts, { name = 'adalite-l
       const [vkey, sig] = decode(w).items;
       return { publicKey: Buffer.from(asBytes(vkey, 'vkey')), signature: Buffer.from(asBytes(sig, 'signature')) };
     });
-    tx = L.A.encodeCbor(L.A.ShelleySignedTransactionStructured(aux, L.A.cborizeTxWitnesses([], shelley), null)).toString('hex');
+    tx = L.A.encodeCbor(L.A.ShelleySignedTransactionStructured(aux, L.A.cborizeTxWitnesses([], shelley), parts.txAuxiliaryData)).toString('hex');
   } catch (e) {
     passMachineErrors(e);
     return { ok: false, class: CLASSES.other, detail: `the wallet's transaction: ${errorText(e)}` };
   }
-  const after = afterParts(intent);
+  const after = afterParts(intent, parts.typed);
   const bytes = withPartsAfter(tx, after);
   // The wallet inputs, read from the transaction the wallet built.
   const walletRefs = inspectTx(tx).inputs.map((i) => i.ref);
