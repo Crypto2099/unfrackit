@@ -3,7 +3,8 @@
 
 // The JVM helper of the simulator's bridge (src/methods/helper.mjs, schema 1):
 // one process per worker serves the JVM libraries, the request naming the
-// library: Scalus 1.5.0 (library "scalus", ScalusLib.scala). It reads one request per line on stdin and
+// library: cardano-client-lib 0.7.3 (library "ccl", Ccl.scala) and Scalus
+// 1.5.0 (library "scalus", ScalusLib.scala). It reads one request per line on stdin and
 // writes one response per line on stdout, and exits at the end of its input.
 // The libraries' own logging is sent to stderr, so stdout carries responses
 // only.
@@ -133,6 +134,7 @@ object Main:
         try
           val req = request(q)
           val (tx, built) = req.library match
+            case "ccl" => Ccl.build(req)
             case "scalus" => ScalusLib.build(req)
             case other => throw new IllegalArgumentException(s"unknown library $other")
           last = Some(built)

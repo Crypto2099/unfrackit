@@ -42,6 +42,9 @@
 //                       its defaults, MACSSelector, in a Go helper process
 //                       (scripts/build-helpers.mjs apollo) through the bridge
 //                       (methods/helper.mjs)
+//   ccl-pw              methods/jvm.mjs: cardano-client-lib's QuickTx
+//                       builder at its defaults, its page-wise default
+//                       selection, in the JVM helper process
 //   scalus-pool         methods/jvm.mjs: Scalus's TxBuilder.complete with
 //                       the wallet's address as sponsor, in the JVM helper
 //                       process (scripts/build-helpers.mjs jvm) through the
@@ -75,7 +78,7 @@ import { laceMethod } from './lace.mjs';
 import { adaliteMethod } from './adalite.mjs';
 import { yoroiMethod } from './yoroi.mjs';
 import { apolloMethod } from './apollo.mjs';
-import { scalusMethod } from './jvm.mjs';
+import { cclMethod, scalusMethod } from './jvm.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -104,7 +107,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -124,6 +127,7 @@ const FACTORIES = new Map([
   ['yoroi-lf', baseline('yoroi-lf', (T) => yoroiMethod(T))],
   ['apollo-macs', baseline('apollo-macs', (T) => apolloMethod(T))],
   ['scalus-pool', baseline('scalus-pool', (T) => scalusMethod(T))],
+  ['ccl-pw', baseline('ccl-pw', (T) => cclMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

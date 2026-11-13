@@ -98,6 +98,8 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //         collateral set aside; a redeemer the builder cannot attach (a
 //         certificate's, a vote's, a proposal's) is not replayable
 //         (methods/apollo.mjs)
+//   ccl   ccl-pw: every part, through QuickTx's operations and the
+//         collateral set aside (methods/jvm.mjs)
 //   scalus scalus-pool: every part, through the builder's steps, collateral
 //         as the library chooses it, since it cannot be given the UTxO the
 //         engine would set aside (methods/jvm.mjs)
@@ -117,7 +119,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   adalite: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   yoroi: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   apollo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  scalus: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  scalus: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  ccl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
