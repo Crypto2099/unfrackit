@@ -58,15 +58,37 @@
 //   auxiliary data      SetShelleyMetadata with the intent's metadata,
 //                       each label's value as decoded (:1132-1135); the
 //                       builder writes metadata only
+//   Plutus scripts      AttachScript for each of the witness set's V1, V2
+//                       and V3 scripts; a script a reference input carries
+//                       is resolved by the builder through the chain context
+//   datums              AddDatum for each of the witness set's (:432-441)
+//   script inputs       CollectFrom with the input's redeemer (:542-556)
+//   Plutus mint         Mint with the policy's redeemer (:467-491)
+//   script withdrawals  AddWithdrawal with the account's redeemer
+//   collateral          the UTxO the engine set aside, by AddCollateral
+//                       (:418-425); the builder then chooses none of its own
+//                       (setCollateral, :3888-3890) and sizes the total
+//                       collateral and the return from its final fee
+//                       (finalizeCollateral, :4098-4250)
+//   execution units     estimated, as by default (estimateExUnits), through
+//                       the chain context's evaluator, which returns the
+//                       intent's observed units for each redeemer at the part
+//                       Apollo's index names; the builder raises each by its
+//                       20 percent buffer (ExMemoryBuffer, ExStepBuffer,
+//                       :30-31, :3186-3189) and prices the raised units. A
+//                       script spend that also lists required signers cannot
+//                       be evaluated here, since the builder signs the
+//                       evaluation draft for each signer and verifies the
+//                       signatures (evaluation_witness.go:55-147); it is given
+//                       the observed units raised by the same buffer with the
+//                       estimate off (DisableExecutionUnitsEstimation,
+//                       :534-537), which writes the same redeemers
 // Not replayable: body field 6 (kit/replay.mjs replayRefusal); a body field
 // none of the operations above writes; a bootstrap witness, which no
-// operation writes; auxiliary data holding scripts. The Plutus parts
-// (redeemers, Plutus scripts, datums) and with them the collateral of a
-// script spend are not in this adapter's replay path yet (REPLAY_COVERAGE
-// leaves out 'collateral'): every intent with a redeemer requires
-// collateral, so such an intent is refused before the helper is asked, as
-// an uncovered part, never scored as not replayable; a Plutus witness without
-// a redeemer is answered as not replayable ('plutus').
+// operation writes; auxiliary data holding scripts; and a certificate's, a
+// vote's or a proposal's redeemer, since the builder attaches redeemers to
+// spent inputs, minting policies and withdrawals only (its redeemer map,
+// :3501-3577).
 //
 // The layout change (opts.changePolicy 'layout'): the library builds its
 // transaction exactly as for its own change; the bridge reads the wallet
@@ -86,6 +108,11 @@
 //   "transaction size N exceeds max_tx_size M" (apollo.go:2333)  tx-size
 //   "output N value size N exceeds max_val_size M" (apollo.go:2369)
 //                                                              value-size
+//   "manual collateral carries native assets but no collateral return is
+//   set" (:4157-4160), "collateral return for native assets needs ..."
+//   (:4203-4206), "collateral input ... is not vkey-locked" (:4280), "too many
+//   collateral inputs" (:4287-4290): the collateral set aside does not suit
+//   the builder                                                collateral
 
 import { CLASSES } from '../kit/check.mjs';
 import { REPLAY_COVERAGE } from './library.mjs';
@@ -100,7 +127,11 @@ const ERROR_CLASSES = [
   [/^coin selection failed: no available UTxO to spend/, CLASSES.balance],
   [/^insufficient funds: /, CLASSES.balance],
   [/^transaction size \d+ exceeds max_tx_size \d+/, CLASSES.txSize],
-  [/^output \d+ value size \d+ exceeds max_val_size \d+/, CLASSES.valueSize]
+  [/^output \d+ value size \d+ exceeds max_val_size \d+/, CLASSES.valueSize],
+  [/^manual collateral carries native assets but no collateral return is set/, CLASSES.collateral],
+  [/^collateral return for native assets needs \d+ lovelace/, CLASSES.collateral],
+  [/^collateral input \S+ is not vkey-locked/, CLASSES.collateral],
+  [/^too many collateral inputs/, CLASSES.collateral]
 ];
 
 export function classOfApolloError(text) {

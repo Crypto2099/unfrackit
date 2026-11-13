@@ -28,6 +28,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -61,8 +63,17 @@ type fixedInput struct {
 	Held      *string `json:"held"`
 }
 
+// The part a redeemer redeems, as the history reader records it.
+type target struct {
+	Kind    string `json:"kind"`
+	Ref     string `json:"ref"`
+	Policy  string `json:"policy"`
+	Account string `json:"account"`
+}
+
 type redeemer struct {
 	Tag     int       `json:"tag"`
+	Target  target    `json:"target"`
 	Data    string    `json:"data"`
 	ExUnits [2]string `json:"exUnits"`
 }
@@ -223,11 +234,17 @@ type chain struct {
 	slot   uint64
 	byAddr map[string][]common.Utxo
 	byRef  map[string]common.Utxo
+	// The intent's observed execution units, by the part each redeemer
+	// redeems: a spent input's reference, a policy, a reward account (hex).
+	spendUnits  map[string]common.ExUnits
+	mintUnits   map[string]common.ExUnits
+	rewardUnits map[string]common.ExUnits
 }
 
 func (c *chain) Capabilities() backend.CapabilitySet {
 	return backend.CapabilitySet(backend.CapabilityProtocolParams | backend.CapabilityGenesisParams | backend.CapabilityCurrentEpoch |
-		backend.CapabilityMaxTxFee | backend.CapabilityTip | backend.CapabilityUtxos | backend.CapabilityUtxoByRef)
+		backend.CapabilityMaxTxFee | backend.CapabilityTip | backend.CapabilityUtxos | backend.CapabilityUtxoByRef |
+		backend.CapabilityEvaluateTx)
 }
 func (c *chain) ProtocolParams() (backend.ProtocolParameters, error) { return c.pp, nil }
 func (c *chain) GenesisParams() (backend.GenesisParameters, error) {
@@ -246,8 +263,70 @@ func (c *chain) Utxos(a common.Address) ([]common.Utxo, error) {
 func (c *chain) SubmitTx([]byte) (common.Blake2b256, error) {
 	return common.Blake2b256{}, backend.NewUnsupportedError("the simulator's chain context", backend.CapabilitySubmitTx)
 }
-func (c *chain) EvaluateTx([]byte, []common.Utxo) (map[common.RedeemerKey]common.ExUnits, error) {
-	return nil, backend.NewUnsupportedError("the simulator's chain context", backend.CapabilityEvaluateTx)
+// EvaluateTx answers Apollo's evaluation of a draft (apollo.go:3075-3277)
+// with the intent's observed execution units for each redeemer the draft
+// carries, found by the part the redeemer's index names in Apollo's own
+// numbering: a spend among the inputs as SortInputs orders them (the
+// `inputs` Apollo indexes, apollo.go:3196-3206), a mint among the policy ids
+// sorted as hex (sortedMintPolicyIds), a reward among the withdrawals sorted
+// by address bytes (sortedWithdrawalKeys, apollo.go:3671-3694). Apollo then
+// raises each by its buffer. A redeemer with no observed counterpart fails
+// the evaluation.
+func (c *chain) EvaluateTx(txCbor []byte, _ []common.Utxo) (map[common.RedeemerKey]common.ExUnits, error) {
+	tx, err := conway.NewConwayTransactionFromCbor(txCbor)
+	if err != nil {
+		return nil, fmt.Errorf("evaluation draft: %w", err)
+	}
+	var ins []common.Utxo
+	for _, i := range tx.Body.TxInputs.Items() {
+		u, ok := c.byRef[hex.EncodeToString(i.Id().Bytes())+"#"+strconv.Itoa(int(i.Index()))]
+		if !ok {
+			return nil, fmt.Errorf("evaluation draft spends an unknown input %s#%d", i.Id().String(), i.Index())
+		}
+		ins = append(ins, u)
+	}
+	ins = apollo.SortInputs(ins)
+	var policies []string
+	if tx.Body.TxMint != nil {
+		for _, p := range tx.Body.TxMint.Policies() {
+			policies = append(policies, hex.EncodeToString(p.Bytes()))
+		}
+		sort.Strings(policies)
+	}
+	var accounts [][]byte
+	for a := range tx.Body.TxWithdrawals {
+		b, err := a.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, b)
+	}
+	sort.Slice(accounts, func(i, j int) bool { return bytes.Compare(accounts[i], accounts[j]) < 0 })
+	out := map[common.RedeemerKey]common.ExUnits{}
+	for k := range tx.WitnessSet.WsRedeemers.Iter() {
+		var u common.ExUnits
+		var ok bool
+		i := int(k.Index)
+		switch k.Tag {
+		case common.RedeemerTagSpend:
+			if i < len(ins) {
+				u, ok = c.spendUnits[refOf(ins[i])]
+			}
+		case common.RedeemerTagMint:
+			if i < len(policies) {
+				u, ok = c.mintUnits[policies[i]]
+			}
+		case common.RedeemerTagReward:
+			if i < len(accounts) {
+				u, ok = c.rewardUnits[hex.EncodeToString(accounts[i])]
+			}
+		}
+		if !ok {
+			return nil, fmt.Errorf("the draft's redeemer %d:%d has no observed redeemer", k.Tag, k.Index)
+		}
+		out[common.RedeemerKey{Tag: k.Tag, Index: k.Index}] = u
+	}
+	return out, nil
 }
 func (c *chain) UtxoByRef(h common.Blake2b256, i uint32) (*common.Utxo, error) {
 	u, ok := c.byRef[hex.EncodeToString(h.Bytes())+"#"+strconv.Itoa(int(i))]
@@ -381,7 +460,8 @@ func build(q *request) (string, error) {
 	if err != nil {
 		return "", stageError{"replay parts", fmt.Errorf("change address: %w", err)}
 	}
-	c := &chain{pp: pp, net: q.NetworkID, byAddr: map[string][]common.Utxo{}, byRef: map[string]common.Utxo{}}
+	c := &chain{pp: pp, net: q.NetworkID, byAddr: map[string][]common.Utxo{}, byRef: map[string]common.Utxo{},
+		spendUnits: map[string]common.ExUnits{}, mintUnits: map[string]common.ExUnits{}, rewardUnits: map[string]common.ExUnits{}}
 	if v, ok := q.Params["epoch"].(float64); ok {
 		c.epoch = uint64(v)
 	}
@@ -429,6 +509,18 @@ func build(q *request) (string, error) {
 		if a, err = withFixedParts(a, c, q); err != nil {
 			return "", err
 		}
+	}
+	// The collateral the engine set aside for a script spend, given to the
+	// builder (apollo.go:418-425), which then selects none of its own
+	// (setCollateral, :3888-3890) and sizes the total and the return from
+	// the final fee (finalizeCollateral, :4098-4250).
+	if q.Collateral != nil {
+		u, err := decodeUtxo(q.Collateral.Cbor)
+		if err != nil {
+			return "", stageError{"replay parts", fmt.Errorf("collateral %s: %w", q.Collateral.Ref, err)}
+		}
+		c.byRef[q.Collateral.Ref] = u
+		a = a.AddCollateral(u)
 	}
 	built, err := a.Complete()
 	if err != nil {
@@ -573,11 +665,11 @@ func withFixedParts(a *apollo.Apollo, c *chain, q *request) (*apollo.Apollo, err
 	fail := func(err error) (*apollo.Apollo, error) { return a, stageError{"replay parts", err} }
 	for k := range f.Witnesses {
 		switch k {
-		case "0", "1", "4":
+		case "0", "1", "3", "4", "5", "6", "7":
 		case "2":
 			return a, notReplayable{"bootstrap witnesses", "a bootstrap witness: the builder has no operation that writes one"}
 		default:
-			return a, notReplayable{"plutus", "a Plutus script, datum or redeemer: the adapter's path for Plutus parts is not built"}
+			return a, notReplayable{"witness set key " + k, "witness set key " + k + ": the builder has no operation that writes it"}
 		}
 	}
 	for k := range f.Body {
@@ -587,8 +679,113 @@ func withFixedParts(a *apollo.Apollo, c *chain, q *request) (*apollo.Apollo, err
 			return a, notReplayable{"body field " + k, "body field " + k + ": the builder has no operation that writes it"}
 		}
 	}
-	if len(f.Redeemers) > 0 {
-		return a, notReplayable{"plutus", "a redeemer: the adapter's path for Plutus parts is not built"}
+	// The redeemers, by the part each redeems. The builder attaches a
+	// redeemer to a spent input, a minting policy or a withdrawal only
+	// (CollectFrom, Mint, AddWithdrawal; its redeemer map, apollo.go:
+	// 3501-3577, holds no other kind).
+	type plutusRedeemer struct {
+		data  common.Datum
+		units common.ExUnits
+	}
+	spendRed := map[string]plutusRedeemer{}
+	mintRed := map[string]plutusRedeemer{}
+	rewardRed := map[string]plutusRedeemer{}
+	_, hasSigners := f.Body["14"]
+	for i, r := range f.Redeemers {
+		switch r.Tag {
+		case 2:
+			return a, notReplayable{"certificate redeemer", "a certificate's redeemer: the builder attaches redeemers to spent inputs, minting policies and withdrawals only (apollo.go:3501-3577)"}
+		case 4:
+			return a, notReplayable{"vote redeemer", "a vote's redeemer: the builder attaches redeemers to spent inputs, minting policies and withdrawals only (apollo.go:3501-3577)"}
+		case 5:
+			return a, notReplayable{"proposal redeemer", "a proposal's redeemer: the builder attaches redeemers to spent inputs, minting policies and withdrawals only (apollo.go:3501-3577)"}
+		}
+		b, err := unhex(r.Data)
+		if err != nil {
+			return fail(err)
+		}
+		var pr plutusRedeemer
+		if _, err := cbor.Decode(b, &pr.data); err != nil {
+			return fail(fmt.Errorf("redeemer %d data: %w", i, err))
+		}
+		mem, err1 := strconv.ParseInt(r.ExUnits[0], 10, 64)
+		steps, err2 := strconv.ParseInt(r.ExUnits[1], 10, 64)
+		if err1 != nil || err2 != nil {
+			return fail(fmt.Errorf("redeemer %d execution units", i))
+		}
+		pr.units = common.ExUnits{Memory: mem, Steps: steps}
+		switch r.Tag {
+		case 0:
+			spendRed[r.Target.Ref] = pr
+			c.spendUnits[r.Target.Ref] = pr.units
+		case 1:
+			mintRed[strings.ToLower(r.Target.Policy)] = pr
+			c.mintUnits[strings.ToLower(r.Target.Policy)] = pr.units
+		case 3:
+			rewardRed[strings.ToLower(r.Target.Account)] = pr
+			c.rewardUnits[strings.ToLower(r.Target.Account)] = pr.units
+		default:
+			return fail(fmt.Errorf("redeemer %d: tag %d", i, r.Tag))
+		}
+	}
+	// The execution units. By default the builder estimates them through the
+	// chain context's evaluator (EvaluateTx above), which returns the observed
+	// units, and raises each by its buffer (ExMemoryBuffer, ExStepBuffer,
+	// apollo.go:30-31, :3186-3189). A transaction that also lists required
+	// signers cannot be evaluated here: the builder signs the evaluation draft
+	// for each of them and verifies the signatures (evaluation_witness.go:
+	// 55-147), and the replay holds no signing keys. For those the builder is
+	// given the units its evaluation would set, the observed units raised by
+	// the same buffer, with the estimate off (DisableExecutionUnitsEstimation,
+	// apollo.go:534-537), which writes the same redeemers.
+	evaluate := !hasSigners
+	unitsOf := func(pr plutusRedeemer) common.ExUnits {
+		if evaluate {
+			return pr.units
+		}
+		return common.ExUnits{Memory: buffered(pr.units.Memory, 1+apollo.ExMemoryBuffer), Steps: buffered(pr.units.Steps, 1+apollo.ExStepBuffer)}
+	}
+	if len(f.Redeemers) > 0 && !evaluate {
+		a = a.DisableExecutionUnitsEstimation()
+	}
+	// Plutus scripts of the witness set (V1, V2, V3), attached for the parts
+	// that run them; a part whose script comes from a reference input needs
+	// none.
+	for _, k := range []string{"3", "6", "7"} {
+		h, ok := f.Witnesses[k]
+		if !ok {
+			continue
+		}
+		b, err := unhex(h)
+		if err != nil {
+			return fail(err)
+		}
+		switch k {
+		case "3":
+			var ss cbor.SetType[common.PlutusV1Script]
+			if _, err := cbor.Decode(b, &ss); err != nil {
+				return fail(fmt.Errorf("Plutus V1 scripts: %w", err))
+			}
+			for _, x := range ss.Items() {
+				a = a.AttachScript(x)
+			}
+		case "6":
+			var ss cbor.SetType[common.PlutusV2Script]
+			if _, err := cbor.Decode(b, &ss); err != nil {
+				return fail(fmt.Errorf("Plutus V2 scripts: %w", err))
+			}
+			for _, x := range ss.Items() {
+				a = a.AttachScript(x)
+			}
+		case "7":
+			var ss cbor.SetType[common.PlutusV3Script]
+			if _, err := cbor.Decode(b, &ss); err != nil {
+				return fail(fmt.Errorf("Plutus V3 scripts: %w", err))
+			}
+			for _, x := range ss.Items() {
+				a = a.AttachScript(x)
+			}
+		}
 	}
 	// Native scripts of the witness set, attached for the parts that need
 	// them (fixed inputs, mint, certificates, withdrawals).
@@ -626,6 +823,12 @@ func withFixedParts(a *apollo.Apollo, c *chain, q *request) (*apollo.Apollo, err
 			return fail(fmt.Errorf("fixed input %s: %w", x.Ref, err))
 		}
 		c.byRef[x.Ref] = u
+		if pr, ok := spendRed[x.Ref]; ok {
+			// A script input with its redeemer (apollo.go:542-556).
+			a = a.CollectFrom(u, pr.data, unitsOf(pr))
+			delete(spendRed, x.Ref)
+			continue
+		}
 		a = a.AddInput(u)
 	}
 	for _, x := range f.ReferenceInputs {
@@ -680,7 +883,13 @@ func withFixedParts(a *apollo.Apollo, c *chain, q *request) (*apollo.Apollo, err
 				if q == nil || !q.IsInt64() {
 					return fail(errors.New("mint quantity out of range"))
 				}
-				a = a.Mint(apollo.Unit{PolicyId: hex.EncodeToString(p.Bytes()), Name: hex.EncodeToString(n), Quantity: q.Int64()}, nil, nil)
+				unit := apollo.Unit{PolicyId: hex.EncodeToString(p.Bytes()), Name: hex.EncodeToString(n), Quantity: q.Int64()}
+				if pr, ok := mintRed[unit.PolicyId]; ok {
+					u := unitsOf(pr)
+					a = a.Mint(unit, &pr.data, &u)
+					continue
+				}
+				a = a.Mint(unit, nil, nil)
 			}
 		}
 	}
@@ -704,6 +913,12 @@ func withFixedParts(a *apollo.Apollo, c *chain, q *request) (*apollo.Apollo, err
 			addr, err := common.NewAddressFromBytes(k.Bytes())
 			if err != nil {
 				return fail(fmt.Errorf("withdrawal account: %w", err))
+			}
+			if pr, ok := rewardRed[hex.EncodeToString(k.Bytes())]; ok {
+				u := unitsOf(pr)
+				a = a.AddWithdrawal(addr, v, &pr.data, &u)
+				delete(rewardRed, hex.EncodeToString(k.Bytes()))
+				continue
 			}
 			a = a.AddWithdrawal(addr, v, nil, nil)
 		}
@@ -779,5 +994,24 @@ func withFixedParts(a *apollo.Apollo, c *chain, q *request) (*apollo.Apollo, err
 			a = a.SetShelleyMetadata(labels)
 		}
 	}
+	for ref := range spendRed {
+		return fail(fmt.Errorf("a spend redeemer's input %s is not a fixed input", ref))
+	}
+	for acct := range rewardRed {
+		return fail(fmt.Errorf("a reward redeemer's account %s has no withdrawal", acct))
+	}
 	return a, nil
+}
+
+// An execution unit raised by Apollo's buffer as its evaluation raises it
+// (bufferExUnits, apollo.go:3314-3323).
+func buffered(v int64, factor float64) int64 {
+	if v <= 0 {
+		return 0
+	}
+	f := float64(v) * factor
+	if f >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(f)
 }

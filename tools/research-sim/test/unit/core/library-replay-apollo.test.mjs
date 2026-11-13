@@ -8,17 +8,19 @@
 // same inputs; an input set that cannot fund the layout change fails with
 // class change-minimum; a library failure is the library's under both; any
 // other change policy is refused; a replayed spend's validity and other fixed
-// parts pass through the builder's operations; each part the builder cannot
-// write is not replayable, and a Plutus spend is refused as a part the
-// adapter's path does not cover yet. The tests that run the helper skip,
-// naming the build command, when it is not built.
+// parts pass through the builder's operations; a Plutus mint and a script
+// withdrawal build with their redeemers and the collateral set aside, their
+// execution units the observed ones raised by Apollo's buffer whether the
+// builder evaluates them or, with required signers, is given them; each part
+// the builder cannot write is not replayable. The tests that run the helper
+// skip, naming the build command, when it is not built.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { apolloMethod, classOfApolloError } from '../../../src/methods/apollo.mjs';
 import { helperBuild, BUILD_SCRIPT } from '../../../src/methods/helper.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
-import { REPLAY_COVERAGE } from '../../../src/methods/library.mjs';
+import { REPLAY_COVERAGE, REPLAY_PARTS } from '../../../src/methods/library.mjs';
 import { NOT_REPLAYABLE, checkMethod, choosesOwnCollateral } from '../../../src/methods/contract.mjs';
 import { CLASSES } from '../../../src/kit/check.mjs';
 import { checkAndApply } from '../../../src/kit/apply.mjs';
@@ -28,7 +30,7 @@ import { loadSource } from '../../../src/replay/source.mjs';
 import { constructState, policy, assetName, ADA } from '../../lib/construct.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
 import { encUint, encArray, encMap, encBytes, encTag, decode, asUint } from '../../../src/history/cbor.mjs';
-import { replayIntent, payTo as payToOf } from '../../lib/script-intents.mjs';
+import { replayIntent, payTo as payToOf, zeroRedeemerIntents, EX_UNITS } from '../../lib/script-intents.mjs';
 import { treatment, skip as noTreatment } from '../../lib/treatment.mjs';
 
 const P = SYNTHETIC_PARAMS;
@@ -38,8 +40,8 @@ const { problem } = helperBuild('apollo');
 const noBuild = problem ? `apollo-macs: ${problem}` : false;
 const skip = noTreatment || noBuild;
 
-test('Apollo covers the fixed parts, implicit values and output data; without the build the method refuses to load, naming the command', () => {
-  assert.deepEqual(REPLAY_COVERAGE.apollo, ['fixed', 'implicit', 'outputData']);
+test('Apollo covers every replay part; without the build the method refuses to load, naming the command', () => {
+  assert.deepEqual(REPLAY_COVERAGE.apollo, [...REPLAY_PARTS]);
   if (problem) {
     assert.ok(problem.includes(`node ${BUILD_SCRIPT} apollo`));
     assert.throws(() => apolloMethod(null), /scripts\/build-helpers\.mjs apollo/);
@@ -62,6 +64,10 @@ test('the library\'s errors map to the failure classes', () => {
   assert.equal(classOfApolloError('insufficient funds for asset change min UTxO'), CLASSES.changeMinimum);
   assert.equal(classOfApolloError('transaction size 17000 exceeds max_tx_size 16384'), CLASSES.txSize);
   assert.equal(classOfApolloError('output 1 value size 5100 exceeds max_val_size 5000; split the native assets across more outputs'), CLASSES.valueSize);
+  assert.equal(classOfApolloError('manual collateral carries native assets but no collateral return is set; set a collateral amount/return or use ADA-only collateral'), CLASSES.collateral);
+  assert.equal(classOfApolloError('collateral return for native assets needs 1000000 lovelace but only 5 is available after total collateral 3; supply a larger or additional collateral UTxO'), CLASSES.collateral);
+  assert.equal(classOfApolloError('collateral input ab#0 is not vkey-locked (script-address collateral is rejected by the ledger)'), CLASSES.collateral);
+  assert.equal(classOfApolloError('too many collateral inputs: 4 exceeds protocol maximum of 3'), CLASSES.collateral);
   assert.equal(classOfApolloError('evaluation transaction did not converge after 5 iterations'), CLASSES.other);
 });
 
@@ -149,43 +155,81 @@ test('the intent\'s validity, required signers and metadata pass through the bui
   }
 });
 
-test('each part the builder cannot write is not replayable; a Plutus spend is refused as uncovered', { skip }, async () => {
+test('each part the builder cannot write is not replayable', { skip }, async () => {
   const m = makeMethod(T, 'apollo-macs');
   const s = constructState(T, [{ coin: 20n * ADA }]);
+  const coll = constructState(T, [{ coin: 5n * ADA, txid: 'collateral' }]).utxos.values().next().value;
   const boot = payment([pay(0, 3n * ADA)], 100, { witnesses: { 2: encArray([encArray([encBytes(Buffer.alloc(32)), encBytes(Buffer.alloc(64)), encBytes(Buffer.alloc(32)), encBytes(Buffer.from([0xa0]))])]).toString('hex') } });
   const auxScripts = payment([pay(0, 3n * ADA)], 100, { auxiliaryData: encTag(259, encMap([[encUint(0), encMap([[encUint(1), encUint(1)]])], [encUint(1), encArray([encArray([encUint(1), encArray([])])])]])).toString('hex') });
-  const plutusWitness = payment([pay(0, 3n * ADA)], 100, { witnesses: { 7: encArray([encBytes(Buffer.alloc(40, 0x5a))]).toString('hex') } });
-  for (const [it, re] of [[boot, /^bootstrap witnesses: /], [auxScripts, /^auxiliary scripts: /], [plutusWitness, /^plutus: /]]) {
+  const redeemed = (tag, target) => ({ ...payment([pay(0, 3n * ADA)], 100, { redeemers: [{ tag, target, data: '00', exUnits: EX_UNITS }] }), collateral: { required: true, observed: null } });
+  const cases = [
+    [boot, /^bootstrap witnesses: /, {}],
+    [auxScripts, /^auxiliary scripts: /, {}],
+    [redeemed(2, { kind: 'certificate', index: 0 }), /^certificate redeemer: /, { collateral: coll }],
+    [redeemed(4, { kind: 'voter', voter: '8201581c' + '00'.repeat(28) }), /^vote redeemer: /, { collateral: coll }],
+    [redeemed(5, { kind: 'proposal', index: 0 }), /^proposal redeemer: /, { collateral: coll }]
+  ];
+  for (const [it, re, extra] of cases) {
     for (const opts of [own, layout]) {
-      const r = await m.build(s, it, P, opts);
+      const r = await m.build(s, it, P, { ...opts, ...extra });
       assert.deepEqual([r.ok, r.class], [false, NOT_REPLAYABLE], r.detail);
       assert.match(r.detail, re);
     }
   }
-  const script = { ...payment([pay(0, 3n * ADA)], 100, { redeemers: [] }), collateral: { required: true, observed: null } };
-  await assert.rejects(m.build(s, script, P, own), /apollo-macs: the replay path \(fixed parts and collateral\) is not built yet/);
+});
+
+test('a Plutus mint and a script withdrawal build with their redeemers and the collateral set aside, the units raised by Apollo\'s buffer', { skip }, async () => {
+  const m = makeMethod(T, 'apollo-macs');
+  const whole = constructState(T, [{ coin: 30n * ADA, txid: 'pool' }, { coin: 5n * ADA, txid: 'collateral' }]);
+  const coll = [...whole.utxos.values()].find((u) => u.coin === 5n * ADA);
+  const pool = { ...whole, utxos: new Map([...whole.utxos].filter(([ref]) => ref !== coll.ref)) };
+  const raised = [BigInt(Math.trunc(Number(EX_UNITS[0]) * 1.2)), BigInt(Math.trunc(Number(EX_UNITS[1]) * 1.2))];
+  const signer = encTag(258, encArray([encBytes(Buffer.alloc(28, 9))])).toString('hex');
+  for (const base of zeroRedeemerIntents(T, pool)) {
+    // Evaluated by the builder; and, with a required signer, given the
+    // units with the estimate off.
+    const withSigner = { ...base, fixed: { ...base.fixed, body: { ...base.fixed.body, 14: signer } } };
+    for (const it of [base, withSigner]) {
+      for (const opts of [own, layout]) {
+        const r = await m.build(pool, it, P, { ...opts, collateral: coll });
+        assert.equal(r.ok, true, r.detail);
+        const tx = inspectTx(r.txs[0].bytes);
+        assert.deepEqual(tx.collateralInputs.map((x) => x.ref), [coll.ref]);
+        assert.equal(tx.redeemers.length, 1);
+        if (opts === own) assert.deepEqual(tx.redeemers[0].exUnits.map(BigInt), raised);
+        const applied = checkAndApply(whole, P, r.txs, { implicit: it.implicit, scriptFee: it.fixed.scriptFee, fixed: it.fixed });
+        assert.equal(applied.ok, true, applied.failure && applied.failure.detail);
+      }
+    }
+  }
 });
 
 const replayApollo = (source, changePolicy) => replay(T, source.params, source, { arm: 'observed', variant: 'default', repetition: 1, method: makeMethod(T, 'apollo-macs'), opts: { seed: 1, changePolicy, collateralRule: 'ledger' }, settleEvery: 25, keepTx: true, validity: true });
 
-test('replayed synthetic streams under both changes: no validity failure, fixed inputs kept, only Plutus spends refused', { skip, timeout: 5 * 60 * 1000 }, async () => {
+test('replayed synthetic streams under both changes: no validity failure and no class other, fixed inputs kept, the set-aside collateral on script spends', { skip, timeout: 5 * 60 * 1000 }, async () => {
   for (const name of ['S1', 'M1', 'CL1']) {
     const source = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
     const intents = source.events.filter((e) => e.kind === 'intent').map((e) => e.intent);
     let built = 0;
+    let scripts = 0;
     for (const cp of ['default', 'layout']) {
       const r = await replayApollo(source, cp);
       assert.equal(r.summary.validity.failed, 0, JSON.stringify(r.summary.validity.details));
       for (const sp of r.spends) {
-        if (sp.class === CLASSES.other) assert.match(sp.detail, /the replay path \(fixed parts and collateral\) is not built yet/, `${name} ${cp}`);
-        if (sp.class === CLASSES.other) assert.equal(intents[sp.intent].collateral.required, true);
+        assert.notEqual(sp.class, CLASSES.other, `${name} ${cp} ${sp.type}: ${sp.detail}`);
         if (sp.outcome !== 'built') continue;
         built++;
         const intent = intents[sp.intent];
         const tx = inspectTx(sp.built.txs[0].bytes);
+        if (intent.collateral.required) {
+          scripts++;
+          assert.equal(sp.collateralUsed.chosen, 'set-aside');
+          assert.equal(tx.collateralInputs.length, 1);
+        }
         for (const x of intent.fixed ? intent.fixed.inputs : []) assert.ok(tx.inputs.some((y) => y.ref === x.ref), `${name} ${sp.type}: fixed input missing`);
       }
     }
     assert.ok(built > 0, name);
+    if (name === 'S1') assert.ok(scripts > 0, 'the S1 stream\'s script spend builds');
   }
 });
