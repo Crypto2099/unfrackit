@@ -20,9 +20,12 @@
 //           tag's commit 12d4a1c77cc1f991231d6ffca306ceef61dbabd0). Go is
 //           taken from RESEARCH_SIM_GO, or `go` on the PATH; modules are
 //           downloaded into the toolchain's module cache and checked against
-//           go.sum (go mod verify), the build runs with -mod=readonly and
-//           -trimpath and without cgo, and the release's commit is checked
-//           against the module's origin as the module proxy records it.
+//           go.sum (go mod verify), the build runs with -mod=readonly,
+//           -trimpath and -buildvcs=false and without cgo, so the
+//           executable depends on the helper's source and the toolchain
+//           alone, not on the repository's commit, and the release's commit
+//           is checked against the module's origin as the module proxy
+//           records it.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs';
@@ -51,7 +54,7 @@ const HELPERS = {
       const listed = JSON.parse(run(go, ['list', '-m', '-json', APOLLO_MODULE], { cwd: src, env }));
       if (listed.Version !== APOLLO_VERSION) throw new Error(`go.mod resolves ${APOLLO_MODULE} ${listed.Version}, not ${APOLLO_VERSION}`);
       if (!info.Origin || info.Origin.Hash !== APOLLO_COMMIT) throw new Error(`${APOLLO_MODULE} ${APOLLO_VERSION} comes from commit ${info.Origin ? info.Origin.Hash : '(no origin recorded)'}, not ${APOLLO_COMMIT}`);
-      run(go, ['build', '-trimpath', '-o', join(out, this.executable), '.'], { cwd: src, env });
+      run(go, ['build', '-trimpath', '-buildvcs=false', '-o', join(out, this.executable), '.'], { cwd: src, env });
       return { toolchain, modules: { [APOLLO_MODULE]: { version: info.Version, sum: info.Sum, goModSum: info.GoModSum, commit: info.Origin.Hash } } };
     }
   }
