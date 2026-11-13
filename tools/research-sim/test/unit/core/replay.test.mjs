@@ -266,8 +266,6 @@ test('the replay assembler: a plain intent assembles to CSL\'s bytes; spend rede
 test('a required signer at a wallet key the selection does not spend: witnessed by every builder, and the validity checks pass', { skip, timeout: 5 * 60 * 1000 }, async () => {
   const { replay } = await import('../../../src/replay/engine.mjs');
   const { makeMethod, BASELINE_METHODS } = await import('../../../src/methods/registry.mjs');
-  const { laceBuildProblem } = await import('../../../src/methods/lace.mjs');
-  const { adaliteBuildProblem } = await import('../../../src/methods/adalite.mjs');
   const { shapeState } = await import('../../../src/shapes/shapes.mjs');
   const { SYNTHETIC_PARAMS } = await import('../../../src/kit/params.mjs');
   const { outputBytes } = await import('../../../src/kit/assemble.mjs');
@@ -311,12 +309,20 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
   // Lace's, AdaLite's and Yoroi's methods run only with the builds of the
   // wallets' source. Yoroi's send flow writes no required signer, so the
   // intent is not replayable for it.
-  const { yoroiBuildProblem } = await import('../../../src/methods/yoroi.mjs');
   const NO_SIGNER = new Set(['yoroi-lf']);
-  // Apollo's, Scalus's, cardano-client-lib's and Tx3's methods run only with
-  // their helpers built.
-  const { helperBuild } = await import('../../../src/methods/helper.mjs');
-  const names = [...BASELINE_METHODS.filter((n) => (n !== 'lace-rrri' || !laceBuildProblem()) && (n !== 'adalite-lp' || !adaliteBuildProblem()) && (n !== 'yoroi-lf' || !yoroiBuildProblem()) && (n !== 'apollo-macs' || !helperBuild('apollo').problem) && (n !== 'scalus-pool' || !helperBuild('jvm').problem) && (n !== 'ccl-pw' || !helperBuild('jvm').problem) && (n !== 'tx3-vd' || !helperBuild('tx3').problem)), 'test-largest-first'];
+  // A method whose library is built by a script (a wallet's source or a
+  // helper) refuses to load without that build, naming the script; it is
+  // left out here, and every other refusal is an error.
+  const built = (n) => {
+    try {
+      makeMethod(T, n);
+      return true;
+    } catch (e) {
+      if (/run node scripts\/build-/.test(String(e && e.message))) return false;
+      throw e;
+    }
+  };
+  const names = [...BASELINE_METHODS.filter(built), 'test-largest-first'];
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);
     for (const name of names) {
