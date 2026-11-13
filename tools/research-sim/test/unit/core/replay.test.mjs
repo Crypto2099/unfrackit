@@ -313,7 +313,9 @@ test('a required signer at a wallet key the selection does not spend: witnessed 
   // intent is not replayable for it.
   const { yoroiBuildProblem } = await import('../../../src/methods/yoroi.mjs');
   const NO_SIGNER = new Set(['yoroi-lf']);
-  const names = [...BASELINE_METHODS.filter((n) => (n !== 'lace-rrri' || !laceBuildProblem()) && (n !== 'adalite-lp' || !adaliteBuildProblem()) && (n !== 'yoroi-lf' || !yoroiBuildProblem())), 'test-largest-first'];
+  // Apollo's method runs only with its helper built.
+  const { helperBuild } = await import('../../../src/methods/helper.mjs');
+  const names = [...BASELINE_METHODS.filter((n) => (n !== 'lace-rrri' || !laceBuildProblem()) && (n !== 'adalite-lp' || !adaliteBuildProblem()) && (n !== 'yoroi-lf' || !yoroiBuildProblem()) && (n !== 'apollo-macs' || !helperBuild('apollo').problem)), 'test-largest-first'];
   for (const [label, start] of [['both keys', [atFirst, atSecond]], ['second key only', [atSecond]]]) {
     const source = sourceOf(start);
     for (const name of names) {

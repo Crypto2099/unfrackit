@@ -17,8 +17,10 @@
 //
 // Helpers:
 //   apollo  Go: Apollo v2.2.1 (github.com/Salvionied/apollo/v2, the release
-//           tag's commit 12d4a1c77cc1f991231d6ffca306ceef61dbabd0). Go is
-//           taken from RESEARCH_SIM_GO, or `go` on the PATH; modules are
+//           tag's commit 12d4a1c77cc1f991231d6ffca306ceef61dbabd0). Go 1.26.10
+//           or later must be on the PATH as `go` (RESEARCH_SIM_GO may name
+//           the go command instead); without it the script stops and says
+//           so. Modules are
 //           downloaded into the toolchain's module cache and checked against
 //           go.sum (go mod verify), the build runs with -mod=readonly,
 //           -trimpath and -buildvcs=false and without cgo, so the
@@ -47,7 +49,13 @@ const HELPERS = {
     build(src, out) {
       const go = process.env.RESEARCH_SIM_GO || 'go';
       const env = { ...process.env, CGO_ENABLED: '0', GOFLAGS: '-mod=readonly', GOTOOLCHAIN: 'local' };
-      const toolchain = run(go, ['version'], { cwd: src, env }).trim();
+      let toolchain;
+      try {
+        toolchain = run(go, ['version'], { cwd: src, env }).trim();
+      } catch (e) {
+        if (e.code === 'ENOENT') throw new Error(`Go 1.26.10 or later must be on the PATH as \`go\` to build the apollo helper (or RESEARCH_SIM_GO must name the go command); ${go} was not found`);
+        throw e;
+      }
       run(go, ['mod', 'download'], { cwd: src, env });
       run(go, ['mod', 'verify'], { cwd: src, env });
       const info = JSON.parse(run(go, ['mod', 'download', '-json', `${APOLLO_MODULE}@${APOLLO_VERSION}`], { cwd: src, env }));
