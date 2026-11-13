@@ -24,6 +24,7 @@ import { helperBuild } from '../../../src/methods/helper.mjs';
 
 const apolloBuild = helperBuild('apollo');
 const jvmBuild = helperBuild('jvm');
+const pycardanoBuild = helperBuild('pycardano');
 import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
@@ -50,7 +51,8 @@ test('every study baseline is made by name, with its library version, determinis
     'yoroi-lf': ['Yoroi v7.0.5 (d8e3d3f) createSendTx over cardano-serialization-lib 14.1.2', true, true],
     'apollo-macs': [`Apollo v2.2.1 (12d4a1c) MACSSelector; helper apollo sha256 ${apolloBuild.record ? apolloBuild.record.sha256.slice(0, 16) : ''}`, true, true],
     'scalus-pool': [`Scalus 1.5.0 (5bf331b) TxBuilder.complete; helper jvm sha256 ${jvmBuild.record ? jvmBuild.record.sha256.slice(0, 16) : ''}`, true, true],
-    'ccl-pw': [`cardano-client-lib 0.7.3 (f113017) QuickTx, DefaultUtxoSelectionStrategyImpl; helper jvm sha256 ${jvmBuild.record ? jvmBuild.record.sha256.slice(0, 16) : ''}`, true, true]
+    'ccl-pw': [`cardano-client-lib 0.7.3 (f113017) QuickTx, DefaultUtxoSelectionStrategyImpl; helper jvm sha256 ${jvmBuild.record ? jvmBuild.record.sha256.slice(0, 16) : ''}`, true, true],
+    'pycardano-lf': [`PyCardano 0.19.2 (0445f30) LargestFirstSelector, RandomImproveMultiAsset fallback; helper pycardano sha256 ${pycardanoBuild.record ? pycardanoBuild.record.sha256.slice(0, 16) : ''}`, false, true]
   };
   // Lace's and AdaLite's methods load only with the build of the wallet's
   // source; without it, making the method names the build script.
@@ -84,6 +86,11 @@ test('every study baseline is made by name, with its library version, determinis
       assert.throws(() => makeMethod(T, name), /scripts\/build-helpers\.mjs jvm/);
       continue;
     }
+    // PyCardano's method loads only with its helper built.
+    if (name === 'pycardano-lf' && pycardanoBuild.problem) {
+      assert.throws(() => makeMethod(T, name), /scripts\/build-helpers\.mjs pycardano/);
+      continue;
+    }
     const m = makeMethod(T, name);
     assert.equal(m.name, name);
     assert.equal(m.version, version);
@@ -110,10 +117,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the eighteen libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['adalite-lp', 'apollo-macs', 'blaze-wd', 'ccl-pw', 'cjs-rrri', 'cml-lf', 'cml-ri', 'cometa-lf', 'csl-lf', 'csl-ri', 'evo-lf', 'helios-sf', 'lace-rrri', 'lucid-lf', 'mesh-rrri', 'scalus-pool', 'typhon-lp', 'unfrackit-h12', 'yoroi-lf']);
+  // The replays run the nineteen libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['adalite-lp', 'apollo-macs', 'blaze-wd', 'ccl-pw', 'cjs-rrri', 'cml-lf', 'cml-ri', 'cometa-lf', 'csl-lf', 'csl-ri', 'evo-lf', 'helios-sf', 'lace-rrri', 'lucid-lf', 'mesh-rrri', 'pycardano-lf', 'scalus-pool', 'typhon-lp', 'unfrackit-h12', 'yoroi-lf']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'pycardano-lf', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);

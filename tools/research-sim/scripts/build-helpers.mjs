@@ -42,12 +42,31 @@
 //           runs in build/helpers/jvm/target, outside the source, with a fixed
 //           output timestamp (project.build.outputTimestamp), so the jar
 //           depends on the source and the toolchain alone.
+//   pycardano  Python: pycardano 0.19.2 (Python-Cardano/pycardano, the
+//           release tag's commit 0445f30) and its runtime dependencies, in a
+//           virtual environment under build/helpers/pycardano/venv. Python is
+//           taken from RESEARCH_SIM_PYTHON, or python3.12 on the PATH, and
+//           must be CPython 3.12. The environment is made with the venv
+//           module and filled by its own pip from requirements.txt with
+//           --require-hashes --no-deps --only-binary :all:, so every
+//           distribution is a wheel whose SHA-256 the file pins; pip check
+//           then confirms the set satisfies every dependency. main.py is
+//           copied beside it, and the executable is a launcher script that
+//           runs it in the environment with an empty process environment
+//           and PYTHONHASHSEED=0 (python -P -s -B), so no variable of the
+//           caller's reaches the library and set iteration is the same on
+//           every run. The launcher names the SHA-256 of main.py and of the
+//           environment's site-packages (methods/pycardano.mjs
+//           environmentHash), so its own SHA-256, the helper's in the build
+//           record, identifies both; the method checks both again when it
+//           loads.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { TOOL, HELPER_SOURCE_DIR, HELPER_BUILD_DIR, BUILD_RECORD, HELPER_SCHEMA, helperSourceFiles, helperSourceHash } from '../src/methods/helper.mjs';
+import { PYCARDANO_VERSION, PYCARDANO_COMMIT, PYCARDANO_PYTHON, SITE_PACKAGES, environmentHash, launcherText } from '../src/methods/pycardano.mjs';
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -150,6 +169,29 @@ HELPERS.jvm = {
     renameSync(join(target, this.executable), join(out, this.executable));
     rmSync(target, { recursive: true, force: true });
     return { toolchain, modules, artifacts: arts.length };
+  }
+};
+
+HELPERS.pycardano = {
+  executable: 'pycardano-helper',
+  build(src, out) {
+    const python = process.env.RESEARCH_SIM_PYTHON || 'python3.12';
+    const implementation = run(python, ['-I', '-c', 'import platform, sys; print(platform.python_implementation(), platform.python_version())']).trim();
+    if (!implementation.startsWith(`CPython ${PYCARDANO_PYTHON}.`)) throw new Error(`${python} is ${implementation}, not CPython ${PYCARDANO_PYTHON}`);
+    const venv = join(out, 'venv');
+    run(python, ['-I', '-m', 'venv', venv]);
+    const vpy = join(venv, 'bin', 'python');
+    const pip = (...a) => run(vpy, ['-I', '-m', 'pip', '--disable-pip-version-check', '--no-input', ...a]);
+    pip('install', '--require-hashes', '--no-deps', '--only-binary', ':all:', '-r', join(src, 'requirements.txt'));
+    pip('check');
+    const pipVersion = pip('--version').trim().split(' ')[1];
+    const installed = run(vpy, ['-I', '-c', 'import importlib.metadata as m; print(m.version("pycardano"))']).trim();
+    if (installed !== PYCARDANO_VERSION) throw new Error(`the environment holds pycardano ${installed}, not ${PYCARDANO_VERSION}`);
+    copyFileSync(join(src, 'main.py'), join(out, 'main.py'));
+    const main = sha256(readFileSync(join(out, 'main.py')));
+    const env = environmentHash(join(venv, SITE_PACKAGES));
+    writeFileSync(join(out, this.executable), launcherText({ main, environment: env.hash, python: implementation }));
+    return { toolchain: `${implementation}, pip ${pipVersion}`, modules: { pycardano: { version: installed, commit: PYCARDANO_COMMIT } }, main, environment: env };
   }
 };
 

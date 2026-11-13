@@ -103,6 +103,9 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   scalus scalus-pool: every part, through the builder's steps, collateral
 //         as the library chooses it, since it cannot be given the UTxO the
 //         engine would set aside (methods/jvm.mjs)
+//   pycardano pycardano-lf: every part, through the builder's operations and
+//         fields; a bootstrap witness and a vote's or a proposal's redeemer
+//         are not replayable (methods/pycardano.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -120,7 +123,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   yoroi: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   apollo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   scalus: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  ccl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  ccl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  pycardano: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);

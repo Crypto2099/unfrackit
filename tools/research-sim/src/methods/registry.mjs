@@ -45,6 +45,11 @@
 //   ccl-pw              methods/jvm.mjs: cardano-client-lib's QuickTx
 //                       builder at its defaults, its page-wise default
 //                       selection, in the JVM helper process
+//   pycardano-lf        methods/pycardano.mjs: PyCardano's transaction
+//                       builder at its defaults, LargestFirstSelector with
+//                       its RandomImproveMultiAsset fallback, seeded, in a
+//                       Python helper process (scripts/build-helpers.mjs
+//                       pycardano) through the bridge
 //   scalus-pool         methods/jvm.mjs: Scalus's TxBuilder.complete with
 //                       the wallet's address as sponsor, in the JVM helper
 //                       process (scripts/build-helpers.mjs jvm) through the
@@ -79,6 +84,7 @@ import { adaliteMethod } from './adalite.mjs';
 import { yoroiMethod } from './yoroi.mjs';
 import { apolloMethod } from './apollo.mjs';
 import { cclMethod, scalusMethod } from './jvm.mjs';
+import { pycardanoMethod } from './pycardano.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -107,7 +113,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'pycardano-lf']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -128,6 +134,7 @@ const FACTORIES = new Map([
   ['apollo-macs', baseline('apollo-macs', (T) => apolloMethod(T))],
   ['scalus-pool', baseline('scalus-pool', (T) => scalusMethod(T))],
   ['ccl-pw', baseline('ccl-pw', (T) => cclMethod(T))],
+  ['pycardano-lf', baseline('pycardano-lf', (T) => pycardanoMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]
