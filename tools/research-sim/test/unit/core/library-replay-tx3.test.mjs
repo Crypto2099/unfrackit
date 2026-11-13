@@ -13,8 +13,9 @@
 // change policy is refused; a replayed spend's validity, required signers,
 // metadata, fixed inputs, withdrawal, donation and native-script mint are
 // written by the program; a Plutus mint and a script withdrawal are written
-// with their redeemers at Tx3's fixed execution units, named as unpriced, and
-// the collateral set aside; a set-aside UTxO holding a token fails Tx3's
+// with their redeemers at Tx3's fixed execution units and the collateral set
+// aside, and fail the kit's fee check under L/own, Tx3's fee pricing none of
+// those units; a set-aside UTxO holding a token fails Tx3's
 // collateral query; each part the language or its compiler cannot hold is not
 // replayable. The tests that run the helper skip, naming the build command,
 // when it is not built.
@@ -251,7 +252,7 @@ test('each part the language or its compiler cannot hold is not replayable', { s
   }
 });
 
-test('a Plutus mint and a script withdrawal are written with their redeemers at Tx3\'s fixed units and the collateral set aside', { skip }, async () => {
+test('a Plutus mint and a script withdrawal are written with their redeemers at Tx3\'s fixed units, which its fee leaves unpriced, and the collateral set aside', { skip }, async () => {
   const m = makeMethod(T, 'tx3-vd');
   const whole = constructState(T, [{ coin: 30n * ADA, txid: 'pool' }, { coin: 5n * ADA, txid: 'collateral' }]);
   const coll = [...whole.utxos.values()].find((u) => u.coin === 5n * ADA);
@@ -268,10 +269,13 @@ test('a Plutus mint and a script withdrawal are written with their redeemers at 
     assert.equal(l.ok, true, l.detail);
     assert.deepEqual(l.txs[0].walletInputs, a.txs[0].walletInputs);
     assert.deepEqual(inspectTx(l.txs[0].bytes).collateralInputs.map((x) => x.ref), [coll.ref]);
-    for (const r of [a, l]) {
-      const applied = checkAndApply(whole, P, r.txs, { implicit: it.implicit, scriptFee: it.fixed.scriptFee, fixed: it.fixed });
-      assert.equal(applied.ok, true, applied.failure && applied.failure.detail);
-    }
+    // The kit prices the units each transaction carries: Tx3's own fail its
+    // fee, which prices none of them; the layout change's carry the observed
+    // ones at their price.
+    const own_ = checkAndApply(whole, P, a.txs, { implicit: it.implicit, fixed: it.fixed });
+    assert.deepEqual([own_.ok, own_.failure && own_.failure.cls], [false, CLASSES.feeMinimum]);
+    const lay = checkAndApply(whole, P, l.txs, { implicit: it.implicit, fixed: it.fixed });
+    assert.equal(lay.ok, true, lay.failure && lay.failure.detail);
   }
   // A set-aside UTxO holding a token is not one Tx3's collateral query takes.
   const tokened = constructState(T, [{ coin: 30n * ADA, txid: 'pool' }, { coin: 5n * ADA, txid: 'collateral', assets: [{ policy: policy('c'), name: assetName('t'), qty: 1n }] }]);

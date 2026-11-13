@@ -31,7 +31,9 @@
 //                 conwayProducedValue); the transaction's own withdrawals,
 //                 mint and donation must equal the intent's
 //   fee           fee >= minFeeA * |tx| + minFeeB + the script fee (Babbage
-//                 Utxo.hs:183-212, feesOK part 1); a fee under it is its own
+//                 Utxo.hs:183-212, feesOK part 1), the script fee over the
+//                 execution units the transaction's redeemers carry; a fee
+//                 under it is its own
 //                 class, fee-minimum, apart from balance: the network rejects
 //                 the transaction although its value balances
 //   witnesses     at least one vkey witness per distinct key among the key
@@ -64,7 +66,7 @@
 //                 30-39, collAdaBalance; Alonzo Utxo.hs:348-364 and 481-495)
 
 import { inspectTx } from './inspect.mjs';
-import { minFee } from './fee.mjs';
+import { minFee, txScriptFee } from './fee.mjs';
 import { valueSize, assetMap, mergeAssets } from '../history/value.mjs';
 import { passMachineErrors } from './machine.mjs';
 
@@ -99,7 +101,12 @@ export const outputMinimum = (params, rawLength) => params.coinsPerUtxoByte * (1
 //                or undefined, for every input, reference input and
 //                collateral input
 //   implicit     { withdrawals, refunds, deposits, donation, mint, burn }
-//   scriptFee    bigint, the intent's script fee
+//   refScriptBytes  the bytes of the reference scripts the intent's inputs
+//                and reference inputs carry (its fixed parts' refScriptBytes),
+//                whose term the minimum adds; the execution term is priced
+//                from the transaction's own redeemers (kit/fee.mjs
+//                txScriptFee), as the ledger prices the units a transaction
+//                carries
 //   extraWitnesses  a Set of the key hashes (hex) of the intent's fixed vkey
 //                witnesses that neither its fixed inputs nor its required
 //                signers account for, such as a stake key's, a voter's or a
@@ -122,7 +129,7 @@ export function checkTx(bytes, ctx) {
   }
   const p = ctx.params;
   const imp = { ...ZERO_IMPLICIT, ...(ctx.implicit || {}) };
-  const scriptFee = BigInt(ctx.scriptFee || 0n);
+  const scriptFee = txScriptFee(p, t.redeemers, ctx.refScriptBytes || 0);
 
   if (t.size > p.maxTxSize) fail('size', CLASSES.txSize, `${t.size} bytes, limit ${p.maxTxSize}`);
 

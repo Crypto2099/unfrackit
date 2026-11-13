@@ -50,7 +50,7 @@ const fail = (v, at, index, what, detail) => {
 
 // One transaction (hex) the kit passed. `at` names where in the run it came
 // from; `index` its position in the answer; `state` is the state it spends
-// from; ctx is the kit's: { resolve, implicit, scriptFee, extraWitnesses }.
+// from; ctx is the kit's: { resolve, implicit, refScriptBytes, extraWitnesses }.
 export function checkValidity(v, at, index, state, params, bytes, ctx) {
   v.txs++;
   let c;

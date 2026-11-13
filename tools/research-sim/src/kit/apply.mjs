@@ -37,17 +37,21 @@ export function fixedResolver(fixed) {
   return m;
 }
 
-// opts: { implicit, scriptFee, extraWitnesses, fixed, requested (Set of the
+// opts: { implicit, extraWitnesses, fixed, requested (Set of the
 // last transaction's requested output indexes), heldInputs (refs of held
 // UTxOs the intent spends), notWallet and heldRef (state/state.mjs applyTx;
 // heldRef names the held outputs of every transaction), validity ({ acc, at }:
 // kit/validity.mjs reads each transaction the kit passes with CSL and runs the
 // negative controls on it, adding to acc; it changes nothing the call
 // returns) }. The
-// intent's implicit values, script fee and fixed parts belong to its last
-// transaction (a chain's earlier transactions are the planner's, with none).
+// intent's implicit values and fixed parts belong to its last transaction (a
+// chain's earlier transactions are the planner's, with none). The minimum fee
+// prices each transaction's own redeemers and the reference-script bytes of
+// the intent's fixed parts (kit/check.mjs); an intent's stored script fee is
+// not read.
 export function checkAndApply(state, params, txs, opts = {}) {
   const fixedMap = fixedResolver(opts.fixed);
+  const refScriptBytes = opts.fixed ? opts.fixed.refScriptBytes || 0 : 0;
   let s = state;
   const checks = [];
   const states = [];
@@ -63,7 +67,7 @@ export function checkAndApply(state, params, txs, opts = {}) {
       params,
       resolve,
       implicit: last ? opts.implicit : undefined,
-      scriptFee: last ? opts.scriptFee : 0n,
+      refScriptBytes: last ? refScriptBytes : 0,
       extraWitnesses: last ? opts.extraWitnesses : undefined,
       requested: last ? opts.requested : undefined
     });
@@ -73,7 +77,7 @@ export function checkAndApply(state, params, txs, opts = {}) {
       checkValidity(opts.validity.acc, opts.validity.at, i, cur, params, txs[i].bytes, {
         resolve,
         implicit: last ? opts.implicit : undefined,
-        scriptFee: last ? opts.scriptFee : 0n,
+        refScriptBytes: last ? refScriptBytes : 0,
         extraWitnesses: last ? opts.extraWitnesses : undefined
       });
     }

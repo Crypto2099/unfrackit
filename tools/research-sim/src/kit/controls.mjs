@@ -19,7 +19,7 @@ import { withCoin } from '../history/output.mjs';
 import { decodeTx, assembleTx } from '../history/tx.mjs';
 import { checkTx } from './check.mjs';
 import { inspectTx } from './inspect.mjs';
-import { minFee } from './fee.mjs';
+import { minFee, txScriptFee } from './fee.mjs';
 import { valueSize } from '../history/value.mjs';
 import { parseAddress, addressBytes } from '../history/address.mjs';
 
@@ -81,7 +81,7 @@ export function negativeControls(state, params, bytes, ctx = {}) {
   const vb = t.outputs.length ? Math.max(...t.outputs.map((o) => valueSize(o.coin, o.assets))) : null;
   return {
     base: base.ok ? '' : reasons(base),
-    fee: t.outputs.length ? reasons(checkTx(withFee(bytes, minFee(params, t.size, ctx.scriptFee || 0n) - 1n, t.outputs.length - 1), c)) : null,
+    fee: t.outputs.length ? reasons(checkTx(withFee(bytes, minFee(params, t.size, txScriptFee(params, t.redeemers, ctx.refScriptBytes || 0)) - 1n, t.outputs.length - 1), c)) : null,
     size: reasons(checkTx(bytes, { ...c, params: { ...params, maxTxSize: t.size - 1 } })),
     value: vb === null ? null : reasons(checkTx(bytes, { ...c, params: { ...params, maxValSize: vb - 1 } })),
     witnesses: reasons(checkTx(withoutOneWitness(bytes), c))

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkTx, CLASSES, outputMinimum } from '../../../src/kit/check.mjs';
 import { SYNTHETIC_PARAMS } from '../../../src/kit/params.mjs';
-import { minFee } from '../../../src/kit/fee.mjs';
+import { minFee, txScriptFee } from '../../../src/kit/fee.mjs';
 import { inspectTx } from '../../../src/kit/inspect.mjs';
 import { parseAddress } from '../../../src/history/address.mjs';
 import { encUint, encBytes, encArray, encMap, encTag } from '../../../src/history/cbor.mjs';
@@ -174,11 +174,40 @@ test('value conservation with withdrawals, refunds, deposits, a donation, a mint
   }
 });
 
-test('the script fee raises the minimum', () => {
+test('the reference-script term raises the minimum', () => {
   const t = simple();
-  assert.equal(checkTx(t.bytes, { params: P, resolve: t.resolve, scriptFee: 0n }).ok, true);
-  const r = checkTx(t.bytes, { params: P, resolve: t.resolve, scriptFee: 1n });
+  const RP = { ...P, minFeeRefScriptCostPerByte: [15n, 1n] };
+  assert.equal(checkTx(t.bytes, { params: RP, resolve: t.resolve, refScriptBytes: 0 }).ok, true);
+  const r = checkTx(t.bytes, { params: RP, resolve: t.resolve, refScriptBytes: 1 });
   assert.deepEqual(r.failures.map((f) => f.check), ['fee']);
+  assert.equal(r.failures[0].cls, CLASSES.feeMinimum);
+});
+
+// A script spend whose fee covers the observed units: the transaction that
+// carries those units passes, and the same transaction carrying more units
+// than were observed, at the same fee, fails fee-minimum, since the ledger
+// prices the units a transaction carries.
+test('the minimum prices the execution units the transaction carries, not the observed ones', () => {
+  const observed = [107086n, 32858313n];
+  const more = [2000000n, 2000000000n];
+  const collRef = `${TXB}#1`;
+  const resolve = (ref) => (ref === `${TXA}#0` ? view(ADDR0, 10000000n) : ref === collRef ? view(ADDR0, 5000000n) : undefined);
+  const mk = (units, fee) => {
+    const redeemers = encArray([encArray([encUint(0), encUint(0), encUint(0), encArray([encUint(units[0]), encUint(units[1])])])]);
+    return tx({ inputs: [input(TXA, 0)], outputs: [out(ADDR0, 10000000n - fee)], fee, extra: { 13: encArray([input(TXB, 1)]) }, witnessExtra: [[5, redeemers]] }).toString('hex');
+  };
+  let fee = 300000n;
+  for (let i = 0; i < 6; i++) {
+    const need = minFee(P, inspectTx(mk(observed, fee)).size, txScriptFee(P, [{ exUnits: observed }]));
+    if (need === fee) break;
+    fee = need;
+  }
+  const ok = checkTx(mk(observed, fee), { params: P, resolve });
+  assert.equal(ok.ok, true, JSON.stringify(ok.failures));
+  const r = checkTx(mk(more, fee), { params: P, resolve });
+  assert.deepEqual(r.failures.map((f) => [f.check, f.cls]), [['fee', CLASSES.feeMinimum]]);
+  const size = inspectTx(mk(more, fee)).size;
+  assert.match(r.failures[0].detail, new RegExp(`under the minimum ${minFee(P, size, txScriptFee(P, [{ exUnits: more }]))}$`));
 });
 
 test('an unresolved input, auxiliary data without its hash, and an undecodable transaction', () => {

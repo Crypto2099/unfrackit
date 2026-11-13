@@ -20,10 +20,16 @@
 // plus the reference-script term, whose price per byte grows by 1.2 for every
 // further 25,600 bytes (Conway/Tx.hs:105-145, tierRefScriptFee) over the
 // reference scripts of the inputs and reference inputs
-// (eras/conway/impl/src/Cardano/Ledger/Conway/UTxO.hs:149-171). Both terms are
-// computed once per intent under the run's parameters and held constant across
-// arms; history/params.mjs implements them and the history reader stores the
-// sum as the intent's scriptFee.
+// (eras/conway/impl/src/Cardano/Ledger/Conway/UTxO.hs:149-171).
+// history/params.mjs implements both terms, and the history reader stores
+// their sum over the observed units as the intent's scriptFee. The ledger
+// prices the execution units a transaction carries (the total of its
+// redeemers' units, Alonzo/Tx.hs:498-508 over txscriptfee), so the kit's
+// checks price a built transaction's own redeemers (txScriptFee): a library
+// that writes units other than the observed ones pays for its own. The
+// reference-script term is the intent's, since the scripts its fixed inputs
+// and reference inputs carry are the intent's own and no wallet UTxO a
+// selector spends carries one.
 //
 // The wallet-controlled fee is the fee less the script fee and less minFeeA
 // times the bytes of the intent's fixed parts: what the selector and the
@@ -53,6 +59,20 @@ export function refScriptFee(params, bytes) {
   if (BigInt(bytes) === 0n) return 0n;
   need(params, 'minFeeRefScriptCostPerByte');
   return refFee(params, Number(bytes));
+}
+
+// The script fee of a built transaction: the execution term over the total of
+// its redeemers' units ({ exUnits: [mem, steps] }, as kit/inspect.mjs reads
+// them), and the reference-script term of `refScriptBytes`, the intent's.
+export function txScriptFee(params, redeemers, refScriptBytes = 0) {
+  let mem = 0n;
+  let steps = 0n;
+  for (const r of redeemers || []) {
+    mem += BigInt(r.exUnits[0]);
+    steps += BigInt(r.exUnits[1]);
+  }
+  const exec = (redeemers || []).length ? executionFee(params, mem, steps) : 0n;
+  return exec + refScriptFee(params, refScriptBytes || 0);
 }
 
 // The script fee of an intent recomputed from its redeemers and reference

@@ -56,9 +56,9 @@ function free(built) {
 
 // Kit checks over the treatment's transactions, applied in order from `state`.
 // kit: a replayed intent's view (methods/h12.mjs), whose implicit values,
-// script fee, fixed parts and held inputs belong to the last transaction.
+// fixed parts and held inputs belong to the last transaction.
 function kitAgree(state, params, txs, treatmentPass, what, validity = null, kit = null) {
-  const r = checkAndApply(state, params, txs, { validity, ...(kit ? { implicit: kit.implicit, scriptFee: kit.scriptFee, fixed: kit.fixed, extraWitnesses: kit.extraWitnesses, heldInputs: kit.heldInputs } : {}) });
+  const r = checkAndApply(state, params, txs, { validity, ...(kit ? { implicit: kit.implicit, fixed: kit.fixed, extraWitnesses: kit.extraWitnesses, heldInputs: kit.heldInputs } : {}) });
   if (!r.ok) {
     const f = r.failure;
     throw new StopPoint(`${what}: transaction ${r.failed} passes the treatment's checks and fails the kit's (${f.check}: ${f.detail})`, { failures: r.checks[r.failed].failures });

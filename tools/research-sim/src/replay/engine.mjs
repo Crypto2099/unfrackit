@@ -509,7 +509,6 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
   const names = heldOutputRefs(intent);
   const applied = checkAndApply(state, params, r.txs, {
     implicit: intent.implicit,
-    scriptFee: intent.fixed ? intent.fixed.scriptFee : 0n,
     fixed: intent.fixed,
     extraWitnesses: fixedExtraWitnesses(intent),
     requested,
