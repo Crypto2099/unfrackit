@@ -1,33 +1,52 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The AdaLite baseline, adalite-lp: the send path of the AdaLite web wallet at
+// The AdaLite baseline, adalite-lp: the planner of the AdaLite web wallet at
 // vacuumlabs/adalite e7522c2 (v7.0.2's wallet code), which no package
 // publishes, compiled from the wallet's source by scripts/build-adalite.mjs
 // into a gitignored bundle (methods/adalite-source.mjs holds the pins). The
 // module refuses to load a missing build or one whose record differs from the
 // pins (loadAdaLite). Paths below are under app/frontend/.
 //
-// The call is the wallet's own for a payment (actions/common.ts:44-52):
+// The wallet's send action (actions/common.ts:44-52) is
 // account.getTxPlan(changeAddress, { txType: SEND_ADA, address, sendAmount },
-// utxos) (wallet/account.ts:348-355), with the spendable UTxOs in the state's
-// order (inputOrder) as `utxos`, the requested output's address and amount,
-// and the state's change address. Its order and its selection decide the
-// whole outcome:
+// utxos) (wallet/account.ts:348-355): arrangeUtxos, then selectMinimalTxPlan.
+// Its send screen pays one output holding ADA or one token, and gives a token
+// output the wallet's own minimum ADA (shelley-transaction-planner.ts:36-61).
+// The study represents AdaLite by that planner driven with each spend's whole
+// request (planTx): the spendable UTxOs in the state's order (inputOrder)
+// arranged by the Account's own arrangeUtxos, then selectMinimalTxPlan's loop,
+// written out below as the wallet writes it, over the bundle's computeTxPlan
+// and validateTxPlan, with the requested outputs as they are (several
+// outputs, several tokens, the requested coin) where the send action's draft
+// has its one output. On a request the send action can make, the plan is
+// getTxPlan's (a test compares the two). Order and selection decide the whole
+// outcome:
 //   arrangeUtxos (wallet/account.ts:306-340) sorts the list by transaction
 //   hash (localeCompare, which for lowercase hex is byte order) then output
 //   index, puts UTxOs at addresses that are not base addresses (key payment,
 //   key stake; isBase, wallet/shelley/helpers/addresses.ts:106-108) before
 //   base addresses, and then ADA-only UTxOs before token-bearing ones; for a
 //   token send, the UTxOs holding that token come first (:325-338). The
-//   state's order therefore matters only through ties the sort leaves, which
-//   do not arise (each reference is distinct).
+//   arrangement is asked for a token send when the request's outputs hold
+//   exactly one token between them, and for an ADA send otherwise; the wallet
+//   has no order for a request of several tokens. The state's order matters
+//   only through ties the sort leaves, which do not arise (each reference is
+//   distinct).
 //   selectMinimalTxPlan (wallet/shelley/transaction/
 //   shelley-transaction-planner.ts:194-223) plans the payment with the first
 //   n UTxOs for n = 0, 1, 2, ... and returns the first valid plan whose fee
 //   equals its base fee, or the last plan when the list is exhausted
 //   (:214-217); a plan that burns an ADA-only leftover below its minimum into
 //   the fee (fee unequal to the base fee) is passed over for the next prefix.
+//   planLoop below is that function with the draft (:199) replaced by the
+//   request: the same change template (:200-205), the same loop (:207-220),
+//   the same test of the base fee against the fee, which compares the
+//   wallet's BigNumber objects by identity (computeTxPlan gives both fields
+//   one object except when it burns a leftover into the fee, :156-157), and
+//   the last result when the list is exhausted (:221-222). Like the send
+//   action's draft, the request carries no certificate, withdrawal or
+//   auxiliary data into the plan.
 //   computeTxPlan (computeTxPlan.ts:37-287): no change on an exact fit
 //   (:100-116); an ADA-only leftover under its minimum to the fee
 //   (:141-162); otherwise one ADA-only change output (:167-183), or, with
@@ -50,8 +69,8 @@
 //   transaction they underprice fails the kit's checks as the wallet's own
 //   failure. It draws nothing at random.
 //
-// The Account is made once, with what its constructor reads and getTxPlan
-// does not: the gap limit of the wallet's example configuration
+// The Account is made once, with what its constructor reads and neither
+// arrangeUtxos nor getTxPlan reads: the gap limit of the wallet's example configuration
 // (.env.example:9, 20), a crypto provider that reports a v2 derivation scheme
 // and no optional feature, and no blockchain explorer. The bytes are the
 // wallet's: ShelleyTxAux (wallet/shelley/shelley-transaction.ts:54-130) with
@@ -62,16 +81,15 @@
 // the wallet's signer assembles it (wallet/shelley/
 // shelley-js-crypto-provider.ts:225-238), encoded by the wallet's encodeCbor.
 //
-// What the send action can express (adaliteRefusal; anything else is not
-// replayable): one requested output (types.ts:261-265,
-// shelley-transaction-planner.ts:36-61), holding ADA only, or one token and
-// the minimum ADA the wallet itself gives a token output
-// (computeMinUtxoLovelaceAmount, :46-53), with no datum and no script
-// reference (wallet/types.ts:67-81); and no redeemer, since a part written
-// after the build cannot take one (so no script spend and no collateral). The
-// spend's validity is written by the wallet: its TTL (body field 3) and
-// validity start (8) as ShelleyTxAux's ttl and validityIntervalStart (a spend
-// with neither carries none).
+// Not replayable (adaliteRefusal): a requested output with a datum or a
+// script reference, which the wallet's outputs cannot carry
+// (wallet/types.ts:67-81); and a redeemer, since a part written after the
+// build cannot take one (so no script spend and no collateral). The spend's
+// validity is written by the wallet: its TTL (body field 3) and validity
+// start (8) as ShelleyTxAux's ttl and validityIntervalStart (a spend with
+// neither carries none). validateTxPlan holds a requested output to the
+// wallet's own minimum (:338-347), which prices its coin at 9 bytes, so an
+// output at the ledger's minimum fails as the wallet's OutputTooSmall.
 //
 // Every other fixed part is one the wallet can neither write nor price, so it
 // is written on the wallet's transaction after the build, unpriced and named
@@ -105,7 +123,7 @@
 //   TxTooBig thrown by estimateTxSize (estimateTxSize.ts:93)    tx-size
 //   CoinAmountError (:313-324)                                  other
 //
-// The layout change (opts.changePolicy 'layout'): the same wallet call and
+// The layout change (opts.changePolicy 'layout'): the same plan and
 // transaction as for its own change; the wallet inputs are read from that
 // transaction, its change is dropped, and the simulator's layout change
 // (methods/change.mjs) is built on those inputs, the kit assembling the
@@ -192,30 +210,75 @@ const utxoOf = (L, u) => {
   return { txHash: u.ref.slice(0, i), outputIndex: Number(u.ref.slice(i + 1)), address: u.address, coins: big(L, u.coin), tokenBundle: u.assets.map((a) => tokenOf(L, a)) };
 };
 
-// The send action's arguments for the intent's payment, or why the action
-// cannot express it.
-export function sendArgs(L, intent) {
-  const n = intent.requested.length;
-  if (n !== 1) return { refusal: `the send action pays one output (types.ts:261-265, shelley-transaction-planner.ts:36-61); the spend requests ${n}` };
-  const o = intent.requested[0];
-  const d = decodeOutputBytes(Buffer.from(o.cbor, 'hex'));
-  if (d.datum || d.scriptRef) return { refusal: 'a requested output with a datum or a script reference, which the wallet\'s outputs cannot carry (wallet/types.ts:67-81)' };
-  const address = o.address;
+// The request as the wallet's outputs ({ isChange: false, address, coins,
+// tokenBundle }, wallet/types.ts:67-73), or why the planner cannot take it.
+export function requestOf(L, intent) {
+  const outputs = [];
+  for (const [i, o] of intent.requested.entries()) {
+    const d = decodeOutputBytes(Buffer.from(o.cbor, 'hex'));
+    if (d.datum || d.scriptRef) return { refusal: `requested output ${i} has a datum or a script reference, which the wallet's outputs cannot carry (wallet/types.ts:67-81)` };
+    outputs.push({ isChange: false, address: o.address, coins: big(L, o.coin), tokenBundle: o.assets.map((a) => tokenOf(L, a)) });
+  }
+  return { outputs };
+}
+
+// The arguments arrangeUtxos is given (wallet/account.ts:306-340): a token
+// send when the request's outputs hold exactly one token between them, so that
+// its holders come first (:325-338); an ADA send otherwise.
+export function arrangeArgs(L, intent) {
+  const tokens = new Map();
+  for (const o of intent.requested) for (const a of o.assets) tokens.set(`${a.policy}.${a.name}`, a);
   const { TxType, AssetFamily } = L.A;
-  if (!o.assets.length) return { args: { txType: TxType.SEND_ADA, address, sendAmount: { assetFamily: AssetFamily.ADA, fieldValue: '', coins: big(L, o.coin) } } };
-  if (o.assets.length > 1) return { refusal: `the send action pays one asset per output (types.ts:354-364); the requested output holds ${o.assets.length} tokens` };
-  const token = tokenOf(L, o.assets[0]);
-  const coin = bigint(L.A.computeMinUtxoLovelaceAmount(address, [token]));
-  if (coin !== BigInt(o.coin)) return { refusal: `the wallet sends a token with its own minimum ADA, ${coin} lovelace here (shelley-transaction-planner.ts:46-53); the requested output carries ${o.coin}` };
-  return { args: { txType: TxType.SEND_ADA, address, sendAmount: { assetFamily: AssetFamily.TOKEN, fieldValue: '', token } } };
+  if (tokens.size === 1) {
+    const a = [...tokens.values()][0];
+    return { txType: TxType.SEND_ADA, sendAmount: { assetFamily: AssetFamily.TOKEN, fieldValue: '', token: tokenOf(L, a) } };
+  }
+  return { txType: TxType.SEND_ADA, sendAmount: { assetFamily: AssetFamily.ADA, fieldValue: '', coins: big(L, 0) } };
+}
+
+// selectMinimalTxPlan (shelley-transaction-planner.ts:194-223) with the
+// request's outputs where the draft has its outputs (:199), and the draft's
+// empty certificates and withdrawals and null auxiliary data.
+export function planLoop(L, utxos, outputs, changeAddress) {
+  const certificates = [];
+  const withdrawals = [];
+  const auxiliaryData = null;
+  const change = {
+    isChange: false,
+    address: changeAddress,
+    coins: new L.BigNumber(0),
+    tokenBundle: []
+  };
+  let txPlanResult = null;
+  let numInputs = 0;
+  while (numInputs <= utxos.length) {
+    const inputs = utxos.slice(0, numInputs);
+    txPlanResult = L.A.validateTxPlan(L.A.computeTxPlan(inputs, outputs, change, certificates, withdrawals, auxiliaryData));
+    if (txPlanResult.success === true) {
+      if (txPlanResult.txPlan.baseFee === txPlanResult.txPlan.fee || numInputs === utxos.length) {
+        return txPlanResult;
+      }
+    }
+    numInputs += 1;
+  }
+  if (txPlanResult == null) throw new Error('the planner gave no result');
+  return txPlanResult;
+}
+
+// The wallet's plan for the request: its arrangement of the UTxOs, then the
+// loop. Throws what the wallet throws (TxTooBig).
+export function planTx(L, intent, utxos, changeAddress) {
+  const { outputs } = requestOf(L, intent);
+  const arranged = L.account._arrangeUtxos(utxos, arrangeArgs(L, intent));
+  return planLoop(L, arranged, outputs, changeAddress);
 }
 
 // Why the intent is not replayable by the wallet, or null.
 export function adaliteRefusal(L, intent) {
   const kit = intent.source === 'replay' ? replayRefusal(intent) : null;
   if (kit) return kit;
-  const s = sendArgs(L, intent);
-  if (s.refusal) return s.refusal;
+  const r = requestOf(L, intent);
+  if (r.refusal) return r.refusal;
   const f = intent.source === 'replay' ? intent.fixed : null;
   if (f && f.redeemers.length) return 'a redeemer: the wallet writes no script part, and a part written after the build cannot take one';
   if (intent.collateral && intent.collateral.required) return 'collateral: the wallet writes none';
@@ -330,6 +393,16 @@ export function classOfAdaLiteFailure(L, failure, { pool = [], intent = { reques
 
 const failureText = (failure) => (failure instanceof Error ? `${failure.name}: ${errorText(failure)}` : `plan: ${failure && failure.error ? failure.error.code : 'no error code'}`);
 
+// The parts written after the build that move value the planner does not
+// see: a balance failure of the plan names them, as a failure that follows a
+// part written after the build does (the engine's unpricedText).
+const VALUE_PARTS = ['fixed inputs', 'withdrawals', 'mint', 'certificates', 'proposals', 'treasury value', 'donation'];
+const valuePartsText = (intent, cls) => {
+  if (cls !== CLASSES.balance && cls !== CLASSES.changeMinimum) return '';
+  const names = afterParts(intent).unpriced.filter((n) => VALUE_PARTS.includes(n));
+  return names.length ? `; parts the library did not price: ${names.join(', ')}` : '';
+};
+
 // A slot from a fixed body field, as the wallet's BigNumber, or null.
 const slotOf = (L, f, k) => (f && f.body[k] !== undefined ? big(L, asUint(decode(Buffer.from(f.body[k], 'hex')), 'slot')) : null);
 
@@ -344,16 +417,17 @@ export function buildAdaLite(T, state, intent, params, opts, { name = 'adalite-l
   const f = intent.source === 'replay' ? intent.fixed : null;
   const fixedRefs = new Set(f ? f.inputs.map((x) => x.ref) : []);
   const pool = inputOrder(state).filter((u) => !fixedRefs.has(u.ref));
-  const { args } = sendArgs(L, intent);
-  const changeAddress = state.changeAddress;
   let result;
   try {
-    result = L.account.getTxPlan(changeAddress, args, pool.map((u) => utxoOf(L, u)));
+    result = planTx(L, intent, pool.map((u) => utxoOf(L, u)), state.changeAddress);
   } catch (e) {
     passMachineErrors(e);
-    return { ok: false, class: classOfAdaLiteFailure(L, e, { pool, intent }), detail: `getTxPlan: ${failureText(e)}` };
+    return { ok: false, class: classOfAdaLiteFailure(L, e, { pool, intent }), detail: `planner: ${failureText(e)}` };
   }
-  if (!result.success) return { ok: false, class: classOfAdaLiteFailure(L, result, { pool, intent }), detail: `getTxPlan: ${failureText(result)}` };
+  if (!result.success) {
+    const cls = classOfAdaLiteFailure(L, result, { pool, intent });
+    return { ok: false, class: cls, detail: `planner: ${failureText(result)}${valuePartsText(intent, cls)}` };
+  }
   const plan = result.txPlan;
   let tx;
   let keys;
@@ -412,7 +486,7 @@ export function adaliteMethod(T) {
   loadAdaLite();
   return {
     name,
-    version: `adalite ${ADALITE_COMMIT.slice(0, 7)} (v7.0.2) Account.getTxPlan, SEND_ADA`,
+    version: `adalite ${ADALITE_COMMIT.slice(0, 7)} (v7.0.2) planner: arrangeUtxos, then selectMinimalTxPlan's loop over the request`,
     deterministic: true,
     seeded: true,
     build(state, intent, params, opts) {

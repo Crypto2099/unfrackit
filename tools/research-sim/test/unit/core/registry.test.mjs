@@ -45,7 +45,7 @@ test('every study baseline is made by name, with its library version, determinis
     'cml-ri': ['@dcspark/cardano-multiplatform-lib-nodejs 6.2.0 RandomImproveMultiAsset', false, false],
     'cometa-lf': ['@biglup/cometa 1.2.0 (cardano-c 1.2.0) large-first', true, true],
     'lace-rrri': ['lace 4d553bd (lace-extension 2.5.1) @lace-contract/cardano-context TransactionBuilder with RoundRobinRandomCoinSelector', false, true],
-    'adalite-lp': ['adalite e7522c2 (v7.0.2) Account.getTxPlan, SEND_ADA', true, true],
+    'adalite-lp': ['adalite e7522c2 (v7.0.2) planner: arrangeUtxos, then selectMinimalTxPlan\'s loop over the request', true, true],
     'yoroi-lf': ['Yoroi v7.0.5 (d8e3d3f) createSendTx over cardano-serialization-lib 14.1.2', true, true],
     'apollo-macs': [`Apollo v2.2.1 (12d4a1c) MACSSelector; helper apollo sha256 ${apolloBuild.record ? apolloBuild.record.sha256.slice(0, 16) : ''}`, true, true]
   };

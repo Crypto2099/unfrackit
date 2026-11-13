@@ -1,22 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The pinned source of AdaLite's send path, which no package publishes:
+// The pinned source of AdaLite's planner, which no package publishes:
 // vacuumlabs/adalite at e7522c2, the commit after the v7.0.2 release commit
 // 86dd006 (it changes only .yarnrc.yml, package.json and yarn.lock, so the
 // wallet code is v7.0.2's). scripts/build-adalite.mjs takes the paths below
 // from a clone, checks each one's git object hash against these pins,
-// bundles the modules the send path loads into the gitignored directory
+// bundles the modules the planner loads into the gitignored directory
 // OUTPUT_DIR and records the commit, the hashes and the bundle's SHA-256
 // beside it (BUILD_RECORD). methods/adalite.mjs refuses to load a build whose
 // record differs from these pins. Nothing of the wallet's source is kept in
 // the repository.
 //
-// The send path (app/frontend/actions/common.ts:44-52, prepareTxPlan) is
-// Account(...).getTxPlan (wallet/account.ts:348-355): arrangeUtxos
-// (:306-340), then selectMinimalTxPlan (wallet/shelley/transaction/
-// shelley-transaction-planner.ts:194-223) over computeTxPlan and
-// validateTxPlan (computeTxPlan.ts:37-381). The transaction is ShelleyTxAux
+// The wallet's send path (app/frontend/actions/common.ts:44-52,
+// prepareTxPlan) is Account(...).getTxPlan (wallet/account.ts:348-355):
+// arrangeUtxos (:306-340), then selectMinimalTxPlan (wallet/shelley/
+// transaction/shelley-transaction-planner.ts:194-223) over computeTxPlan and
+// validateTxPlan (computeTxPlan.ts:37-381). The method runs that planner on
+// each spend's requested outputs (methods/adalite.mjs): Account's arrangeUtxos
+// and selectMinimalTxPlan's loop over the bundle's computeTxPlan and
+// validateTxPlan, and getTxPlan itself for the tests that compare the two.
+// The transaction is ShelleyTxAux
 // (wallet/shelley/shelley-transaction.ts:54-130), which Account.prepareTxAux
 // (wallet/account.ts:240-268) fills from the plan, and
 // ShelleySignedTransactionStructured with cborizeTxWitnesses (:289-346),
@@ -71,6 +75,7 @@ export const ENTRY = `export { Account } from './wallet/account';
 export { ShelleyTxAux, ShelleySignedTransactionStructured, cborizeTxWitnesses } from './wallet/shelley/shelley-transaction';
 export { encodeCbor } from './wallet/helpers/cbor';
 export { computeMinUtxoLovelaceAmount, txFeeFunction } from './wallet/shelley/transaction/utils';
+export { computeTxPlan, validateTxPlan } from './wallet/shelley/transaction/computeTxPlan';
 export { MAX_TX_SIZE, MAX_TX_OUTPUT_SIZE } from './wallet/constants';
 export { MAX_OUTPUT_TOKENS } from './wallet/shelley/transaction/constants';
 export { InternalErrorReason, UnexpectedErrorReason } from './errors';
@@ -89,6 +94,6 @@ export { TxType, AssetFamily } from './types';
 //   (document.body.getAttribute). The bundle declares a module-local
 //   `document` whose body has no such attribute, so ADALITE_CONFIG is {}, as
 //   on a page that sets none (helpers/debugLog.ts:4-5 notes the same for the
-//   wallet's own tests). Nothing on the send path reads ADALITE_CONFIG.
+//   wallet's own tests). Nothing on the planner's path reads ADALITE_CONFIG.
 export const NAMESPACE_CALLS = Object.freeze(['lodash', 'assert']);
 export const BANNER = '// Module-local stand-in for the page: no data-config attribute (app/frontend/config.ts).\nconst document = { body: { getAttribute: () => null } };';

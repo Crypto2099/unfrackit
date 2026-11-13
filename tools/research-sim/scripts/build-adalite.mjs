@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// Builds AdaLite's send path for the adalite- study method from the wallet's
+// Builds AdaLite's planner for the adalite- study method from the wallet's
 // source at its pinned commit (src/methods/adalite-source.mjs), since no
 // package publishes it:
 //
@@ -129,7 +129,7 @@ async function main() {
       target: 'es2022',
       // The wallet's compiler settings that change emitted code
       // (tsconfig.json): the JSX factory of the .tsx modules the bundle
-      // reaches (none of them runs on the send path).
+      // reaches (none of them runs on the planner's path).
       tsconfigRaw: { compilerOptions: { jsx: 'react', jsxFactory: 'h' } },
       external: [...Object.keys(ADALITE_PACKAGES)],
       banner: { js: BANNER },
