@@ -110,6 +110,9 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //         collateral set aside by its collateral block; the parts the
 //         language or its compiler cannot hold are not replayable
 //         (methods/tx3.mjs)
+//   ctl   ctl-rrri: every part, in the unbalanced transaction the balancer
+//         is given, through CTL's types; a certificate those types cannot
+//         hold (kinds 7 and 8) is not replayable (methods/ctl.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -129,7 +132,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   scalus: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   ccl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   pycardano: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  tx3: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  tx3: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  ctl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
