@@ -384,12 +384,16 @@ export function buildRequest(proc, { library, state, intent, params, opts, pool,
 //   process     { key, command, args, env }: how to start the helper
 //   refused     the text of the refusal of a change policy other than
 //               'default' and 'layout'
-export function helperMethod(T, { name, version, deterministic, seeded, library, coverage, classify, process: spec, refused }) {
+//   ownCollateral  true for a library that chooses its own collateral and
+//               cannot be given one (contract.mjs OWN_COLLATERAL_METHODS): the
+//               engine sets nothing aside and the helper is sent none
+export function helperMethod(T, { name, version, deterministic, seeded, library, coverage, classify, process: spec, refused, ownCollateral = false }) {
   return {
     name,
     version,
     deterministic,
     seeded,
+    ...(ownCollateral ? { ownCollateral: true } : {}),
     async build(state, intent, params, opts) {
       refuseUncovered(name, coverage, intent);
       const layout = opts.changePolicy === 'layout';
@@ -401,13 +405,31 @@ export function helperMethod(T, { name, version, deterministic, seeded, library,
       }
       const f = replay ? intent.fixed : null;
       const collateral = opts.collateral || null;
-      if (intent.collateral && intent.collateral.required && !collateral) throw new Error(`${name}: a script spend needs the collateral the engine sets aside`);
+      if (intent.collateral && intent.collateral.required && !collateral && !ownCollateral) throw new Error(`${name}: a script spend needs the collateral the engine sets aside`);
       const fixedRefs = new Set(f ? f.inputs.map((x) => x.ref) : []);
       const pool = inputOrder(state).filter((u) => !fixedRefs.has(u.ref));
       const proc = helperProcess(spec);
       const r = await proc.request(buildRequest(proc, { library, state, intent, params, opts, pool, collateral, seeded: seeded && !deterministic }));
-      const layoutOn = (walletRefs) => {
-        const c = buildWithChange(T, { state, params, inputs: recordsOf(state, walletRefs), intent, policy: 'layout', collateral });
+      // The collateral a library that chooses its own wrote: its inputs, total
+      // and return, which the layout change keeps as the library wrote them
+      // (as methods/lucid.mjs layoutOnLibraryInputs does).
+      const ownCollateralOf = (t) => {
+        const utxos = t.collateralInputs.map((x) => {
+          const u = state.utxos.get(x.ref);
+          if (!u) throw new Error(`${name}: the library chose ${x.ref} as collateral, which is not in the state`);
+          return u;
+        });
+        return { utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
+      };
+      const layoutOn = (walletRefs, t = null) => {
+        let change = { collateral };
+        if (ownCollateral) {
+          const own = t ? ownCollateralOf(t) : { utxos: [] };
+          if (own.utxos.length) change = { collateralFor: () => ({ ok: true, collateral: own }) };
+          else if (intent.collateral && intent.collateral.required) change = { collateralFor: () => null };
+          else change = {};
+        }
+        const c = buildWithChange(T, { state, params, inputs: recordsOf(state, walletRefs), intent, policy: 'layout', ...change });
         if (!c.ok) return { ok: false, class: c.class, detail: `layout change on the library's inputs: ${c.detail}` };
         return { ok: true, kind: 'single', txs: [txRecord(c.bytes, walletRefs, c.fee, c.size, c.k)] };
       };
@@ -427,11 +449,11 @@ export function helperMethod(T, { name, version, deterministic, seeded, library,
       const refs = built.inputs.map((i) => i.ref);
       for (const x of fixedRefs) if (!refs.includes(x)) return { ok: false, class: CLASSES.other, detail: `the library left out the fixed input ${x}` };
       const walletRefs = refs.filter((x) => !fixedRefs.has(x));
-      if (layout) return layoutOn(walletRefs);
+      if (layout) return layoutOn(walletRefs, built);
       const inputs = recordsOf(state, walletRefs);
       // The vkey witnesses: the wallet's keys, synthetic, then the intent's
       // other vkey witnesses as observed, written by the helper.
-      const keys = replayWitnessKeys(f, { inputs, collateral: collateral ? [collateral] : [] });
+      const keys = replayWitnessKeys(f, { inputs, collateral: ownCollateral ? ownCollateralOf(built).utxos : collateral ? [collateral] : [] });
       const others = f && f.witnesses[0] !== undefined ? listItems(f.witnesses[0]) : [];
       const vkeys = [...syntheticVkeys(T, keys.size), ...others].map((b) => Buffer.from(b).toString('hex'));
       const w = await proc.request({ op: 'witness', vkeys, observed: others.length });
