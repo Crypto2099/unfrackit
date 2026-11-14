@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { readStudy } from '../../../src/analysis/read.mjs';
 import { bootstrap } from '../../../src/analysis/stats.mjs';
 import { runQuestions } from '../../../src/analysis/questions.mjs';
-import { resampleWallets, groupCounts, powerAt, detectableDelta, sampleUpperEnds, runSizing, renderSizing } from '../../../src/analysis/sizing.mjs';
+import { pointEstimate, resampleWallets, groupCounts, powerAt, detectableDelta, sampleUpperEnds, runSizing, renderSizing } from '../../../src/analysis/sizing.mjs';
 import { writeStudy, optionsFor, fullJobs, built, failed, TX } from '../../lib/analysis-fixtures.mjs';
 
 const dirs = [];
@@ -103,6 +103,22 @@ test('shifting then bootstrapping decides each sample as the stored upper ends d
 const run = (n, { fail = [], fee = 100000 } = {}) => Array.from({ length: n }, (_, i) => (fail.includes(i) ? failed(i, 'change-minimum') : built(i, { fee, walletFee: fee })));
 const wallet = (id, group, split) => ({ id, group, split, jobs: fullJobs((m, arm) => (m === 'csl-lf' && arm === 'own' ? run(6, { fail: [0] }) : m === 'csl-lf' && arm === 'layout' ? run(6, { fee: 130000 }) : run(5)), { reps: 2 }) });
 
+test('centering: an exploration estimate already below zero does not count as detected effect', async () => {
+  // Values with weighted mean -3 and spread: uncentered, a shift of 0 is already
+  // detected (every resample's upper end is far below zero); centered, the
+  // detectable delta is positive and reflects the spread.
+  const source = [-5, -1, -3, -2, -4, -3, -6, 0, -3, -3].map((v, i) => W(`w${i}`, 'B1', v));
+  assert.equal(pointEstimate('mean', source), -3);
+  const counts = { B1: 10 };
+  const opts = { samples: 20, resamples: 100 };
+  const raw = await sampleUpperEnds({ name: 'sizing/t/c', statistic: 'mean', source, counts }, opts);
+  assert.equal(detectableDelta(raw, { sesoi: 1 }).delta, 0);
+  const centered = await sampleUpperEnds({ name: 'sizing/t/c', statistic: 'mean', source: source.map((w) => ({ ...w, v: [w.v[0] + 3] })), counts }, opts);
+  const d = detectableDelta(centered, { sesoi: 1 });
+  assert.ok(d.delta > 0.3 && d.reached, `${d.delta}`);
+  assert.equal(pointEstimate('median', [W('a', 'B1', 1), W('b', 'B1', 3)]), 2);
+});
+
 async function splits(explo, confi) {
   const root = mkdtempSync(join(tmpdir(), 'analysis-sz-'));
   dirs.push(root);
@@ -124,15 +140,24 @@ test('sizing.json on a fixture: confirmation group counts, known deltas, and the
   assert.equal(f.name, 'sizing/q1/failures/csl-lf/layout-vs-own');
   assert.deepEqual(f.confirmation.groups, { B1: 4, B2: 2 });
   assert.deepEqual(f.exploration.groups, { B1: 3, B2: 1 });
-  // Every wallet is -16.7 failures per 100: the interval sits there, below zero.
-  assert.equal(f.delta, 0);
-  assert.equal(f.atZero, true);
-  // Every wallet's fee ratio is 0.3 with sesoi 0.05: doubling 0.05, 0.1, 0.2 (no), 0.4 (yes), then the bisection of [0.2, 0.4] to a bracket of at most 0.0025.
+  // Every wallet is -16.7 failures per 100: the estimate is already below zero,
+  // and centering leaves identical values at zero, so the detectable delta is
+  // within the 0.05 resolution (exactly 0 when rounding leaves no residue).
+  assert.equal(f.estimateBelowZero, true);
+  near(f.estimate, -100 / 6, 1e-9);
+  assert.ok(f.delta >= 0 && f.delta <= 0.05, `${f.delta}`);
+  // Every wallet's fee ratio is 0.3 (the median is 0.3 to rounding); centered, every
+  // value is 0 and the interval is the point 0, so any delta above 0 detects:
+  // sesoi 0.05 is detected, and bisecting [0, 0.05] stops at 0.05 / 32 = 0.0015625
+  // (a bracket of that width is within 0.0025).
   const r = cell('q1', 'fees');
   assert.equal(r.sesoi, 0.05);
+  near(r.estimate, 0.3, 1e-12);
+  assert.equal(r.estimateBelowZero, false);
   assert.equal(r.reached, true);
-  assert.ok(r.delta > 0.3 && r.delta - 0.3 <= 0.0025 + 1e-9, `${r.delta}`);
+  assert.ok(r.delta <= 0.05 / 32 + 1e-12 && r.delta >= 0, `${r.delta}`);
   near(r.deltaOverSesoi, r.delta / 0.05);
+  assert.equal('atZero' in r, false);
   // No stream name of the questions is reused.
   const qNames = new Set((await runQuestions(ex, { resamples: 20, libraries: ['csl-lf'] })).cells.map((c) => c.name));
   for (const c of one.cells) {

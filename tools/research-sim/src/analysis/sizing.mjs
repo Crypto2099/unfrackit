@@ -7,7 +7,12 @@
 //
 // Procedure, per cell (one outcome of one library, as questions.mjs defines
 // it):
-//   1. The exploration split's per-wallet outcomes of the cell are resampled
+//   0. The cell is centered: its exploration point estimate (the cell's own
+//      statistic, the weighted mean for failures and the weighted median for
+//      fees) is subtracted from every exploration wallet's value, so the
+//      effect the exploration wallets already show is not part of the effect
+//      detected and the simulated samples are centered at zero.
+//   1. The centered per-wallet outcomes of the cell are resampled
 //      with replacement within each size group to the number of wallets the
 //      confirmation split holds in that group for the same cell. Each drawn
 //      wallet keeps its own weight and value.
@@ -34,9 +39,9 @@
 // sample as shifting and bootstrapping again would, up to floating-point
 // rounding, and makes the power nondecreasing in delta.
 //
-// The shift is applied to the observed outcomes as they are, without
-// centering them on zero: a cell whose exploration estimate already lies below
-// zero by enough to be detected reports delta 0 (`atZero: true`).
+// The cell's exploration estimate is reported (`estimate`) with
+// `estimateBelowZero`, whether the uncentered estimate was already below zero.
+// A delta of 0 can arise only from rounding or a lopsided sample.
 //
 // Streams. Every random stream is named under the prefix `sizing/`:
 //   sizing/<cell>/draw     chunk = sample index: the within-group resample
@@ -46,7 +51,7 @@
 // Questions' own cells are never prefixed `sizing/`, so no name is reused.
 // Results do not depend on the number of workers.
 
-import { bootstrap, seedFor } from './stats.mjs';
+import { bootstrap, seedFor, weightedMean, weightedMedian } from './stats.mjs';
 import { makeRng } from '../shapes/rng.mjs';
 import { failureValue, feeValue, studyLibraries, cellName, QUESTIONS, SESOI } from './questions.mjs';
 import { RULE_METHOD } from './read.mjs';
@@ -63,6 +68,13 @@ const STATISTIC = { failures: 'mean', fees: 'median' };
 const armOf = (t, method, kind) => t.arms.get(`${method}/${kind}`) || null;
 
 // Wallets by size group: { B1: n, ... }, keys in group order.
+// The cell's exploration point estimate, by the cell's statistic (questions.mjs).
+export function pointEstimate(statistic, wallets) {
+  const v = wallets.map((w) => w.v[0]);
+  const w = wallets.map((x) => x.weight);
+  return statistic === 'median' ? weightedMedian(v, w, wallets.map((x) => x.id)) : weightedMean(v, w);
+}
+
 export function groupCounts(wallets) {
   const out = {};
   for (const g of [...new Set(wallets.map((w) => w.group))].sort()) out[g] = wallets.filter((w) => w.group === g).length;
@@ -171,7 +183,7 @@ function cellsOf(tables, libraries) {
 // content of sizing.json:
 //   { format, level, direction, samples, resamples, power, tolerance, libraries, cells: [{ question,
 //     outcome, library, name, sesoi, exploration: { wallets, groups },
-//     confirmation: { wallets, groups }, delta, deltaOverSesoi, reached, atZero,
+//     confirmation: { wallets, groups }, estimate, estimateBelowZero, delta, deltaOverSesoi, reached,
 //     power, steps, resolution, reason? }] }
 // A cell no exploration wallet or no confirmation wallet enters, or whose
 // confirmation group has no exploration wallet to draw from, has a null delta
@@ -196,16 +208,19 @@ export async function runSizing(exploration, confirmation, { workers = 1, sample
     };
     let reason = null;
     let uppers = null;
+    let estimate = null;
     if (e.wallets.length === 0) reason = 'no exploration wallet enters the cell';
     else if (co[i].wallets.length === 0) reason = 'no confirmation wallet enters the cell';
     else {
-      uppers = await sampleUpperEnds({ name: `sizing/${e.name}`, statistic: e.statistic, source: e.wallets, counts }, { workers, samples, resamples });
+      estimate = pointEstimate(e.statistic, e.wallets);
+      const centered = e.wallets.map((w) => ({ ...w, v: [w.v[0] - estimate] }));
+      uppers = await sampleUpperEnds({ name: `sizing/${e.name}`, statistic: e.statistic, source: centered, counts }, { workers, samples, resamples });
       if (uppers === null) reason = 'a confirmation group has no exploration wallet to draw from';
     }
-    if (reason !== null) cells.push({ ...row, delta: null, deltaOverSesoi: null, reached: false, atZero: false, power: null, steps: 0, resolution: tolerance * sesoi, reason });
+    if (reason !== null) cells.push({ ...row, estimate, estimateBelowZero: estimate !== null && estimate < 0, delta: null, deltaOverSesoi: null, reached: false, power: null, steps: 0, resolution: tolerance * sesoi, reason });
     else {
       const d = detectableDelta(uppers, { sesoi, power, tolerance });
-      cells.push({ ...row, delta: d.delta, deltaOverSesoi: d.delta === null ? null : d.delta / sesoi, reached: d.reached, atZero: d.atZero, power: d.power, steps: d.steps, resolution: d.resolution });
+      cells.push({ ...row, estimate, estimateBelowZero: estimate < 0, delta: d.delta, deltaOverSesoi: d.delta === null ? null : d.delta / sesoi, reached: d.reached, power: d.power, steps: d.steps, resolution: d.resolution });
     }
   }
   return { format: 1, level: LEVEL, direction: 'negative', samples, resamples, power, tolerance, libraries: libs, cells };
