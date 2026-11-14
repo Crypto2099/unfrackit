@@ -17,8 +17,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeUplcProgramV2, makeUplcLambda, makeUplcConst, makeUplcInt, makeUplcError } from '@helios-lang/uplc';
-import { treatment, skip } from '../../lib/treatment.mjs';
-import { heliosMethod, buildHelios, classOfHeliosError, requestedValue, HELIOS_TX_UTILS_VERSION, HELIOS_LEDGER_VERSION } from '../../../src/methods/helios.mjs';
+import { treatment, skip as treatmentSkip } from '../../lib/treatment.mjs';
+import { heliosMethod, buildHelios, classOfHeliosError, requestedValue, HELIOS_TX_UTILS_VERSION, HELIOS_LEDGER_VERSION, HELIOS_PATCH_PROBLEM } from '../../../src/methods/helios.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
 import { REPLAY_PARTS, REPLAY_COVERAGE, inputOrder } from '../../../src/methods/library.mjs';
 import { NOT_REPLAYABLE, choosesOwnCollateral, checkMethod } from '../../../src/methods/contract.mjs';
@@ -38,11 +38,13 @@ import { encUint, encInt, encBytes, encArray, encMap, encTag, encText } from '..
 import { blake2b224 } from '../../../src/history/blake2b.mjs';
 import { replayIntent, payTo as payToOf, V3, EX_UNITS } from '../../lib/script-intents.mjs';
 
+// The adapter's tests need the patched ledger file (scripts/patch-helios.mjs).
+const skip = treatmentSkip || HELIOS_PATCH_PROBLEM || false;
 const P = SYNTHETIC_PARAMS;
 const own = { changePolicy: 'default', seed: 1 };
 const layout = { changePolicy: 'layout', seed: 1 };
 
-test('Helios covers every replay part, is deterministic and is given the collateral set aside', () => {
+test('Helios covers every replay part, is deterministic and is given the collateral set aside', { skip }, () => {
   assert.deepEqual(REPLAY_COVERAGE.helios, [...REPLAY_PARTS]);
   const m = checkMethod(heliosMethod(null));
   assert.equal(m.name, 'helios-sf');

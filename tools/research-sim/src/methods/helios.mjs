@@ -191,7 +191,9 @@ export const HELIOS_LEDGER_VERSION = versionOf('@helios-lang/ledger');
 if (HELIOS_TX_UTILS_VERSION !== '0.6.42') throw new Error(`@helios-lang/tx-utils ${HELIOS_TX_UTILS_VERSION} is installed; the baseline is 0.6.42`);
 if (HELIOS_LEDGER_VERSION !== '0.7.24') throw new Error(`@helios-lang/ledger ${HELIOS_LEDGER_VERSION} is installed; the baseline's tx-utils 0.6.42 resolves 0.7.24`);
 const installedTx = createHash('sha256').update(readFileSync(requireHere.resolve(HELIOS_LEDGER_TX_PATH))).digest('hex');
-if (installedTx !== HELIOS_TX_PATCHED_SHA256) throw new Error(`${HELIOS_LEDGER_TX_PATH} hashes to ${installedTx}, not the patched file ${HELIOS_TX_PATCHED_SHA256}: run node scripts/patch-helios.mjs from tools/research-sim after npm ci`);
+// Set when the installed ledger file is not the patched one; making the method
+// then refuses, so every other method loads without the patch.
+export const HELIOS_PATCH_PROBLEM = installedTx === HELIOS_TX_PATCHED_SHA256 ? null : `${HELIOS_LEDGER_TX_PATH} hashes to ${installedTx}, not the patched file ${HELIOS_TX_PATCHED_SHA256}: run node scripts/patch-helios.mjs from tools/research-sim`;
 
 const hexOf = (b) => Buffer.from(b).toString('hex');
 const firstLine = (s) => String(s).split('\n')[0];
@@ -605,6 +607,7 @@ export async function buildHelios(T, state, intent, params, opts, { name = 'heli
 
 export function heliosMethod(T) {
   const name = 'helios-sf';
+  if (HELIOS_PATCH_PROBLEM) throw new Error(`${name}: ${HELIOS_PATCH_PROBLEM}`);
   return {
     name,
     version: `@helios-lang/tx-utils ${HELIOS_TX_UTILS_VERSION} with @helios-lang/ledger ${HELIOS_LEDGER_VERSION} selectSmallestFirst, script validation presumed (ledger Tx.js patched by scripts/patch-helios.mjs)`,

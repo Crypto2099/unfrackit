@@ -29,6 +29,7 @@ const pycardanoBuild = helperBuild('pycardano');
 const tx3Build = helperBuild('tx3');
 const kuberBuild = helperBuild('kuber');
 import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
+import { HELIOS_PATCH_PROBLEM } from '../../../src/methods/helios.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
 const T = await treatment();
@@ -105,6 +106,11 @@ test('every study baseline is made by name, with its library version, determinis
     // The CTL balancer's method loads only with its build.
     if (name === 'ctl-rrri' && ctlBuildProblem()) {
       assert.throws(() => makeMethod(T, name), /scripts\/build-ctl\.mjs/);
+      continue;
+    }
+    // Helios's method is made only with the patched ledger file.
+    if (name === 'helios-sf' && HELIOS_PATCH_PROBLEM) {
+      assert.throws(() => makeMethod(T, name), /scripts\/patch-helios\.mjs/);
       continue;
     }
     // Kuber's method loads only with its helper built.

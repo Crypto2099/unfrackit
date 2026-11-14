@@ -3,14 +3,14 @@
 // Copyright 2026 Adam K. Dean
 
 // Applies the one change to the installed @helios-lang/ledger that
-// src/methods/helios-source.mjs describes, after `npm ci`:
+// src/methods/helios-source.mjs describes (`npm ci` runs it as postinstall):
 //
 //   node scripts/patch-helios.mjs
 //
 // The file's SHA-256 must be the pinned original (or already the pinned
 // patched file, which leaves it as it is) before the change, and the pinned
 // patched one after it; any other content stops the script with exit code 1
-// and writes nothing. The Helios adapter refuses to load unless the installed
+// and writes nothing. Making the Helios method refuses unless the installed
 // file hashes to the patched pin.
 
 import { createRequire } from 'node:module';
