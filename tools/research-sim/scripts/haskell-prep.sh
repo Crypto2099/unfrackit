@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Adam K. Dean
 #
-# Haskell prep: the slow, one-time steps the three Haskell helpers of the
+# Haskell prep: the slow, one-time steps the two Haskell helpers of the
 # bridge (src/methods/helper.mjs) need before their adapters can be built with
 # plain incremental cabal builds. For each helper project under helpers/
-# (cwallet, atlas, kuber) it
+# (cwallet, kuber) it
 #
 #   1. copies the helper project (cabal.project, the .cabal file, Main.hs) to
 #      <home>/<name>/project, so the run does not depend on the checkout it was
@@ -23,10 +23,10 @@
 #   5. checks the resolved plan (<home>/<name>/plan.json): the GHC version, the
 #      pinned library's commit, and the versions the upstream pins.
 #
-#   tools/research-sim/scripts/haskell-prep.sh [cwallet] [atlas] [kuber]
+#   tools/research-sim/scripts/haskell-prep.sh [cwallet] [kuber]
 #
 # Run it from any directory; it works from its own location. With no names it
-# prepares all three, in that order. <home> is RESEARCH_SIM_HASKELL_HOME, or
+# prepares both, in that order. <home> is RESEARCH_SIM_HASKELL_HOME, or
 # ~/.local/share/unfrackit-research-sim/haskell. Everything the script writes
 # is under <home> and the Nix store; it writes nothing into the repository.
 #
@@ -35,8 +35,6 @@
 #            897577325745729552495a9add56c713630c497e, devShells.default
 #            (haskell.nix, GHC 9.12.3), the library's own repository at the
 #            commit cardano-wallet pins.
-#   atlas    geniusyield/atlas at 62e37abda859cdd7e8814e7d07f963c29e4f2833
-#            (v0.14.1), devShells.default (haskell.nix, GHC 9.6.6).
 #   kuber    IntersectMBO/cardano-node at
 #            97036a66bcf8c89f687ae57a048eecc0389977ef (11.0.1),
 #            devShells.default (haskell.nix, GHC 9.6.7). Kuber has no Nix
@@ -51,13 +49,11 @@
 #            rest. cardano-node's development shells are among its CI jobs
 #            (flake.nix at 11.0.1, ciJobs.native.shells), so the kuber shell
 #            should be mostly downloads: 30 to 90 minutes, 15 to 30 GB. For
-#            the cwallet and atlas shells no cache this machine uses is known
-#            to hold their Haskell packages, so expect Nix to compile those,
-#            their Haddock documentation (both shells build a Hoogle index)
-#            and haskell-language-server from source: 2 to 6 hours and 15 to
-#            30 GB for cwallet, 3 to 8 hours and 20 to 40 GB for atlas (its
-#            closure includes cardano-node's libraries through
-#            cardano-testnet).
+#            the cwallet shell no cache this machine uses is known to hold its
+#            Haskell packages, so expect Nix to compile those, their Haddock
+#            documentation (the shell builds a Hoogle index) and
+#            haskell-language-server from source: 2 to 6 hours and 15 to 30
+#            GB.
 #   update   a few minutes and about 1 GB per project (the Hackage and CHaP
 #            indexes).
 #   deps     minutes when cabal can reuse the packages the shell's GHC
@@ -65,7 +61,7 @@
 #            3 hours and 5 to 10 GB per project where it builds them again in
 #            its own store.
 #   check    seconds.
-# All three together: about 6 to 16 hours and 60 to 120 GB. The script warns
+# Both together: about 3 to 8 hours and 35 to 75 GB. The script warns
 # when less than 150 GB is free. Keep the machine awake and Windows Update
 # paused for the length of the run (WSL stops when an update is installed).
 #
@@ -108,14 +104,13 @@ HP_NIX_JOBS=${HASKELL_PREP_NIX_JOBS:-4}
 HP_NIX_CORES=${HASKELL_PREP_NIX_CORES:-6}
 HP_CABAL_JOBS=${HASKELL_PREP_CABAL_JOBS:-4}
 HP_SYSTEM=x86_64-linux
-HP_PROJECTS=(cwallet atlas kuber)
+HP_PROJECTS=(cwallet kuber)
 HP_MIN_FREE_GB=150
 
 # The development shell of each project (a flake reference at a full commit).
 hp_shell_ref() {
   case $1 in
     cwallet) echo "github:cardano-foundation/cardano-balance-transaction/897577325745729552495a9add56c713630c497e#devShells.$HP_SYSTEM.default" ;;
-    atlas) echo "github:geniusyield/atlas/62e37abda859cdd7e8814e7d07f963c29e4f2833#devShells.$HP_SYSTEM.default" ;;
     kuber) echo "github:IntersectMBO/cardano-node/97036a66bcf8c89f687ae57a048eecc0389977ef#devShells.$HP_SYSTEM.default" ;;
   esac
 }
@@ -124,7 +119,6 @@ hp_shell_ref() {
 hp_ghc_expected() {
   case $1 in
     cwallet) echo 9.12.3 ;;
-    atlas) echo 9.6.6 ;;
     kuber) echo 9.6.7 ;;
   esac
 }
@@ -136,7 +130,6 @@ hp_plan_tags() {
       echo "cardano-balance-tx 897577325745729552495a9add56c713630c497e"
       echo "cardano-coin-selection 176611048d5b9f33df19d106cd925d63a7858bb2"
       ;;
-    atlas) echo "atlas-cardano 62e37abda859cdd7e8814e7d07f963c29e4f2833" ;;
     kuber) echo "kuber 2c559089e394ea7bc8a9bbde968bcdfb2ef7fac5" ;;
   esac
 }
@@ -152,10 +145,6 @@ hp_plan_versions() {
       echo 'cardano-ledger-core ^1\.21\.0\.0$'
       echo 'ouroboros-consensus ^4\.2\.1\.0$'
       echo 'plutus-core ^1\.70\.0\.0$'
-      ;;
-    atlas)
-      echo 'atlas-cardano ^0\.14\.1$'
-      echo 'cardano-api ^10\.13\.'
       ;;
     kuber)
       echo 'kuber ^4\.2\.0$'
@@ -175,7 +164,7 @@ hp_die() {
 }
 
 hp_usage() {
-  echo "usage: tools/research-sim/scripts/haskell-prep.sh [cwallet] [atlas] [kuber]"
+  echo "usage: tools/research-sim/scripts/haskell-prep.sh [cwallet] [kuber]"
 }
 
 # The value of a Nix setting, or nothing.
@@ -214,11 +203,11 @@ hp_preflight() {
     hp_free=$(df -BG --output=avail "$hp_d" | tail -n 1 | tr -dc 0-9)
     hp_say "free space on the file system of $hp_d: ${hp_free} GB"
     if [ "$hp_free" -lt "$HP_MIN_FREE_GB" ]; then
-      hp_say "WARNING: less than $HP_MIN_FREE_GB GB free under $hp_d; the run may need 60 to 120 GB"
+      hp_say "WARNING: less than $HP_MIN_FREE_GB GB free under $hp_d; the run may need 35 to 75 GB"
     fi
   done
   hp_say "repository: $(git -C "$HP_TOOL" rev-parse HEAD 2>/dev/null || echo 'not a git checkout')"
-  hp_dirty=$(git -C "$HP_TOOL" status --porcelain -- helpers/cwallet helpers/atlas helpers/kuber 2>/dev/null || true)
+  hp_dirty=$(git -C "$HP_TOOL" status --porcelain -- helpers/cwallet helpers/kuber 2>/dev/null || true)
   if [ -n "$hp_dirty" ]; then
     hp_say "WARNING: the helper projects differ from the commit; the run copies them as they are:"
     printf '%s\n' "$hp_dirty"
@@ -401,7 +390,7 @@ hp_main() {
         hp_usage
         return 0
         ;;
-      cwallet | atlas | kuber) hp_names+=("$hp_n") ;;
+      cwallet | kuber) hp_names+=("$hp_n") ;;
       *)
         hp_usage >&2
         return 2
