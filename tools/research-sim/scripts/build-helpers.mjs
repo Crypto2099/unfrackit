@@ -94,7 +94,12 @@
 //           Every dependency is already in that cabal store or the shell's
 //           GHC, so only Kuber and the helper compile. --dry-run runs the
 //           same cabal command with --dry-run, prints its plan, and leaves
-//           the build and its record as they were. No step runs Nix.
+//           the build and its record as they were. --source-only <dir>
+//           does only the source steps (clone, hash checks, extraction, the
+//           change) into <dir>, with the clone in a directory named clone
+//           beside it unless --clone names one: scripts/haskell-prep.sh uses
+//           it so the project it copies finds the same source. No step runs
+//           Nix.
 //   cwallet Haskell: cardano-balance-tx (cardano-foundation/cardano-balance-
 //           transaction at 897577325745729552495a9add56c713630c497e) over
 //           cardano-coin-selection (cardano-foundation/cardano-coin-selection
@@ -127,7 +132,8 @@
 //           run and leaves the build and its record as they were. The
 //           resolved plan's cardano-balance-tx is checked to be the extracted
 //           source and its cardano-coin-selection the pinned commit, and both
-//           are recorded with their versions. No step runs Nix.
+//           are recorded with their versions. --source-only <dir> does only
+//           the source steps into <dir> (see kuber). No step runs Nix.
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync, readdirSync, existsSync } from 'node:fs';
@@ -334,14 +340,14 @@ printf '%s\n%s\n%s\n' "$ghc" "$cabal" "$(cabal list-bin --builddir "$builddir" e
 
 // The cardano-balance-tx source in CBT_SOURCE_DIR from a clone of the pinned
 // commit, with its one change; its facts.
-function cwalletSource(out, cloneArg) {
+function cwalletSource(out, cloneArg, sourceDir) {
   const clone = cloneArg || join(out, 'clone');
   if (!cloneArg && !existsSync(clone)) freshClone('build-helpers', clone, CBT_REPO, CBT_COMMIT);
   requireCommit(clone, CBT_COMMIT);
   const objects = {};
   for (const [path, [type, hash]] of Object.entries(CBT_PATHS)) objects[path] = checkObject(clone, CBT_COMMIT, path, type, hash);
   for (const [path, { original }] of Object.entries(CBT_CHANGES)) checkObject(clone, CBT_COMMIT, path, 'blob', original);
-  const source = join(TOOL, CBT_SOURCE_DIR);
+  const source = sourceDir || join(TOOL, CBT_SOURCE_DIR);
   rmSync(source, { recursive: true, force: true });
   mkdirSync(source, { recursive: true });
   extractPaths(clone, CBT_COMMIT, Object.keys(CBT_PATHS), source);
@@ -371,6 +377,9 @@ function cwalletCabal(src, out, mode) {
 HELPERS.cwallet = {
   executable: 'cwallet-helper',
   keep: ['dist-newstyle', 'clone'],
+  sourceOnly(out, { clone, dir }) {
+    cwalletSource(out, clone, dir);
+  },
   dryRun(src, out, { clone }) {
     cwalletSource(out, clone);
     process.stdout.write(cwalletCabal(src, out, 'dry').text);
@@ -446,13 +455,13 @@ fi
 
 // The kuber source in KUBER_SOURCE_DIR from a clone of the pinned commit, with
 // its one change; its facts.
-function kuberSource(out, cloneArg) {
+function kuberSource(out, cloneArg, sourceDir) {
   const clone = cloneArg || join(out, 'clone');
   if (!cloneArg && !existsSync(clone)) freshClone('build-helpers', clone, KUBER_REPO, KUBER_COMMIT);
   requireCommit(clone, KUBER_COMMIT);
   const objects = {};
   for (const [path, [type, hash]] of Object.entries(KUBER_PATHS)) objects[path] = checkObject(clone, KUBER_COMMIT, path, type, hash);
-  const source = join(TOOL, KUBER_SOURCE_DIR);
+  const source = sourceDir || join(TOOL, KUBER_SOURCE_DIR);
   rmSync(source, { recursive: true, force: true });
   mkdirSync(source, { recursive: true });
   extractPaths(clone, KUBER_COMMIT, Object.keys(KUBER_PATHS), source);
@@ -475,6 +484,9 @@ function kuberCabal(src, out, mode) {
 HELPERS.kuber = {
   executable: 'kuber-helper',
   keep: ['dist', 'clone'],
+  sourceOnly(out, { clone, dir }) {
+    kuberSource(out, clone, dir);
+  },
   dryRun(src, out, { clone }) {
     kuberSource(out, clone);
     process.stdout.write(kuberCabal(src, out, 'dry').text);
@@ -497,13 +509,24 @@ function main() {
   const dryRun = all.includes('--dry-run');
   const ci = all.indexOf('--clone');
   const clone = ci >= 0 && all[ci + 1] ? resolve(all[ci + 1]) : null;
-  const args = all.filter((a, i) => a !== '--lock' && a !== '--dry-run' && i !== ci && !(ci >= 0 && i === ci + 1));
-  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm') || ((dryRun || ci >= 0) && !HELPERS[args[0]].dryRun) || (ci >= 0 && !clone)) {
-    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock; kuber and cwallet also take --clone <dir> and --dry-run)`);
+  const si = all.indexOf('--source-only');
+  const sourceDir = si >= 0 && all[si + 1] ? resolve(all[si + 1]) : null;
+  const args = all.filter((a, i) => a !== '--lock' && a !== '--dry-run' && i !== ci && !(ci >= 0 && i === ci + 1) && i !== si && !(si >= 0 && i === si + 1));
+  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm') || ((dryRun || ci >= 0) && !HELPERS[args[0]].dryRun) || (ci >= 0 && !clone) || (si >= 0 && (!sourceDir || dryRun || lock || !HELPERS[args[0]].sourceOnly))) {
+    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock; kuber and cwallet also take --clone <dir>, --dry-run and --source-only <dir>)`);
     process.exit(1);
   }
   const name = args[0];
   const h = HELPERS[name];
+  if (sourceDir) {
+    // Only the source: clone (beside <dir>, unless --clone names one), check,
+    // extract and edit into <dir>; no build, no record, nothing in the
+    // checkout. scripts/haskell-prep.sh calls this for the copied project.
+    mkdirSync(dirname(sourceDir), { recursive: true });
+    h.sourceOnly(dirname(sourceDir), { clone, dir: sourceDir });
+    console.log(`build-helpers: ${name} source in ${sourceDir}`);
+    return;
+  }
   const src = join(TOOL, HELPER_SOURCE_DIR, name);
   const out = join(TOOL, HELPER_BUILD_DIR, name);
   if (dryRun) {

@@ -8,8 +8,15 @@
 # (cwallet, kuber) it
 #
 #   1. copies the helper project (cabal.project, the .cabal file, Main.hs) to
-#      <home>/<name>/project, so the run does not depend on the checkout it was
-#      started from after its first seconds;
+#      <home>/<name>/project, and makes the library's changed source at
+#      <home>/build/helpers/<name>/source with `node scripts/build-helpers.mjs
+#      <name> --source-only` (a shallow clone of the pinned commit, kept in
+#      <home>/build/helpers/<name>/clone, each path's hash checked, extracted
+#      with git archive, the one change made and checked: the code that
+#      `build-helpers.mjs <name>` builds against). The copied cabal.project's
+#      `packages: . ../../build/helpers/<name>/source` line resolves to that
+#      directory, so the run does not depend on the checkout it was started
+#      from after this step;
 #   2. realizes the upstream project's development shell at its pinned commit
 #      and writes its environment with `nix print-dev-env` to
 #      <home>/<name>/env.sh, keeping the shell's store paths alive with a
@@ -17,15 +24,19 @@
 #   3. with env.sh sourced, runs `cabal update` for the helper project's
 #      repositories (Hackage and CHaP);
 #   4. runs `cabal build --only-dependencies` for the helper's executable, which
-#      builds every package the helper links (the library under study at its
-#      pinned commit, and everything below it) into the cabal store under
-#      <home>/<name>/cabal/store;
-#   5. checks the resolved plan (<home>/<name>/plan.json): the GHC version, the
-#      pinned library's commit, and the versions the upstream pins.
+#      builds every package the helper links below the library under study
+#      into the cabal store under <home>/<name>/cabal/store (the library, a
+#      local package, and the helper compile later, in `build-helpers.mjs
+#      <name>`, from the same plan);
+#   5. checks the resolved plan (<home>/<name>/plan.json): the GHC version, that
+#      the library is the local extracted source, that every source-repository
+#      pin is at its commit, and the versions the upstream pins.
 #
 #   tools/research-sim/scripts/haskell-prep.sh [cwallet] [kuber]
 #
-# Run it from any directory; it works from its own location. With no names it
+# It needs node and git on the PATH for step 1 (and network access to clone the
+# library's repository the first time), and Nix for step 2. Run it from any
+# directory; it works from its own location. With no names it
 # prepares both, in that order. <home> is RESEARCH_SIM_HASKELL_HOME, or
 # ~/.local/share/unfrackit-research-sim/haskell. Everything the script writes
 # is under <home> and the Nix store; it writes nothing into the repository.
@@ -60,6 +71,7 @@
 #            already holds (its solver prefers installed versions), up to 1 to
 #            3 hours and 5 to 10 GB per project where it builds them again in
 #            its own store.
+#   source   a shallow clone of one commit and a git archive: under a minute.
 #   check    seconds.
 # Both together: about 3 to 8 hours and 35 to 75 GB. The script warns
 # when less than 150 GB is free. Keep the machine awake and Windows Update
@@ -67,7 +79,9 @@
 #
 # Resuming: each step that finishes writes a marker under <home>/<name>/steps/
 # naming what it was done for (the shell's flake reference, the hash of the
-# helper project's cabal.project and .cabal file). Rerun the same command after
+# helper project's cabal.project and .cabal file, the hash of the extracted
+# source tree). The source step is redone when <home>/build/helpers/<name>/source
+# is missing or no longer matches its marker. Rerun the same command after
 # an interruption or a failure: finished steps whose inputs are unchanged are
 # skipped, and a failed project does not stop the next one.
 #
@@ -92,7 +106,8 @@
 #   cd <home>/<name>/work && set +eu && . <home>/<name>/env.sh && set -eu
 #   export CABAL_DIR=<home>/<name>/cabal; unset CABAL_CONFIG
 #   cabal build --builddir <any dir> exe:<name>-helper   (in helpers/<name>)
-# The dependencies come from the store, so only the helper itself compiles.
+# The dependencies come from the store, so only the library and the helper
+# compile.
 set -euo pipefail
 
 # Every name this script uses after it sources a shell's env.sh starts with
@@ -123,14 +138,21 @@ hp_ghc_expected() {
   esac
 }
 
-# The library under study as the plan must show it: <package> <commit>.
+# The library under study, which the plan must show as the local package at
+# <home>/build/helpers/<name>/source (the extracted, changed source).
+hp_plan_local() {
+  case $1 in
+    cwallet) echo cardano-balance-tx ;;
+    kuber) echo kuber ;;
+  esac
+}
+
+# The packages the plan must show as source-repository packages, each at its
+# commit: <package> <commit>.
 hp_plan_tags() {
   case $1 in
-    cwallet)
-      echo "cardano-balance-tx 897577325745729552495a9add56c713630c497e"
-      echo "cardano-coin-selection 176611048d5b9f33df19d106cd925d63a7858bb2"
-      ;;
-    kuber) echo "kuber 2c559089e394ea7bc8a9bbde968bcdfb2ef7fac5" ;;
+    cwallet) echo "cardano-coin-selection 176611048d5b9f33df19d106cd925d63a7858bb2" ;;
+    kuber) ;;
   esac
 }
 
@@ -174,7 +196,7 @@ hp_nix_setting() {
 
 hp_preflight() {
   local hp_cmd hp_features hp_subst hp_free hp_d hp_dirty
-  for hp_cmd in nix git jq sha256sum df du flock tee; do
+  for hp_cmd in nix git node jq sha256sum find sort xargs paste realpath df du flock tee; do
     command -v "$hp_cmd" >/dev/null || hp_die "$hp_cmd is not on the PATH"
   done
   hp_say "nix: $(nix --version)"
@@ -231,6 +253,10 @@ hp_fail() {
   echo "$*"
   false
 }
+# A hash of every file's path and bytes under a directory.
+hp_tree_hash() {
+  (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d ' ' -f 1)
+}
 
 # One project. Run in a subshell with errexit on; it leaves `ok`, or
 # `failed <step>` (or `running <step>` when it stopped without the trap), in
@@ -256,6 +282,24 @@ hp_prep_project() {
   HP_PROJECT_HASH=$(cd "$HP_DIR/project" && sha256sum cabal.project ./*.cabal | sha256sum | cut -d ' ' -f 1)
   hp_say "$HP_NAME: helper project copied from $HP_SRC (cabal.project and .cabal sha256 $HP_PROJECT_HASH)"
   hp_finish
+
+  # 1b. The library's changed source, made by the code that builds the adapter
+  # (scripts/build-helpers.mjs), where the copied cabal.project's
+  # `packages: . ../../build/helpers/<name>/source` finds it. This is the last
+  # step that reads the checkout. The clone beside it is kept.
+  HP_SOURCE="$HP_HOME/build/helpers/$HP_NAME/source"
+  if [ -d "$HP_SOURCE" ] && hp_marker_ok source "$(hp_tree_hash "$HP_SOURCE")"; then
+    hp_skip source
+  else
+    hp_begin source
+    rm -f "$HP_DIR/steps/source.done"
+    node "$HP_TOOL/scripts/build-helpers.mjs" "$HP_NAME" --source-only "$HP_SOURCE"
+    hp_mark source "$(hp_tree_hash "$HP_SOURCE")"
+    hp_finish
+  fi
+  HP_SOURCE_HASH=$(hp_tree_hash "$HP_SOURCE")
+  hp_say "$HP_NAME: library source $HP_SOURCE (tree sha256 $HP_SOURCE_HASH)"
+  HP_DEPS_KEY="$HP_PROJECT_HASH $HP_SOURCE_HASH $HP_REF"
 
   # 2. The development shell. The profile is a garbage-collector root, so a
   # Nix garbage collection keeps the shell (and the libraries the helper links
@@ -309,13 +353,13 @@ hp_prep_project() {
   fi
 
   # 4. The helper's dependencies, into the store under CABAL_DIR.
-  if hp_marker_ok deps "$HP_PROJECT_HASH $HP_REF" && [ -s "$HP_DIR/plan.json" ]; then
+  if hp_marker_ok deps "$HP_DEPS_KEY" && [ -s "$HP_DIR/plan.json" ]; then
     hp_skip deps
   else
     hp_begin deps
     (cd "$HP_DIR/project" && cabal build --builddir="$HP_DIR/dist-newstyle" --jobs="$HP_CABAL_JOBS" --only-dependencies "exe:$HP_NAME-helper")
     cp "$HP_DIR/dist-newstyle/cache/plan.json" "$HP_DIR/plan.json"
-    hp_mark deps "$HP_PROJECT_HASH $HP_REF"
+    hp_mark deps "$HP_DEPS_KEY"
     hp_finish
   fi
 
@@ -325,6 +369,17 @@ hp_prep_project() {
   {
     echo "plan: $HP_DIR/plan.json"
     echo "ghc: $HP_HAVE_GHC"
+    HP_WANT_PATH=$(realpath -m "$HP_SOURCE")
+    while read -r HP_PKG; do
+      HP_TYPES=$(jq -r --arg p "$HP_PKG" '[."install-plan"[] | select(."pkg-name" == $p) | ."pkg-src".type // "none"] | unique | join(",")' "$HP_DIR/plan.json")
+      HP_GOT=$(jq -r --arg p "$HP_PKG" '[."install-plan"[] | select(."pkg-name" == $p) | ."pkg-src".path // empty] | unique | .[]' "$HP_DIR/plan.json" | while read -r HP_P; do realpath -m "$HP_P"; done | sort -u | paste -sd, -)
+      if [ "$HP_TYPES" = local ] && [ "$HP_GOT" = "$HP_WANT_PATH" ]; then
+        echo "ok   $HP_PKG is the local source $HP_GOT"
+      else
+        echo "BAD  $HP_PKG is '$HP_TYPES' at '$HP_GOT', want local at $HP_WANT_PATH"
+        HP_BAD=1
+      fi
+    done < <(hp_plan_local "$HP_NAME")
     while read -r HP_PKG HP_WANT; do
       HP_GOT=$(jq -r --arg p "$HP_PKG" '[."install-plan"[] | select(."pkg-name" == $p) | ."pkg-src"."source-repo".tag // empty] | unique | join(",")' "$HP_DIR/plan.json")
       if [ "$HP_GOT" = "$HP_WANT" ]; then
@@ -343,6 +398,17 @@ hp_prep_project() {
         HP_BAD=1
       fi
     done < <(hp_plan_versions "$HP_NAME")
+    # No source-repository package other than the pinned ones.
+    HP_KNOWN=$(hp_plan_tags "$HP_NAME" | cut -d ' ' -f 1 | paste -sd, -)
+    while read -r HP_PKG; do
+      case ",$HP_KNOWN," in
+        *",$HP_PKG,"*) ;;
+        *)
+          echo "BAD  $HP_PKG is a source-repository package the helper project does not pin"
+          HP_BAD=1
+          ;;
+      esac
+    done < <(jq -r '[."install-plan"[] | select(."pkg-src".type? == "source-repo") | ."pkg-name"] | unique | .[]' "$HP_DIR/plan.json")
     echo "source-repository packages:"
     jq -r '[."install-plan"[] | select(."pkg-src".type? == "source-repo") | "  \(."pkg-name") \(."pkg-version") \(."pkg-src"."source-repo".location) \(."pkg-src"."source-repo".tag)"] | unique | .[]' "$HP_DIR/plan.json"
     echo "packages from the shell's GHC: $(jq '[."install-plan"[] | select(.type == "pre-existing")] | length' "$HP_DIR/plan.json")"
@@ -369,12 +435,16 @@ Legend
                       HASKELL_PREP_NIX_JOBS or HASKELL_PREP_NIX_CORES.
   FAILED at enter     env.sh did not give the GHC the project needs, or ghc or
                       cabal is missing from it; the line above says which.
+  FAILED at source    the library's source could not be made: the clone
+                      (network, git), a path's hash differing from the pinned
+                      one, or the change. The message above says which.
   FAILED at update    cabal could not fetch the Hackage or CHaP index (network).
   FAILED at deps      "Could not resolve dependencies": the pins do not solve
                       with this GHC and cabal. A package that fails to compile
                       is named above with its error. Out of memory: lower
                       HASKELL_PREP_CABAL_JOBS.
-  FAILED at check     the build finished but the plan lacks a pin; the BAD
+  FAILED at check     the build finished but the plan lacks a pin or does not
+                      build the library from the extracted source; the BAD
                       lines above and plan-summary.txt say which.
   FAILED at copy      the helper project is missing from the checkout.
 Rerun the same command after a failure: steps already done are skipped.
