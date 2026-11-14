@@ -269,18 +269,20 @@ SELECT u.usage,
        CASE WHEN NOT u.usage THEN false
             WHEN to_regclass('study.frame') IS NULL OR to_regclass('study.sample') IS NULL THEN false
             ELSE has_table_privilege(current_user, 'study.sample', 'SELECT') END AS has_frame,
-       -- The draw's columns and tables (extraction tool e861aa0 or later):
-       -- study.sample's size_group, n_window_tx, capped and history_hi, and
+       -- The draw's columns and tables (extraction tool 93fb81e or later):
+       -- study.sample's size_group, n_window_tx, capped, history_hi and the
+       -- per-wallet flags fragmented, franken_any, franken_no_cospend,
+       -- unfrackit_user, evolution_tidied and prior_treated, and
        -- study.draw_group and study.draw_summary with the columns read below.
-       -- Ten columns in all; the catalog needs no privilege on the tables.
+       -- Sixteen columns in all; the catalog needs no privilege on the tables.
        (SELECT count(*)
           FROM pg_attribute a
           JOIN pg_class c ON c.oid = a.attrelid
           JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'study' AND a.attnum > 0 AND NOT a.attisdropped
-           AND ((c.relname = 'sample' AND a.attname IN ('size_group', 'n_window_tx', 'capped', 'history_hi'))
+           AND ((c.relname = 'sample' AND a.attname IN ('size_group', 'n_window_tx', 'capped', 'history_hi', 'fragmented', 'franken_any', 'franken_no_cospend', 'unfrackit_user', 'evolution_tidied', 'prior_treated'))
              OR (c.relname = 'draw_summary' AND a.attname IN ('quota_scale', 'sample_n', 'history_cap'))
-             OR (c.relname = 'draw_group' AND a.attname IN ('quota', 'n_drawn', 'n_taken')))) = 10 AS has_draw
+             OR (c.relname = 'draw_group' AND a.attname IN ('quota', 'n_drawn', 'n_taken')))) = 16 AS has_draw
   FROM u;
 
 -- The extraction's study tables (tools/research-corpus, sql/draw.sql,
@@ -299,7 +301,8 @@ SELECT s.sa_id, bool_or(s.kind = 'random') AS random,
 
 -- The draw fields of each sampled wallet and frame (study.sample).
 -- @query study_sample_draw
-SELECT s.sa_id, s.frame, s.size_group, s.n_window_tx, s.capped, s.history_hi
+SELECT s.sa_id, s.frame, s.size_group, s.n_window_tx, s.capped, s.history_hi,
+       s.fragmented, s.franken_any, s.franken_no_cospend, s.unfrackit_user, s.evolution_tidied, s.prior_treated
   FROM study.sample s
  WHERE s.kind = 'random'
  ORDER BY s.sa_id, s.frame;

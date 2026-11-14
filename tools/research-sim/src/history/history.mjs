@@ -51,6 +51,11 @@ import { loadLife, aliveAt, frankenFlags, holdingsOf, arrivalTable, loadExtras, 
 import { loadBundles } from './txdata.mjs';
 import { spendEvent, timeOf, IntentCheck } from './intent.mjs';
 
+// The per-wallet flags of study.sample, carried into a history header's `draw`
+// under the column names (the analysis reads every boolean of `draw` but
+// `capped` as a wallet flag). A null or absent column reads as false.
+export const DRAW_FLAGS = ['fragmented', 'franken_any', 'franken_no_cospend', 'unfrackit_user', 'evolution_tidied', 'prior_treated'];
+
 export const FORMAT = 'unfrackit-research-sim history 4';
 const BUNDLE_BATCH = 400;
 
@@ -299,7 +304,7 @@ export async function walletHistory(ctx, w, out) {
     frame: w.frame,
     split: w.split || null,
     sample: w.sample || null,
-    draw: draw ? { sizeGroup: draw.sizeGroup, nWindowTx: draw.nWindowTx, capped: draw.capped, historyHi: draw.historyHi } : null,
+    draw: draw ? { sizeGroup: draw.sizeGroup, nWindowTx: draw.nWindowTx, capped: draw.capped, historyHi: draw.historyHi, ...Object.fromEntries(DRAW_FLAGS.map((k) => [k, draw[k] === true])) } : null,
     window: isSnapshot ? null : { first: w.window.first, last: w.window.last, lo, hi, tStart, endTime },
     snapshot: w.snapshot,
     params: ctx.params,

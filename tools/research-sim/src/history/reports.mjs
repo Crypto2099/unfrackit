@@ -74,6 +74,32 @@ async function assetsOf(ctx, ids) {
 
 const limitShare = (bytes, limit, pct) => limit !== null && bytes * 100 > limit * pct;
 
+// One wallet's census row from its UTxOs at the snapshot ({ coin, assets }
+// each, coin a BigInt): the UTxO and token-UTxO counts, the largest UTxO's
+// value bytes with its shares of the value limit (null limit: never near),
+// locked ADA (the minimum of each token-holding UTxO, `minAda(utxo)`),
+// excess ADA (the coin above that minimum) and `coin`, the wallet's total
+// lovelace at the snapshot, which the ADA-weighted shares divide by.
+export function censusRow(wallet, utxos, limit, minAda) {
+  let largest = 0;
+  let locked = 0n;
+  let excess = 0n;
+  let coin = 0n;
+  let tokenUtxos = 0;
+  for (const r of utxos) {
+    const vb = valueSize(r.coin, r.assets);
+    if (vb > largest) largest = vb;
+    coin += r.coin;
+    if (r.assets.length) {
+      tokenUtxos++;
+      const min = minAda(r);
+      locked += min;
+      excess += r.coin > min ? r.coin - min : 0n;
+    }
+  }
+  return { wallet, utxos: utxos.length, tokenUtxos, largestValueBytes: largest, nearCap50: limitShare(largest, limit, 50), nearCap80: limitShare(largest, limit, 80), nearCap90: limitShare(largest, limit, 90), lockedAda: locked, excessAda: excess, coin };
+}
+
 export async function cmdCensus(opts) {
   if (!opts.runId) throw new Error('--run-id is required');
   const ctx = await makeContext(opts);
@@ -100,21 +126,7 @@ export async function cmdCensus(opts) {
       for (const r of life) by.get(r.sa).push(r);
       for (const sa of part) {
         const us = by.get(sa);
-        let largest = 0;
-        let locked = 0n;
-        let excess = 0n;
-        let tokenUtxos = 0;
-        for (const r of us) {
-          const vb = valueSize(r.coin, r.assets);
-          if (vb > largest) largest = vb;
-          if (r.assets.length) {
-            tokenUtxos++;
-            const min = minAdaForOutput(reencode(ctx, r).bytes, ctx.params.coinsPerUtxoByte);
-            locked += min;
-            excess += r.coin > min ? r.coin - min : 0n;
-          }
-        }
-        out.write({ wallet: sa, utxos: us.length, tokenUtxos, largestValueBytes: largest, nearCap50: limitShare(largest, limit, 50), nearCap80: limitShare(largest, limit, 80), nearCap90: limitShare(largest, limit, 90), lockedAda: locked, excessAda: excess });
+        out.write(censusRow(sa, us, limit, (r) => minAdaForOutput(reencode(ctx, r).bytes, ctx.params.coinsPerUtxoByte)));
         nWallets++;
         nUtxos += us.length;
       }

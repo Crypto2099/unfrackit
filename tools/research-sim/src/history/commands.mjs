@@ -21,7 +21,7 @@ import { ImmutableReader, SshAccess, LocalAccess } from './immutable.mjs';
 import { paramsFromRow } from './params.mjs';
 import { epochParams } from './txdata.mjs';
 import { snapshotBlock, recentWindow, peakWindow, windowOf, fromExtractionRun, windowFromRun } from './windows.mjs';
-import { walletHistory } from './history.mjs';
+import { walletHistory, DRAW_FLAGS } from './history.mjs';
 import { historyDir, runDir, JsonLines, writeJson } from './paths.mjs';
 
 // The command line reader, with each command's options (../options.mjs).
@@ -206,7 +206,7 @@ async function studyReadable(ctx) {
   return true;
 }
 
-export const DRAW_MISSING = 'refusing: the extraction run lacks the size groups, draw counts and window cap (study.sample size_group, n_window_tx, capped and history_hi; study.draw_group; study.draw_summary quota_scale, sample_n and history_cap); rerun the extraction at e861aa0 or later';
+export const DRAW_MISSING = 'refusing: the extraction run lacks the size groups, draw counts and window cap (study.sample size_group, n_window_tx, capped, history_hi, fragmented, franken_any, franken_no_cospend, unfrackit_user, evolution_tidied and prior_treated; study.draw_group; study.draw_summary quota_scale, sample_n and history_cap); rerun the extraction at 93fb81e or later';
 
 // The extraction's sample rows by wallet, when its study tables are
 // readable: { split, excluded, random, randomRecent, randomPeak, stratumRecent,
@@ -236,6 +236,7 @@ export function samplesFromRows(rows, drawRows = [], runLevel = null) {
     if (!s) continue;
     const cap = runLevel && runLevel[r.frame] ? runLevel[r.frame].historyCap : undefined;
     s.draw[r.frame] = { sizeGroup: r.size_group, nWindowTx: Number(r.n_window_tx), capped: r.capped === true, historyHi: Number(r.history_hi), historyCap: cap };
+    for (const k of DRAW_FLAGS) s.draw[r.frame][k] = r[k] === true;
   }
   return m;
 }

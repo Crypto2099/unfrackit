@@ -46,5 +46,11 @@ test('census, near-cap and collateral on preprod, with plans and run times', { t
     collateral: { seconds: collateral.seconds, statementSeconds: collateral.statementSeconds, result: collateral.result, practiceRuleConfirmatory: collateral.practiceRuleConfirmatory, plans: collateral.plans }
   });
   assert.equal(census.wallets, ids.length);
+  const rows = readFileSync(join(runDir('preprod', `${TAG}-reports`), 'census.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(rows.length, ids.length);
+  for (const r of rows) {
+    assert.match(r.coin, /^[0-9]+$/, 'every census row carries the wallet total lovelace as decimal text');
+    assert.ok(BigInt(r.coin) >= BigInt(r.lockedAda), 'a wallet holds at least its locked ADA');
+  }
   assert.ok(collateral.result.measured > 0);
 });
