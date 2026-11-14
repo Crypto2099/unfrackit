@@ -133,7 +133,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(own.listed, 3);
     assert.deepEqual(readdirSync(b.dir).sort(), filesBefore);
     // The raw list carries no published identifier.
-    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented');
+    assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented,franken_no_cospend,unfrackit_user,evolution_tidied,prior_treated');
 
     // h is the epoch nonce of the stand-in's epoch rule, read twice.
     const dk = b.report.freeze.draw;

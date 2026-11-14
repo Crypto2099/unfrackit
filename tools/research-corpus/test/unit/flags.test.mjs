@@ -14,7 +14,7 @@ function params(over = {}) {
   return sqlParams({ network: 'preprod', settings: { ...defaultSettings(), ...over }, snapshot: { id: 1, t: 100000 }, h: '00'.repeat(32), windows: { recent: { lo: 1, hi: 100000, t_start: 0, first_epoch: 1, last_epoch: 1 }, peak: { lo: 1, hi: 100000, t_start: 0, first_epoch: 1, last_epoch: 1 } } });
 }
 
-async function txoTables(db) {
+async function txoTables(db, blocks) {
   await db.exec(`
     CREATE TABLE study.txo (tx_out_id bigint PRIMARY KEY, created_tx bigint, consumed_tx bigint, sa_id bigint, out_index smallint, value numeric,
                             payment_cred bytea, script_pay boolean, has_datum boolean, has_ref_script boolean, via_payment boolean);
@@ -22,6 +22,8 @@ async function txoTables(db) {
     CREATE TABLE study.sample_wallet (sa_id bigint PRIMARY KEY);
     CREATE TABLE study.unfrackit_tx (tx_id bigint, source text);
   `);
+  // study.sample as the draw step declares it, for the flag columns the steps set.
+  await db.exec(blocks.get('draw').statements.find((s) => /CREATE TABLE study\.sample \(/.test(s)));
   let id = 0;
   const out = async (o) => {
     id++;
@@ -33,8 +35,8 @@ async function txoTables(db) {
 }
 
 test('Evolution fingerprint: exact, at the 0.2-point boundary, and just beyond', async () => {
-  const { db, runBlock, rows } = await freshDb();
-  const out = await txoTables(db);
+  const { db, blocks, runBlock, rows } = await freshDb();
+  const out = await txoTables(db, blocks);
   await db.query('INSERT INTO study.sample_wallet VALUES (1)');
   const tidy = async (tx, values, opts = {}) => {
     if (!opts.noSpend) await out({ sa: 1, created: 1, consumed: tx, value: 10 });
@@ -61,8 +63,8 @@ test('Evolution fingerprint: exact, at the 0.2-point boundary, and just beyond',
 });
 
 test('franken: two credentials co-spend and a third never; one credential; two never co-spending; script credentials (x13_all)', async () => {
-  const { db, runBlock, rows } = await freshDb();
-  const out = await txoTables(db);
+  const { db, blocks, runBlock, rows } = await freshDb();
+  const out = await txoTables(db, blocks);
   const A = '0a'.repeat(28), B = '0b'.repeat(28), C = '0c'.repeat(28), D = '0d'.repeat(28), E = '0e'.repeat(28), F = '0f'.repeat(28), G = '1a'.repeat(28), Hh = '1b'.repeat(28), S = '5c'.repeat(28);
   await db.exec('INSERT INTO study.sample_wallet VALUES (11), (12), (13), (14)');
   // Wallet 11: A and B co-spend in 200; C is spent alone in 201; A alone in 202.
@@ -91,4 +93,82 @@ test('franken: two credentials co-spend and a third never; one credential; two n
   assert.equal(f['14:1b'], true);
   assert.equal(f['14:1a'], false);
   assert.equal(f['14:5c'], false);
+});
+
+test('per-wallet flags on study.sample: each reported count equals the sum of its flag', async () => {
+  const { db, blocks, runBlock, rows } = await freshDb();
+  const out = await txoTables(db, blocks);
+  await runBlock('reconstruction_check_table');
+  await db.exec('CREATE TABLE study.sample_frame (frame text, sa_id bigint, lo bigint, hi bigint, PRIMARY KEY (frame, sa_id))');
+  const A = '0a'.repeat(28), B = '0b'.repeat(28), C = '0c'.repeat(28), D = '0d'.repeat(28), E = '0e'.repeat(28), F = '0f'.repeat(28);
+  const wallets = [21, 22, 23, 24, 25, 26, 27];
+  await db.exec(`INSERT INTO study.sample_wallet VALUES ${wallets.map((w) => `(${w})`).join(', ')}`);
+  for (const w of wallets) {
+    for (const frame of ['recent', 'peak']) {
+      if (frame === 'peak' && w === 27) continue; // one wallet in one frame only
+      await db.query(`INSERT INTO study.sample (frame, kind, sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi)
+                      VALUES ($1, 'random', $2, $2, 'B0', 1, 1, 1, false, 1)`, [frame, w]);
+      await db.query('INSERT INTO study.sample_frame VALUES ($1, $2, 1, 100000)', [frame, w]);
+    }
+  }
+  // 21: A and B co-spend, C never (flagged). 22: E and F never co-spend. 23: one credential.
+  // 24: reconstruction-excluded, would be flagged. 25: no credentials in scope. 26, 27: clean multi-credential co-spenders.
+  await out({ sa: 21, created: 1, consumed: 200, cred: A });
+  await out({ sa: 21, created: 1, consumed: 200, cred: B });
+  await out({ sa: 21, created: 1, consumed: 201, cred: C });
+  await out({ sa: 22, created: 1, consumed: 210, cred: E });
+  await out({ sa: 22, created: 1, consumed: 211, cred: F });
+  await out({ sa: 23, created: 1, consumed: 220, cred: D });
+  await out({ sa: 24, created: 1, consumed: 230, cred: A });
+  await out({ sa: 24, created: 1, consumed: 230, cred: B });
+  await out({ sa: 24, created: 1, consumed: 231, cred: C });
+  await out({ sa: 26, created: 1, consumed: 240, cred: A });
+  await out({ sa: 26, created: 1, consumed: 240, cred: B });
+  await out({ sa: 27, created: 1, consumed: 250, cred: A });
+  await out({ sa: 27, created: 1, consumed: 250, cred: B });
+  // Prior-treated: 21 a UnFrack.It key spend (tx 200), 22 a script-only match, 23 an Evolution split, 26 both, 25 neither.
+  await db.exec(`INSERT INTO study.unfrackit_tx VALUES (200, 'json'), (240, 'json'), (212, 'json')`);
+  await out({ sa: 22, created: 1, consumed: 212, cred: '5c'.repeat(28), script: true });
+  const e = 1000000;
+  let tx = 300;
+  const tidy = async (sa, cred, values) => {
+    await out({ sa, created: 1, consumed: ++tx, value: 10, cred });
+    for (const v of values) await out({ sa, created: tx, value: v * e, cred });
+  };
+  await tidy(23, D, [500, 150, 100, 100, 50, 50, 50]);
+  await tidy(26, A, [500, 150, 100, 100, 50, 50, 50]);
+  await db.exec(`INSERT INTO study.reconstruction_check VALUES (24, 0, '', 0, '', 0, '', true, false)`);
+  await db.exec('UPDATE study.sample s SET reconstruction_excluded = NOT k.agree FROM study.reconstruction_check k WHERE k.sa_id = s.sa_id');
+  await runBlock('prior_flags', params());
+  await runBlock('franken', params());
+
+  const fr = (await rows(blocks.get('franken_counts').statements[0]))[0];
+  const flagSum = async (col) => Number((await rows(`SELECT count(DISTINCT sa_id) AS n FROM study.sample WHERE ${col} AND reconstruction_excluded IS NOT TRUE`))[0].n);
+  assert.equal(Number(fr.n_wallets_flagged), 1);
+  assert.equal(await flagSum('franken_any'), Number(fr.n_wallets_flagged));
+  assert.equal(Number(fr.n_multi_cred_no_cospend), 1);
+  assert.equal(await flagSum('franken_no_cospend'), Number(fr.n_multi_cred_no_cospend));
+  const prior = await rows(blocks.get('prior_counts').statements[0]);
+  assert.equal(prior.length, 2);
+  for (const p of prior) {
+    const sum = async (col) => Number((await rows(`SELECT count(*) AS n FROM study.sample WHERE frame = $1 AND ${col} AND reconstruction_excluded IS NOT TRUE`, [p.frame]))[0].n);
+    assert.equal(await sum('unfrackit_user'), Number(p.unfrackit_any));
+    assert.equal(await sum('evolution_tidied'), Number(p.evolution_any));
+  }
+  const any = prior.find((p) => p.frame === 'recent');
+  assert.deepEqual([Number(any.unfrackit_any), Number(any.evolution_any)], [2, 2]);
+
+  // Which wallets carry which flag, and that a wallet carries the same flags on every row.
+  const per = Object.fromEntries((await rows(`SELECT sa_id, bool_and(franken_any) AS fa, bool_or(franken_any) AS fo, bool_and(franken_no_cospend) AS na, bool_or(franken_no_cospend) AS no,
+                                                    bool_and(prior_treated) AS pa, bool_or(prior_treated) AS po, bool_and(unfrackit_user) AS ua, bool_and(evolution_tidied) AS ea
+                                               FROM study.sample GROUP BY sa_id`)).map((r) => [r.sa_id, r]));
+  for (const r of Object.values(per)) assert.deepEqual([r.fa, r.na, r.pa], [r.fo, r.no, r.po]);
+  const flags = (w) => [per[w].fa, per[w].na, per[w].ua, per[w].ea, per[w].pa];
+  assert.deepEqual(flags(21), [true, false, true, false, true]);
+  assert.deepEqual(flags(22), [false, true, false, false, false]);
+  assert.deepEqual(flags(23), [false, false, false, true, true]);
+  assert.deepEqual(flags(25), [false, false, false, false, false]);
+  assert.deepEqual(flags(26), [false, false, true, true, true]);
+  assert.deepEqual(flags(27), [false, false, false, false, false]);
+  assert.deepEqual(flags(24), [true, false, false, false, false]); // flagged but excluded from the counts
 });

@@ -140,6 +140,8 @@ A taken wallet's history is its window's first 1,000 transactions, the transacti
 
 The run checks its draw before going on and stops if any check fails: the groups' counts add up to the drawn candidates and to the sample, no group takes more than its quota or skips a wallet before it is full, the sample is full unless the draw stopped short, and the history fields agree with T and the window.
 
+Every sample row also carries five per-wallet booleans for the sensitivity analyses, the same on each row of a wallet and false when the wallet has no row in the flag's source: `franken_any` (some key payment credential is flagged by the franken rule, the franken report's `n_wallets_flagged`), `franken_no_cospend` (two or more key payment credentials and no pair co-spends, `n_multi_cred_no_cospend`), `unfrackit_user` and `evolution_tidied` (the two classifiers of the prior-treated report, `unfrackit_any` and `evolution_any`) and `prior_treated` (either). The franken step sets the first two and the prior-flags step the other three, from the tables they build, so each reported count is the sum of its flag over the wallets counted. `raw/sample.csv` carries all five.
+
 Every sample row also carries its frame's fragmentation flag, a descriptive field: some fungible asset the wallet holds (by the classification rule, over everything the wallet holds of it) sits on 10 or more of its UTxOs, held UTxOs included, at the snapshot for the recent frame and at the peak window's start or end for the peak frame. The frame report counts the fragmented wallets and those holding 100 or more distinct assets beside the flow table.
 
 ### Conventions

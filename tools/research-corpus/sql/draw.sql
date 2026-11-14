@@ -54,10 +54,15 @@
 -- (group_rank), whether it is taken, and the running count of wallets taken.
 -- study.sample(frame, kind, sa_id, draw_rank, size_group, n_utxo_start,
 -- n_utxo_ref, n_window_tx, capped, history_hi, split,
--- reconstruction_excluded, fragmented): kind is 'random', the one sample;
+-- reconstruction_excluded, fragmented, franken_any, franken_no_cospend,
+-- unfrackit_user, evolution_tidied, prior_treated): kind is 'random', the one sample;
 -- draw_rank is the 1-based position in the frame's draw order; split and
 -- fragmented are set by the split step (split.sql), reconstruction_excluded
--- by the reconstruction check (reconstruction-check.sql).
+-- by the reconstruction check (reconstruction-check.sql), franken_any and
+-- franken_no_cospend by the franken step (franken.sql), unfrackit_user,
+-- evolution_tidied and prior_treated by the prior_flags step
+-- (prior-treated.sql). The last five are per-wallet booleans, the same on every
+-- row of a wallet, false when the wallet has no row in the flag's source.
 
 -- @step draw
 -- @outputs study.draw_order study.draw_group study.draw_summary study.sample
@@ -184,6 +189,11 @@ CREATE TABLE study.sample (
   split text,
   reconstruction_excluded boolean,
   fragmented boolean,
+  franken_any boolean NOT NULL DEFAULT false,
+  franken_no_cospend boolean NOT NULL DEFAULT false,
+  unfrackit_user boolean NOT NULL DEFAULT false,
+  evolution_tidied boolean NOT NULL DEFAULT false,
+  prior_treated boolean NOT NULL DEFAULT false,
   PRIMARY KEY (frame, kind, sa_id)
 );
 INSERT INTO study.sample (frame, kind, sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped)

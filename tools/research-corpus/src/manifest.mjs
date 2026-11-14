@@ -25,22 +25,21 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
       SELECT s.frame, s.kind, s.sa_id, s.draw_rank, s.size_group, s.n_utxo_start, s.n_utxo_ref, s.n_window_tx, s.capped, s.history_hi,
              s.split, coalesce(s.fragmented, false) AS fragmented,
              c.hash_raw, c.view, coalesce(k.agree, false) AS reconstruction_agree,
-             coalesce(fr.any_flag, false) AS franken_any
+             s.franken_any, s.franken_no_cospend, s.unfrackit_user, s.evolution_tidied, s.prior_treated
         FROM study.sample s
         JOIN study.cred c ON c.sa_id = s.sa_id
         LEFT JOIN study.reconstruction_check k ON k.sa_id = s.sa_id
-        LEFT JOIN (SELECT sa_id, bool_or(flagged) AS any_flag FROM study.franken GROUP BY sa_id) fr ON fr.sa_id = s.sa_id
        ORDER BY s.frame DESC, s.kind, s.draw_rank`)
   ).rows;
   const byInput = (r) => (run.settings.x15_bech32 ? r.view : r.hash_raw);
   const samples = new Map();
-  const raw = ['frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented'];
+  const raw = ['frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented,franken_no_cospend,unfrackit_user,evolution_tidied,prior_treated'];
   for (const r of rows) {
     const id = identifier(key, byInput(r));
     const k = `${r.frame}|${r.kind}`;
     if (!samples.has(k)) samples.set(k, { frame: r.frame, kind: r.kind, ids: [] });
     samples.get(k).ids.push({ id, split: r.split, reconstruction_excluded: !r.reconstruction_agree });
-    raw.push([r.frame, r.kind, r.sa_id, r.view, r.draw_rank, r.size_group, r.n_utxo_start, r.n_utxo_ref, r.n_window_tx, r.capped, r.history_hi, r.split, r.reconstruction_agree, r.franken_any, r.fragmented].join(','));
+    raw.push([r.frame, r.kind, r.sa_id, r.view, r.draw_rank, r.size_group, r.n_utxo_start, r.n_utxo_ref, r.n_window_tx, r.capped, r.history_hi, r.split, r.reconstruction_agree, r.franken_any, r.fragmented, r.franken_no_cospend, r.unfrackit_user, r.evolution_tidied, r.prior_treated].join(','));
   }
   writePrivate(join(dir, 'raw', 'sample.csv'), raw.join('\n') + '\n');
   const list = [...samples.values()].map((s) => {

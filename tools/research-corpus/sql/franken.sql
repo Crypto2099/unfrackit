@@ -18,7 +18,7 @@
 -- credentials. This is the pairwise definition without the pairwise join.
 
 -- @step franken
--- @outputs study.franken
+-- @outputs study.franken study.sample
 DROP TABLE IF EXISTS study.franken;
 CREATE TABLE study.franken AS
 WITH creds AS (
@@ -42,6 +42,17 @@ SELECT c.sa_id, c.payment_cred, nc.n_creds, (a.sa_id IS NOT NULL) AS any_cospend
   LEFT JOIN anyco a ON a.sa_id = c.sa_id
   LEFT JOIN co ON co.sa_id = c.sa_id AND co.payment_cred = c.payment_cred;
 CREATE INDEX franken_sa ON study.franken (sa_id);
+-- The two per-wallet flags on study.sample, from the table just built, for the
+-- sensitivity analyses: franken_any (some credential flagged; the count
+-- n_wallets_flagged below) and franken_no_cospend (two or more key credentials,
+-- no pair co-spends; n_multi_cred_no_cospend). A wallet with no row in
+-- study.franken has no credential in scope and carries neither.
+UPDATE study.sample x
+   SET franken_any = coalesce(w.any_flag, false),
+       franken_no_cospend = coalesce(w.no_cospend, false)
+  FROM (SELECT sa_id, bool_or(flagged) AS any_flag, bool_or(n_creds >= 2 AND NOT any_cospend) AS no_cospend
+          FROM study.franken GROUP BY sa_id) w
+ WHERE w.sa_id = x.sa_id;
 
 -- Over the sampled wallets, less those the reconstruction check excluded. n_multi_cred_no_cospend counts the
 -- wallets the rule cannot flag because no pair of their key credentials ever

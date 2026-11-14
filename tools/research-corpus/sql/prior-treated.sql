@@ -66,7 +66,7 @@ SELECT encode(t.hash, 'hex') AS tx_hash, b.block_no, b.time::text AS time, u.sou
  ORDER BY b.block_no;
 
 -- @step prior_flags
--- @outputs study.prior_unfrackit study.prior_evolution
+-- @outputs study.prior_unfrackit study.prior_evolution study.sample
 DROP TABLE IF EXISTS study.prior_unfrackit;
 CREATE TABLE study.prior_unfrackit AS
 SELECT t.sa_id, t.consumed_tx AS tx, bool_or(NOT t.script_pay) AS key_spend
@@ -106,6 +106,15 @@ SELECT sa_id, tx
    AND abs(v[5] / s - 0.05) <= 0.002
    AND abs(v[6] / s - 0.05) <= 0.002
    AND abs(v[7] / s - 0.05) <= 0.002;
+
+-- The per-wallet flags on study.sample, read from the two tables just built
+-- by the same conditions as prior_counts below: unfrackit_user (a key-spend
+-- match, unfrackit_any), evolution_tidied (evolution_any) and prior_treated
+-- (either), each over the wallet's whole history up to the snapshot.
+UPDATE study.sample x
+   SET unfrackit_user = EXISTS (SELECT 1 FROM study.prior_unfrackit p WHERE p.sa_id = x.sa_id AND p.key_spend),
+       evolution_tidied = EXISTS (SELECT 1 FROM study.prior_evolution p WHERE p.sa_id = x.sa_id);
+UPDATE study.sample SET prior_treated = unfrackit_user OR evolution_tidied;
 
 -- Per frame of the sample, less the wallets the reconstruction check excluded:
 -- wallets flagged by each classifier over their whole history, and those with
