@@ -139,7 +139,7 @@ import { paramsJson } from '../kit/params.mjs';
 import { addressBytes } from '../history/address.mjs';
 import { NOT_REPLAYABLE, RESULT_CLASSES, RunError } from './contract.mjs';
 import { buildWithChange } from './change.mjs';
-import { inputOrder, recordsOf, refuseUncovered, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, libraryCollateral, refuseUncovered, txRecord } from './library.mjs';
 
 export const HELPER_SCHEMA = 1;
 export const TOOL = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -423,18 +423,19 @@ export function helperMethod(T, { name, version, deterministic, seeded, library,
       // The collateral a library that chooses its own wrote: its inputs, total
       // and return, which the layout change keeps as the library wrote them
       // (as methods/lucid.mjs layoutOnLibraryInputs does).
+      // A collateral that is one of the intent's fixed inputs is taken with
+      // the output the intent holds (library.mjs libraryCollateral); a
+      // refusal of it comes back as { failure }.
       const ownCollateralOf = (t) => {
-        const utxos = t.collateralInputs.map((x) => {
-          const u = state.utxos.get(x.ref);
-          if (!u) throw new Error(`${name}: the library chose ${x.ref} as collateral, which is not in the state`);
-          return u;
-        });
-        return { utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
+        const c = libraryCollateral(state, intent, t.collateralInputs.map((x) => x.ref), name);
+        if (!c.ok) return { failure: { ok: false, class: c.class, detail: c.detail } };
+        return { utxos: c.utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
       };
       const layoutOn = (walletRefs, t = null) => {
         let change = { collateral };
         if (ownCollateral) {
           const own = t ? ownCollateralOf(t) : { utxos: [] };
+          if (own.failure) return own.failure;
           if (own.utxos.length) change = { collateralFor: () => ({ ok: true, collateral: own }) };
           else if (intent.collateral && intent.collateral.required) change = { collateralFor: () => null };
           else change = {};
@@ -463,7 +464,9 @@ export function helperMethod(T, { name, version, deterministic, seeded, library,
       const inputs = recordsOf(state, walletRefs);
       // The vkey witnesses: the wallet's keys, synthetic, then the intent's
       // other vkey witnesses as observed, written by the helper.
-      const keys = replayWitnessKeys(f, { inputs, collateral: ownCollateral ? ownCollateralOf(built).utxos : collateral ? [collateral] : [] });
+      const own = ownCollateral ? ownCollateralOf(built) : null;
+      if (own && own.failure) return own.failure;
+      const keys = replayWitnessKeys(f, { inputs, collateral: own ? own.utxos : collateral ? [collateral] : [] });
       const others = f && f.witnesses[0] !== undefined ? listItems(f.witnesses[0]) : [];
       const vkeys = [...syntheticVkeys(T, keys.size), ...others].map((b) => Buffer.from(b).toString('hex'));
       const w = await proc.request({ op: 'witness', vkeys, observed: others.length });

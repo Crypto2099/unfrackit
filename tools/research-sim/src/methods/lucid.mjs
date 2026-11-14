@@ -157,7 +157,7 @@ import { minFee } from '../kit/fee.mjs';
 import { need } from '../kit/params.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
 import { buildWithChange } from './change.mjs';
-import { inputOrder, recordsOf, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, libraryCollateral, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 // The package exports no package.json; its entry point is dist/index.cjs.
 const require = createRequire(import.meta.url);
@@ -633,12 +633,9 @@ function layoutOnLibraryInputs(T, state, intent, params, hex, fixedRefs, name) {
   let collateralFor;
   const collateralRefs = t.collateralInputs.map((x) => x.ref);
   if (collateralRefs.length) {
-    const utxos = collateralRefs.map((ref) => {
-      const u = state.utxos.get(ref);
-      if (!u) throw new Error(`${name}: the library chose ${ref} as collateral, which is not in the state`);
-      return u;
-    });
-    const collateral = { utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
+    const c = libraryCollateral(state, intent, collateralRefs, name);
+    if (!c.ok) return { ok: false, class: c.class, detail: c.detail };
+    const collateral = { utxos: c.utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
     collateralFor = () => ({ ok: true, collateral });
   } else if (intent.collateral.required) collateralFor = () => null;
   const r = buildWithChange(T, { state, params, inputs, intent, policy: 'layout', ...(collateralFor ? { collateralFor } : {}) });
@@ -696,7 +693,9 @@ export async function buildLucid(state, intent, params, opts, { name = 'lucid-lf
   const walletRefs = refs.filter((x) => !fixedRefs.has(x));
   const inputs = recordsOf(state, walletRefs);
   const collateralRefs = t.collateralInputs.map((x) => x.ref);
-  const collateral = collateralRefs.map((r) => state.utxos.get(r)).filter(Boolean);
+  const own = libraryCollateral(state, intent, collateralRefs, name);
+  if (!own.ok) return { ok: false, class: own.class, detail: own.detail };
+  const collateral = own.utxos;
   const keys = replay ? replayWitnessKeys(f, { inputs, collateral }) : new Set(inputs.map((u) => u.cred));
   const others = f && f.witnesses[0] !== undefined ? listItems(f.witnesses[0]) : [];
   const bootstraps = f && f.witnesses[2] !== undefined ? listItems(f.witnesses[2]) : [];

@@ -39,6 +39,9 @@
 // 'not-replayable'.
 
 import { spendable } from '../state/state.mjs';
+import { CLASSES } from '../kit/check.mjs';
+import { unspentOutputParts } from '../kit/inspect.mjs';
+import { fixedWitnessKeys } from '../kit/replay.mjs';
 
 export const inputOrder = (state) => spendable(state);
 
@@ -49,6 +52,43 @@ export function recordsOf(state, refs) {
     if (u.held !== null) throw new Error(`the library chose ${r}, which is held`);
     return u;
   });
+}
+
+// The UTxOs a library that chooses its own collateral wrote as collateral,
+// from their references. A collateral is the state's UTxO, or one of the
+// replayed intent's fixed inputs (the observed transaction's own collateral
+// is often another party's input of the same transaction), taken with the
+// output the intent holds for it; the kit's checks then decide whether it is
+// a collateral (kit/check.mjs: a key address, no native assets in the
+// balance, the percentage, a witness for its key). One neither the state nor
+// the intent holds is an error of the adapter's reading. A fixed input at a
+// key address carries a witness for that key only when the wallet signs it
+// (a held input, which the replay's synthetic witnesses cover) or the
+// intent's observed witnesses hold one; otherwise it is a collateral failure
+// of the library, since no witness of ours or the observed transaction's can
+// sign it. Returns { ok: true, utxos } or { ok: false, class, detail }. A
+// fixed record has `fixedInput: true`, so replayWitnessKeys counts no second
+// witness for a key the input already needs.
+export function libraryCollateral(state, intent, refs, name) {
+  const fixed = intent.fixed ? new Map(intent.fixed.inputs.map((x) => [x.ref, x])) : new Map();
+  const signed = intent.fixed ? fixedWitnessKeys(intent.fixed) : new Set();
+  const utxos = [];
+  for (const ref of refs) {
+    const u = state.utxos.get(ref);
+    if (u) {
+      utxos.push(u);
+      continue;
+    }
+    const x = fixed.get(ref);
+    if (!x) throw new Error(`${name}: the library chose ${ref} as collateral, which is neither in the state nor one of the intent's fixed inputs`);
+    const p = unspentOutputParts(x.cbor);
+    const key = p.addr.paymentKind === 'key' ? p.addr.payment : null;
+    if (key !== null && !x.walletKey && !signed.has(key)) {
+      return { ok: false, class: CLASSES.collateral, detail: `${name}: the collateral input ${ref} is a fixed input at a key address whose key the intent holds no witness for` };
+    }
+    utxos.push({ ref, coin: p.coin, assets: p.assets, cred: key, held: x.held || null, fixedInput: true });
+  }
+  return { ok: true, utxos };
 }
 
 export const keyCount = (records) => new Set(records.map((u) => u.cred)).size;

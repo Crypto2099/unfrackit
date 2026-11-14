@@ -191,11 +191,13 @@ export function fixedWitnessKeys(fixed) {
 // without one was signed by a wallet key, and the ledger needs its witness
 // whichever inputs the arm chooses (kit/check.mjs, witnesses). The caller
 // names the collateral inputs (the UTxO the engine set aside, or the
-// collateral a library chose itself). A Set of key hashes (hex).
+// collateral a library chose itself); a collateral that is one of the
+// intent's fixed inputs (`fixedInput`) adds none, its key being the input's.
+// A Set of key hashes (hex).
 export function replayWitnessKeys(fixed, { inputs, collateral = [] }) {
   const keys = new Set(inputs.map((u) => u.cred));
   if (fixed) for (const x of fixed.inputs) if (x.walletKey) keys.add(x.walletKey);
-  for (const u of collateral) keys.add(u.cred);
+  for (const u of collateral) if (!u.fixedInput) keys.add(u.cred);
   const signed = fixedWitnessKeys(fixed);
   for (const h of requiredSigners(fixed)) if (!signed.has(h)) keys.add(h);
   return keys;

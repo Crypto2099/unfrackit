@@ -173,7 +173,7 @@ import { need } from '../kit/params.mjs';
 import { decode, raw, head, encUint, asUint } from '../history/cbor.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
 import { buildWithChange } from './change.mjs';
-import { inputOrder, recordsOf, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
+import { inputOrder, recordsOf, libraryCollateral, keyCount, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 export const EVO_VERSION = JSON.parse(readFileSync(createRequire(import.meta.url).resolve('@evolution-sdk/evolution/package.json'), 'utf8')).version;
 if (EVO_VERSION !== '0.8.0') throw new Error(`@evolution-sdk/evolution ${EVO_VERSION} is installed; the baseline is 0.8.0`);
@@ -574,10 +574,9 @@ export function observedEvaluator(intent) {
 
 // The wallet's payment keys a replayed transaction needs a synthetic witness
 // for (kit/replay.mjs replayWitnessKeys): the collateral is the library's own
-// collateral inputs, read from its transaction, which the pool holds.
-function walletKeysOf(state, intent, inputs, collateralRefs) {
-  const collateral = collateralRefs.map((r) => state.utxos.get(r)).filter(Boolean);
-  return replayWitnessKeys(intent.fixed, { inputs, collateral });
+// collateral inputs, read from its transaction (library.mjs libraryCollateral).
+function walletKeysOf(own, intent, inputs) {
+  return replayWitnessKeys(intent.fixed, { inputs, collateral: own.utxos });
 }
 
 // The layout change on the library's inputs (opts.changePolicy 'layout'). The
@@ -600,12 +599,9 @@ async function layoutOnLibraryInputs(T, state, intent, params, built, fixedRefs,
   if (tx.body.collateralInputs && tx.body.collateralInputs.length) {
     const seen = inspectTx(E.Transaction.toCBORHex(tx));
     collateralRefs = seen.collateralInputs.map((x) => x.ref);
-    const utxos = collateralRefs.map((ref) => {
-      const u = state.utxos.get(ref);
-      if (!u) throw new Error(`${name}: the library chose ${ref} as collateral, which is not in the state`);
-      return u;
-    });
-    const collateral = { utxos, total: seen.totalCollateral, returnBytes: seen.collateralReturn ? seen.collateralReturn.raw : null };
+    const c = libraryCollateral(state, intent, collateralRefs, name);
+    if (!c.ok) return { ok: false, class: c.class, detail: c.detail };
+    const collateral = { utxos: c.utxos, total: seen.totalCollateral, returnBytes: seen.collateralReturn ? seen.collateralReturn.raw : null };
     collateralFor = () => ({ ok: true, collateral });
   } else if (intent.collateral.required) collateralFor = () => null;
   const r = buildWithChange(T, { state, params, inputs, intent, policy: 'layout', ...(collateralFor ? { collateralFor } : {}) });
@@ -687,7 +683,9 @@ export async function buildEvo(state, intent, params, opts, { name = 'evo-lf', u
   const walletRefs = refs.filter((x) => !fixedRefs.has(x));
   const inputs = recordsOf(state, walletRefs);
   const collateralRefs = (tx.body.collateralInputs || []).map(refOfInput);
-  const keys = walletKeysOf(state, intent, inputs, collateralRefs);
+  const own = libraryCollateral(state, intent, collateralRefs, name);
+  if (!own.ok) return { ok: false, class: own.class, detail: own.detail };
+  const keys = walletKeysOf(own, intent, inputs);
   const mine = (fake.witnessSet.vkeyWitnesses || []).filter((w) => keys.has(hexOf(w.vkey.bytes).slice(0, 56)));
   if (mine.length !== keys.size) throw new Error(`${name}: the library's fake witness set has ${mine.length} of the wallet's ${keys.size} payment keys`);
   const f = intent.fixed;
