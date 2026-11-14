@@ -19,8 +19,12 @@
 // record's key and the defaults the trunk's records carry are filled in.
 // desc.mutate(records) may change the record list before it is written (and
 // hashed), for the refusals that need an odd record.
-// intents: [{ type, scriptFee, fixedBytes, deposits }] per intent event of the
-// history file (default: one plain intent per intent a job names).
+// intents: [{ type, scriptFee, fixedBytes, deposits, certs, proposals, newPools }]
+// per intent event of the history file (default: one plain intent per intent a
+// job names). certs lists certificates as { type: 0 | 7 | 16, coin } and
+// proposals their deposits; they are written as the fixed body's fields 4 and
+// 20, and `deposits` defaults to their sum (type 0 at the key deposit,
+// 2,000,000) plus newPools pool deposits (500,000,000).
 
 import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,6 +32,7 @@ import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { LIBRARY_TABLE } from '../../src/arms/plan.mjs';
 import { HISTORY_FORMAT } from '../../src/state/history.mjs';
+import { encArray, encUint, encBytes, encText, encTag, NULL } from '../../src/history/cbor.mjs';
 
 export const TX = 'a'.repeat(64);
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
@@ -129,8 +134,31 @@ function walletArm(key, w, job) {
 
 const PARAMS = (network, w) => ({ network, epoch: 100, protocolMajor: 10, minFeeA: w.minFeeA === undefined ? 44 : w.minFeeA, minFeeB: 155381, coinsPerUtxoByte: 4310, maxValSize: w.maxValSize === undefined ? 5000 : w.maxValSize, maxTxSize: 16384, maxCollateralInputs: 3, collateralPercent: 150, priceMem: [577, 10000], priceStep: [721, 10000000], keyDeposit: 2000000, poolDeposit: 500000000 });
 
+const KEY_DEPOSIT = 2000000n;
+const POOL_DEPOSIT = 500000000n;
+const credential = encArray([encUint(0), encBytes(Buffer.alloc(28, 7))]);
+function certificate(c) {
+  if (c.type === 0) return encArray([encUint(0), credential]);
+  if (c.type === 7) return encArray([encUint(7), credential, encUint(c.coin)]);
+  if (c.type === 16) return encArray([encUint(16), credential, encUint(c.coin), NULL]);
+  throw new Error(`fixture certificate type ${c.type}`);
+}
+const proposal = (deposit) => encArray([encUint(deposit), encBytes(Buffer.alloc(29, 9)), encArray([encUint(6)]), encArray([encText('x'), encBytes(Buffer.alloc(32, 1))])]);
+
 function intentEvent(i, it) {
-  const fixed = it.scriptFee || it.fixedBytes ? { inputs: [], referenceInputs: [], body: {}, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: String(it.scriptFee || 0), fixedBytes: it.fixedBytes || 0, refScriptBytes: 0 } : null;
+  const body = {};
+  let sum = 0n;
+  if (it.certs && it.certs.length) {
+    body[4] = encTag(258, encArray(it.certs.map(certificate))).toString('hex');
+    for (const c of it.certs) sum += c.type === 0 ? KEY_DEPOSIT : BigInt(c.coin);
+  }
+  if (it.proposals && it.proposals.length) {
+    body[20] = encTag(258, encArray(it.proposals.map(proposal))).toString('hex');
+    for (const p of it.proposals) sum += BigInt(p);
+  }
+  sum += BigInt(it.newPools || 0) * POOL_DEPOSIT;
+  const deposits = it.deposits !== undefined ? it.deposits : sum;
+  const fixed = it.scriptFee || it.fixedBytes || Object.keys(body).length ? { inputs: [], referenceInputs: [], body, witnesses: {}, redeemers: [], auxiliaryData: null, scriptFee: String(it.scriptFee || 0), fixedBytes: it.fixedBytes || 0, refScriptBytes: 0 } : null;
   return {
     kind: 'intent',
     txId: i,
@@ -140,14 +168,14 @@ function intentEvent(i, it) {
       type: it.type || 'T1',
       time: { slot: i, blockTime: (i + 1) * 1000, blockIndex: 0, epoch: 100, block: i },
       requested: [],
-      implicit: { withdrawals: '0', refunds: '0', deposits: String(it.deposits || 0), donation: '0', mint: [], burn: [] },
+      implicit: { withdrawals: '0', refunds: '0', deposits: String(deposits), donation: '0', mint: [], burn: [] },
       fixed,
       collateral: { required: false, observed: null },
       invalid: null,
       burst: null,
       observed: { tx: TX, size: 300, fee: '200000', epoch: 100, protocolMajor: 10, minFeeA: '44', minFeeB: '155381', walletInputs: [], walletOutputs: [], walletWitnesses: [] },
       classes: null,
-      derived: null
+      derived: it.newPools ? { poolDeposits: { registrations: it.newPools, newPools: it.newPools } } : null
     }
   };
 }

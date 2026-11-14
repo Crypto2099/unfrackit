@@ -45,6 +45,7 @@ import { HISTORY_FORMAT } from '../state/history.mjs';
 import { intentFromHistory } from '../state/intent.mjs';
 import { withoutLeftovers } from '../kit/replay.mjs';
 import { normalizeParams, SYNTHETIC_PARAMS } from '../kit/params.mjs';
+import { depositParts } from './deposits.mjs';
 
 export class AnalysisRefusal extends Error {
   constructor(message) {
@@ -166,7 +167,8 @@ export function groupWeight(draw, group) {
 
 // A history file read for what the analysis needs: the header, the end
 // record and, per intent event in order, the fixed part of its fee (d), the
-// implicit deposits it carries and its type. Nothing here loads CSL.
+// implicit deposits it carries (their total and one entry per certificate,
+// proposal and new pool) and its type. Nothing here loads CSL.
 export function parseHistoryFile(text, { analysisFreezeTx = null } = {}) {
   const lines = text.split('\n').filter((l) => l.length).map((l) => JSON.parse(l));
   if (!lines.length || lines[0].kind !== 'header') refuse('a history file has no header');
@@ -181,7 +183,12 @@ export function parseHistoryFile(text, { analysisFreezeTx = null } = {}) {
     if (e.kind !== 'intent') continue;
     const it = withoutLeftovers(intentFromHistory(e.intent));
     const d = it.fixed ? it.fixed.scriptFee + params.minFeeA * BigInt(it.fixed.fixedBytes) : 0n;
-    intents.push({ type: it.type, d, scriptFee: it.fixed ? it.fixed.scriptFee : 0n, fixedBytes: it.fixed ? it.fixed.fixedBytes : 0, deposits: it.implicit.deposits });
+    // The deposits one by one; when they do not add up to the history reader's
+    // total (a key deposit that differs from the header's), the total stands as
+    // the one deposit.
+    let parts = depositParts(it, params);
+    if (parts.reduce((a, b) => a + b, 0n) !== it.implicit.deposits) parts = it.implicit.deposits > 0n ? [it.implicit.deposits] : [];
+    intents.push({ type: it.type, d, scriptFee: it.fixed ? it.fixed.scriptFee : 0n, fixedBytes: it.fixed ? it.fixed.fixedBytes : 0, deposits: it.implicit.deposits, depositParts: parts });
   }
   if (end.counts && end.counts.intent !== undefined && end.counts.intent !== intents.length) refuse(`the history file of wallet ${header.wallet} has ${intents.length} intent events, its end record says ${end.counts.intent}`);
   return { header, params, end, intents };

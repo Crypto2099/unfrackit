@@ -28,8 +28,10 @@
 // and A and B the arms compared (q1: layout-vs-own; q2: on-vs-layout). The
 // absorption default's two cells are named
 //   absorption/fees/off-vs-on     and     absorption/failures/on-vs-off.
-// A later caller that adds a breakdown appends a label as a further path
-// segment; it never reuses a name.
+// A breakdown calls runQuestions on its filtered tables with the `suffix`
+// option, which appends its label as a further path segment (for example
+// `size/B2` or `type/T1`) to every cell's name, the absorption cells' too, so a
+// breakdown never reuses a main cell's name.
 //
 // Ratio resamples with a zero denominator are dropped and counted by the
 // bootstrap (its `dropped`); a fee ratio with a zero F_B (impossible for built
@@ -102,7 +104,9 @@ export function feeValue(armA, armB, broadcast = null) {
   return rs.length === 0 ? null : rs.reduce((s, r) => s + r, 0) / rs.length;
 }
 
-export const cellName = (question, outcome, library, a, b) => `${question}/${outcome}/${library}/${a}-vs-${b}`;
+const withSuffix = (name, suffix) => (suffix ? `${name}/${suffix}` : name);
+
+export const cellName = (question, outcome, library, a, b, suffix = '') => withSuffix(`${question}/${outcome}/${library}/${a}-vs-${b}`, suffix);
 
 // The wallets of a cell: { id, group, weight, v: [value] } for each wallet whose
 // value is not null.
@@ -123,7 +127,7 @@ export function studyLibraries(tables) {
 
 const STATISTIC = { failures: 'mean', fees: 'median' };
 
-function primarySpecs(tables, libraries) {
+function primarySpecs(tables, libraries, suffix) {
   const specs = [];
   for (const [question, { a, b, broadcast }] of Object.entries(QUESTIONS)) {
     for (const library of libraries) {
@@ -134,7 +138,7 @@ function primarySpecs(tables, libraries) {
           const [x, y] = armsOf(t);
           return value(x, y, broadcast);
         });
-        specs.push({ question, outcome, library, name: cellName(question, outcome, library, a, b), statistic: STATISTIC[outcome], wallets });
+        specs.push({ question, outcome, library, name: cellName(question, outcome, library, a, b, suffix), statistic: STATISTIC[outcome], wallets });
       }
     }
   }
@@ -143,12 +147,12 @@ function primarySpecs(tables, libraries) {
 
 // The absorption default's two figures (section 3): the rule with absorption off
 // against on.
-function absorptionSpecs(tables) {
+function absorptionSpecs(tables, suffix) {
   const fees = cellWallets(tables, (t) => feeValue(ruleArm(t, 'off'), ruleArm(t, 'on')));
   const failures = cellWallets(tables, (t) => failureValue(ruleArm(t, 'on'), ruleArm(t, 'off')));
   return [
-    { name: 'absorption/fees/off-vs-on', statistic: 'median', wallets: fees },
-    { name: 'absorption/failures/on-vs-off', statistic: 'mean', wallets: failures }
+    { name: withSuffix('absorption/fees/off-vs-on', suffix), statistic: 'median', wallets: fees },
+    { name: withSuffix('absorption/failures/on-vs-off', suffix), statistic: 'mean', wallets: failures }
   ];
 }
 
@@ -183,9 +187,9 @@ export function selectionFigures(tables, libraries) {
 // Cells are in a fixed order (q1 then q2, libraries in LIBRARY_TABLE order,
 // failures then fees), so the same tables give the same bytes at any worker
 // count.
-export async function runQuestions(tables, { workers = 1, resamples, libraries = studyLibraries(tables) } = {}) {
-  const specs = primarySpecs(tables, libraries);
-  const abs = absorptionSpecs(tables);
+export async function runQuestions(tables, { workers = 1, resamples, libraries = studyLibraries(tables), suffix = '' } = {}) {
+  const specs = primarySpecs(tables, libraries, suffix);
+  const abs = absorptionSpecs(tables, suffix);
   const opts = { workers, ...(resamples === undefined ? {} : { resamples }) };
   const out = await bootstrap([...specs, ...abs], opts);
   const cells = specs.map((s, i) => ({ question: s.question, outcome: s.outcome, library: s.library, ...out[i] }));
