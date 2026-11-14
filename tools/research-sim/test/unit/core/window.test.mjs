@@ -180,6 +180,15 @@ const plain = (t) => t.replace(/"ms":\d+(\.\d+)?/g, '"ms":0');
 const doneOf = (dir, i) => JSON.parse(readFileSync(join(dir, 'segments', `${i}.done.json`), 'utf8'));
 const doneFiles = (dir) => readdirSync(join(dir, 'segments')).filter((f) => f.endsWith('.done.json')).sort();
 const machineOf = (dir, label = 'local') => JSON.parse(readFileSync(join(dir, 'machines', `${label}.json`), 'utf8'));
+// Waits until the machine record lists n closed wallets, for at most ten
+// seconds. The record is written after a wallet's done file, so a test that
+// reads it as soon as the done file appears can find it one wallet behind.
+async function untilClosed(dir, n) {
+  for (const t0 = Date.now(); ; await tick(2)) {
+    if (machineOf(dir).invocations[0].completed.length >= n) return;
+    if (Date.now() - t0 > 10000) throw new Error(`the machine record did not list ${n} closed wallets`);
+  }
+}
 
 // Every check of the window on a run: each wallet opened in index order of
 // the wallets it ran, while fewer than twice the workers' jobs were queued
@@ -272,6 +281,7 @@ test('a slow job in wallet 0 does not stop wallets 1 and 2 from running and clos
   });
   const dir = runDir('preprod', 'slow');
   await until(join(dir, 'segments', '2.done.json'));
+  await untilClosed(dir, 2);
   // Wallets 1 and 2 are done while wallet 0's first job still runs: every
   // other job of every wallet has ended, on the pool's other worker.
   await tick(20);
