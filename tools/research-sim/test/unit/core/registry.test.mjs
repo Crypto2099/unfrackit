@@ -45,7 +45,7 @@ test('every study baseline is made by name, with its library version, determinis
     'lucid-lf': [`@lucid-evolution/lucid ${LUCID_VERSION} LargestFirst`, true, true],
     'mesh-rrri': [`@meshsdk/transaction ${MESH_VERSION} CardanoSdkInputSelector (@cardano-sdk/input-selection ${MESH_CJS_VERSION} roundRobinRandomImprove)`, false, true],
     'typhon-lp': ['@stricahq/typhonjs 4.0.0 paymentTransaction', true, true],
-    'helios-sf': ['@helios-lang/tx-utils 0.6.42 with @helios-lang/ledger 0.7.24 selectSmallestFirst', true, true],
+    'helios-sf': ['@helios-lang/tx-utils 0.6.42 with @helios-lang/ledger 0.7.24 selectSmallestFirst, script validation presumed (ledger Tx.js patched by scripts/patch-helios.mjs)', true, true],
     'cml-lf': ['@dcspark/cardano-multiplatform-lib-nodejs 6.2.0 LargestFirstMultiAsset', true, true],
     'cml-ri': ['@dcspark/cardano-multiplatform-lib-nodejs 6.2.0 RandomImproveMultiAsset', false, false],
     'cometa-lf': ['@biglup/cometa 1.2.0 (cardano-c 1.2.0) large-first', true, true],

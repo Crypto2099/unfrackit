@@ -118,9 +118,18 @@
 //                       option modifyExBudget (:507, applied at :2436-2443,
 //                       :2520-2527, :2599-2606, :2683-2690) gives each redeemer
 //                       the intent's observed units, as every adapter's
-//                       redeemers carry them. A script that fails in the
-//                       library's machine, or costs it more than the observed
-//                       units, fails the build; that failure is the library's.
+//                       redeemers carry them. Script validation is presumed
+//                       (the study does not test whether a contract
+//                       validates): the build option
+//                       throwBuildPhaseScriptErrors: false keeps a script's
+//                       failure in profiling from throwing
+//                       (TxBuilder.js:2710-2766), and scripts/patch-helios.mjs
+//                       makes validateRedeemersExBudget (ledger Tx.js:766-868)
+//                       skip running the scripts, so a script that fails in
+//                       the library's machine, or costs it more than the
+//                       observed units, no longer fails the build; the
+//                       patched file's hash is checked when this module loads.
+//                       No library option does this (helios-source.mjs).
 // Not replayable (heliosRefusal), the parts the library has no way to express:
 // body field 6, as for every adapter (kit/replay.mjs replayRefusal); body
 // fields 19 to 22 (votes, proposals, the treasury value and the donation) and
@@ -157,6 +166,7 @@
 // library that fails to build fails before this point, as for its own change.
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { makeTxBuilder, makeWalletHelper, makeOfflineWallet } from '@helios-lang/tx-utils';
 import { decodeTxInput, decodeTxOutput, decodeDCert, decodeStakingAddress, decodeTxMetadata, decodeNativeScript, hashNativeScript, decodeSignature, makeValue, makeAssets, makePubKeyHash, makeAddress, makeHashedTxOutputDatum, makeTxInput, makeTxOutput, DEFAULT_NETWORK_PARAMS } from '@helios-lang/ledger';
@@ -171,6 +181,7 @@ import { need } from '../kit/params.mjs';
 import { decode, raw, asUint, asBytes } from '../history/cbor.mjs';
 import { NOT_REPLAYABLE } from './contract.mjs';
 import { buildWithChange } from './change.mjs';
+import { HELIOS_LEDGER_TX_PATH, HELIOS_TX_PATCHED_SHA256 } from './helios-source.mjs';
 import { inputOrder, recordsOf, refuseUncovered, REPLAY_COVERAGE, errorText, txRecord } from './library.mjs';
 
 const requireHere = createRequire(import.meta.url);
@@ -179,6 +190,8 @@ export const HELIOS_TX_UTILS_VERSION = versionOf('@helios-lang/tx-utils');
 export const HELIOS_LEDGER_VERSION = versionOf('@helios-lang/ledger');
 if (HELIOS_TX_UTILS_VERSION !== '0.6.42') throw new Error(`@helios-lang/tx-utils ${HELIOS_TX_UTILS_VERSION} is installed; the baseline is 0.6.42`);
 if (HELIOS_LEDGER_VERSION !== '0.7.24') throw new Error(`@helios-lang/ledger ${HELIOS_LEDGER_VERSION} is installed; the baseline's tx-utils 0.6.42 resolves 0.7.24`);
+const installedTx = createHash('sha256').update(readFileSync(requireHere.resolve(HELIOS_LEDGER_TX_PATH))).digest('hex');
+if (installedTx !== HELIOS_TX_PATCHED_SHA256) throw new Error(`${HELIOS_LEDGER_TX_PATH} hashes to ${installedTx}, not the patched file ${HELIOS_TX_PATCHED_SHA256}: run node scripts/patch-helios.mjs from tools/research-sim after npm ci`);
 
 const hexOf = (b) => Buffer.from(b).toString('hex');
 const firstLine = (s) => String(s).split('\n')[0];
@@ -548,7 +561,7 @@ export async function buildHelios(T, state, intent, params, opts, { name = 'heli
   try {
     const selected = await helper.selectUtxos(requestedValue(intent));
     if (selected.length) b.spendWithoutRedeemer(...selected);
-    tx = await b.build({ changeAddress: state.changeAddress, spareUtxos: utxos, networkParams, ...(f && f.redeemers.length ? { modifyExBudget: observedBudget(b, intent) } : {}) });
+    tx = await b.build({ changeAddress: state.changeAddress, spareUtxos: utxos, networkParams, ...(f && f.redeemers.length ? { modifyExBudget: observedBudget(b, intent), throwBuildPhaseScriptErrors: false } : {}) });
   } catch (e) {
     passMachineErrors(e);
     return { ok: false, class: classOfHeliosError(e), detail: `build: ${heliosDetail(e)}` };
@@ -594,7 +607,7 @@ export function heliosMethod(T) {
   const name = 'helios-sf';
   return {
     name,
-    version: `@helios-lang/tx-utils ${HELIOS_TX_UTILS_VERSION} with @helios-lang/ledger ${HELIOS_LEDGER_VERSION} selectSmallestFirst`,
+    version: `@helios-lang/tx-utils ${HELIOS_TX_UTILS_VERSION} with @helios-lang/ledger ${HELIOS_LEDGER_VERSION} selectSmallestFirst, script validation presumed (ledger Tx.js patched by scripts/patch-helios.mjs)`,
     deterministic: true,
     seeded: true,
     async build(state, intent, params, opts) {

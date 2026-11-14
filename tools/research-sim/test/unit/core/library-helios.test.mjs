@@ -16,7 +16,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeUplcProgramV2, makeUplcLambda, makeUplcConst, makeUplcInt } from '@helios-lang/uplc';
+import { makeUplcProgramV2, makeUplcLambda, makeUplcConst, makeUplcInt, makeUplcError } from '@helios-lang/uplc';
 import { treatment, skip } from '../../lib/treatment.mjs';
 import { heliosMethod, buildHelios, classOfHeliosError, requestedValue, HELIOS_TX_UTILS_VERSION, HELIOS_LEDGER_VERSION } from '../../../src/methods/helios.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
@@ -264,6 +264,33 @@ test('a replayed signer, validity, metadata, a registration and script spends bu
   }
   const t = inspectTx((await replayHelios(source, 'default')).spends[0].built.txs[0].bytes);
   assert.equal(t.hasAux, true);
+});
+
+// A minting policy that fails whatever it is given. Script validation is
+// presumed, so the spend builds with the observed units; and the patched
+// ledger file still checks everything else of the transaction.
+test('a script that fails in the library\'s machine builds with the observed units under both changes', { skip }, async () => {
+  const state = shapeState(T, 'S1').state;
+  const failing = makeUplcProgramV2(makeUplcLambda({ body: makeUplcLambda({ body: makeUplcError() }) }));
+  const bytes = Buffer.from(failing.toCbor());
+  const hash = Buffer.from(failing.hash()).toString('hex');
+  const scriptFee = executionFee(P, EX_UNITS[0], EX_UNITS[1]);
+  const reds = encArray([encArray([encUint(1), encUint(0), Buffer.from('00', 'hex'), encArray([encUint(EX_UNITS[0]), encUint(EX_UNITS[1])])])]).toString('hex');
+  const it = replayIntent('f1', 10, {
+    type: 'T6',
+    requested: [payToOf(T, 0, 2n * ADA)],
+    fixed: { body: { 9: encMap([[encBytes(Buffer.from(hash, 'hex')), encMap([[encBytes(Buffer.from('7a', 'hex')), encInt(1n)]])]]).toString('hex') }, witnesses: { 6: encArray([bytes]).toString('hex'), 5: reds }, redeemers: [{ tag: 1, target: { kind: 'policy', policy: hash }, data: '00', exUnits: EX_UNITS }], scriptFee },
+    implicit: { mint: [{ policy: hash, name: '7a', qty: 1n }] },
+    collateral: true
+  });
+  const source = { wallet: 'constructed', window: 'synthetic', network: 'synthetic', stakeCred: state.stakeCred, changeAddress: state.changeAddress, changeAddressEnd: state.changeAddress, franken: new Set(), start: [...state.utxos.values()], events: [{ kind: 'intent', txId: 1, intent: it }], windowStart: 0, windowEnd: 100, params: P };
+  for (const cp of ['default', 'layout']) {
+    const r = await replayHelios(source, cp);
+    assert.equal(r.summary.validity.failed, 0, JSON.stringify(r.summary.validity.details));
+    const s = r.spends[0];
+    assert.equal(s.outcome, 'built', `${cp}: ${s.class} ${s.detail}`);
+    assert.deepEqual(inspectTx(s.built.txs[0].bytes).redeemers.map((x) => x.exUnits.map(String)), [EX_UNITS.map(String)]);
+  }
 });
 
 // A delegation of a key stake credential with the stake key's observed
