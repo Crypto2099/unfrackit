@@ -88,9 +88,9 @@
 // other than the unit, which is the only one Kuber's proposal witness carries
 // (:1187, :1223, :1246); a bootstrap witness; a native-script input whose script is in the
 // witness set; a datum of the witness set no script input carries; an inline
-// datum with a script reference on a requested output; a parameter change,
-// committee update or constitution proposal, which the helper does not write
-// in Kuber's JSON form; and auxiliary data, a proposal or a script Kuber's
+// datum with a script reference on a requested output; a parameter change
+// naming minFeeB or minFeeRefScriptCostPerByte, which Kuber's parameter update
+// has no field for (Data/Models.hs:920-949); and auxiliary data, a proposal or a script Kuber's
 // operations do not write as observed. Votes Kuber writes other than observed
 // are its own failure (class other): its balancer gives every voter every
 // vote of the transaction (:453-459). So is a transaction cardano-api's body

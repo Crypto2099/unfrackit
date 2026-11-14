@@ -217,6 +217,49 @@ test('a vote and an info proposal pass through Kuber\'s JSON form as observed, t
   }
 });
 
+test('a parameter change, a committee update and a new constitution pass through Kuber\'s JSON form as observed, the deposit counted', { skip }, async () => {
+  const m = makeMethod(T, 'kuber-prune');
+  const s = constructState(T, [{ coin: 200n * ADA }]);
+  const account = Buffer.concat([Buffer.from([0xe0]), Buffer.alloc(28, 3)]);
+  const anchor = encArray([encText('https://example.com/a'), encBytes(Buffer.alloc(32, 1))]);
+  const none = Buffer.from([0xf6]);
+  const prev = encArray([encBytes(Buffer.alloc(32, 7)), encUint(2)]);
+  const proposals = {
+    parameter: encArray([encUint(0), prev, encMap([[encUint(0), encUint(45n)], [encUint(3), encUint(20000n)], [encUint(5), encUint(2n * ADA)]]), none]),
+    committee: encArray([encUint(4), none, encTag(258, encArray([encArray([encUint(0), encBytes(Buffer.alloc(28, 5))])])), encMap([[encArray([encUint(0), encBytes(Buffer.alloc(28, 6))]), encUint(400n)], [encArray([encUint(1), encBytes(Buffer.alloc(28, 8))]), encUint(410n)]]), encTag(30, encArray([encUint(2), encUint(3)]))]),
+    constitution: encArray([encUint(5), prev, encArray([anchor, encBytes(Buffer.alloc(28, 9))])])
+  };
+  for (const [kind, action] of Object.entries(proposals)) {
+    const proposal = encArray([encUint(10n * ADA), encBytes(account), action, anchor]);
+    const it = replayIntent('g2', 100, { type: 'T1', requested: [pay(0, 3n * ADA)], fixed: { body: { 20: encArray([proposal]).toString('hex') } }, implicit: { deposits: 10n * ADA } });
+    for (const opts of [own, layout]) {
+      const r = await m.build(s, it, P, opts);
+      assert.equal(r.ok, true, `${kind}: ${r.detail}`);
+      const written = field(r.txs[0].bytes, 20);
+      assert.ok(written, `${kind}: proposals`);
+      const applied = checkAndApply(s, P, r.txs, { fixed: it.fixed, implicit: it.implicit });
+      assert.equal(applied.ok, true, `${kind}: ${applied.failure && applied.failure.detail}`);
+    }
+  }
+});
+
+test('a parameter change naming a field Kuber\'s update has no name for is not replayable, cited at Kuber\'s source', { skip }, async () => {
+  const m = makeMethod(T, 'kuber-prune');
+  const s = constructState(T, [{ coin: 200n * ADA }]);
+  const account = Buffer.concat([Buffer.from([0xe0]), Buffer.alloc(28, 3)]);
+  const anchor = encArray([encText('https://example.com/a'), encBytes(Buffer.alloc(32, 1))]);
+  for (const [key, name] of [[1, 'minFeeB'], [33, 'minFeeRefScriptCostPerByte']]) {
+    const action = encArray([encUint(0), Buffer.from([0xf6]), encMap([[encUint(0), encUint(45n)], [encUint(key), key === 1 ? encUint(155381n) : encTag(30, encArray([encUint(15), encUint(1)]))]]), Buffer.from([0xf6])]);
+    const proposal = encArray([encUint(10n * ADA), encBytes(account), action, anchor]);
+    const it = replayIntent('g3', 100, { type: 'T1', requested: [pay(0, 3n * ADA)], fixed: { body: { 20: encArray([proposal]).toString('hex') } }, implicit: { deposits: 10n * ADA } });
+    for (const opts of [own, layout]) {
+      const r = await m.build(s, it, P, opts);
+      assert.deepEqual([r.ok, r.class], [false, NOT_REPLAYABLE], r.detail);
+      assert.match(r.detail, new RegExp(`^proposal: a parameter change naming ${name}: .*Data/Models\\.hs:920-949`));
+    }
+  }
+});
+
 test('each part Kuber cannot write is not replayable', { skip }, async () => {
   const m = makeMethod(T, 'kuber-prune');
   const s = constructState(T, [{ coin: 20n * ADA }]);

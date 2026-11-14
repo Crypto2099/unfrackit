@@ -641,10 +641,11 @@ proposalScript (L.ProposalProcedure _ _ ga _) = case ga of
   _ -> Nothing
 
 -- | A proposal in Kuber's JSON form (Data/Models.hs:819-907), for the kinds
--- this helper writes in it: an info action, no confidence, a hard fork and a
--- treasury withdrawal.
+-- this helper writes in it: an info action, no confidence, a hard fork, a
+-- treasury withdrawal, a parameter change, a committee update and a new
+-- constitution.
 proposalBase :: L.ProposalProcedure Ledger.ConwayEra -> Build [Pair]
-proposalBase (L.ProposalProcedure (L.Coin dep) acct ga anchor) = do
+proposalBase pp@(L.ProposalProcedure (L.Coin dep) acct ga anchor) = do
   let common = ["deposit" .= dep, "refundAccount" .= hexText (LA.serialiseAccountAddress acct), "anchor" .= anchorJson anchor]
       prev :: L.StrictMaybe (L.GovPurposeId p) -> [Pair]
       prev = \case
@@ -656,9 +657,42 @@ proposalBase (L.ProposalProcedure (L.Coin dep) acct ga anchor) = do
     L.HardForkInitiation p pv -> Right (common ++ prev p ++ ["hardfork" .= object ["protocolVersion" .= pv]])
     L.TreasuryWithdrawals m guard ->
       Right (common ++ ["withdraw" .= Map.fromList [(hexText (LA.serialiseAccountAddress a), c) | (a, L.Coin c) <- Map.toList m]] ++ maybe [] (\(LH.ScriptHash h) -> ["guardrailscript" .= hashHex h]) (L.strictMaybeToMaybe guard))
-    L.ParameterChange {} -> notReplayable "proposal" "a parameter change proposal: Kuber takes a proposal through its JSON form only (Data/Models.hs:819-907), whose parameter updates this helper does not write"
-    L.UpdateCommittee {} -> notReplayable "proposal" "a committee update proposal: Kuber takes a proposal through its JSON form only (Data/Models.hs:819-907), whose committee form this helper does not write"
-    L.NewConstitution {} -> notReplayable "proposal" "a new constitution proposal: Kuber takes a proposal through its JSON form only (Data/Models.hs:819-907), whose constitution form this helper does not write"
+    L.ParameterChange p ppu guard -> do
+      -- Kuber's parameter update reads named fields only (Data/Models.hs:920-949),
+      -- and has none for the fee's constant or the reference-script fee.
+      when (isJust (L.strictMaybeToMaybe (ppu ^. Ledger.ppuMinFeeBL))) $ notReplayable "proposal" "a parameter change naming minFeeB: Kuber's parameter update has no such field (Data/Models.hs:920-949)"
+      when (isJust (L.strictMaybeToMaybe (ppu ^. ConwayPP.ppuMinFeeRefScriptCostPerByteL))) $ notReplayable "proposal" "a parameter change naming minFeeRefScriptCostPerByte: Kuber's parameter update has no such field (Data/Models.hs:920-949)"
+      -- The fields Kuber's parser reads, each as the ledger's JSON of its
+      -- type (Data/Models.hs:920-949, the same names as its encoder at :974-1006).
+      let g :: A.ToJSON v => A.Key -> L.StrictMaybe v -> [Pair]
+          g k = maybe [] (\v -> [k .= v]) . L.strictMaybeToMaybe
+          upd =
+            concat
+              [ g "MaxBBSize" (ppu ^. Ledger.ppuMaxBBSizeL), g "MinFeeA" (ppu ^. Ledger.ppuMinFeeAL), g "MaxTxSize" (ppu ^. Ledger.ppuMaxTxSizeL)
+              , g "MaxBHSize" (ppu ^. Ledger.ppuMaxBHSizeL), g "KeyDeposit" (ppu ^. Ledger.ppuKeyDepositL), g "PoolDeposit" (ppu ^. Ledger.ppuPoolDepositL)
+              , g "EMax" (ppu ^. Ledger.ppuEMaxL), g "NOpt" (ppu ^. Ledger.ppuNOptL), g "A0" (ppu ^. Ledger.ppuA0L), g "Rho" (ppu ^. Ledger.ppuRhoL)
+              , g "Tau" (ppu ^. Ledger.ppuTauL), g "MinPoolCost" (ppu ^. Ledger.ppuMinPoolCostL), g "CoinsPerUTxOByte" (ppu ^. Ledger.ppuCoinsPerUTxOByteL)
+              , g "CostModels" (ppu ^. Ledger.ppuCostModelsL), g "Prices" (ppu ^. Ledger.ppuPricesL), g "MaxTxExUnits" (ppu ^. Ledger.ppuMaxTxExUnitsL)
+              , g "MaxBlockExUnits" (ppu ^. Ledger.ppuMaxBlockExUnitsL), g "MaxValSize" (ppu ^. Ledger.ppuMaxValSizeL)
+              , g "CollateralPercentage" (ppu ^. Ledger.ppuCollateralPercentageL), g "MaxCollateralInputs" (ppu ^. Ledger.ppuMaxCollateralInputsL)
+              , g "PoolVotingThresholds" (ppu ^. ConwayPP.ppuPoolVotingThresholdsL), g "DRepVotingThresholds" (ppu ^. ConwayPP.ppuDRepVotingThresholdsL)
+              , g "CommitteeMinSize" (ppu ^. ConwayPP.ppuCommitteeMinSizeL), g "CommitteeMaxTermLength" (ppu ^. ConwayPP.ppuCommitteeMaxTermLengthL)
+              , g "GovActionLifetime" (ppu ^. ConwayPP.ppuGovActionLifetimeL), g "GovActionDeposit" (ppu ^. ConwayPP.ppuGovActionDepositL)
+              , g "DRepDeposit" (ppu ^. ConwayPP.ppuDRepDepositL), g "DRepActivity" (ppu ^. ConwayPP.ppuDRepActivityL)
+              ]
+      Right (common ++ prev p ++ ["parameterupdate" .= object upd] ++ guardrail guard)
+    L.UpdateCommittee p remove add q ->
+      -- Kuber's parser reads the quorum as "qourum" (Data/Models.hs:861), the
+      -- members to add as a map from credential to epoch and the members to
+      -- remove as a set of credentials.
+      Right (common ++ prev p ++ ["updatecommittee" .= object (["qourum" .= L.unboundRational q] ++ ["remove" .= map credText (toList remove) | not (Set.null remove)] ++ ["add" .= Map.fromList [(credText c, e) | (c, e) <- Map.toList add] | not (Map.null add)])])
+    L.NewConstitution p (L.Constitution (L.Anchor url h) sh) ->
+      Right (common ++ prev p ++ ["newconstitution" .= object (["url" .= L.urlToText url, "dataHash" .= hashHex (L.extractHash h)] ++ [("scriptHash" .= hashHex sh') | LH.ScriptHash sh' <- maybe [] pure (L.strictMaybeToMaybe sh)])])
+  where
+    credText :: LC.Credential kr -> Text
+    credText (LC.KeyHashObj kh) = hashHex (L.unKeyHash kh)
+    credText (LC.ScriptHashObj (LH.ScriptHash h)) = "10" <> hashHex h
+    guardrail = maybe [] (\(LH.ScriptHash h) -> ["guardrailscript" .= hashHex h]) . L.strictMaybeToMaybe
 
 auxPlutus :: Ledger.TxAuxData Ledger.ConwayEra -> Build [TxScript]
 auxPlutus ad =
