@@ -233,6 +233,32 @@ export const STATISTICS = {
     const order = Array.from(ranks, (r) => d.order[r]);
     const m = medianInOrder(order, d.a, d.w);
     return m === null ? NaN : m;
+  },
+  // H-11 (section 3): a wallet carries a = m(L/layout) - m(L/own) and
+  // b = m(rule) - m(L/layout). The change effect is absMean (|mean a|), the
+  // selection effect h11Selection (|mean b|), and h11Difference the change
+  // effect minus the selection effect. The three cells of one outcome and
+  // library share a cell name, hence one stream and the same resamples.
+  h11Selection(d, idx) {
+    let sw = 0;
+    let sx = 0;
+    for (let k = 0; k < idx.length; k++) {
+      sw += d.w[idx[k]];
+      sx += d.w[idx[k]] * d.b[idx[k]];
+    }
+    return sw > 0 ? Math.abs(sx / sw) : NaN;
+  },
+  h11Difference(d, idx) {
+    let sw = 0;
+    let sa = 0;
+    let sb = 0;
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k];
+      sw += d.w[i];
+      sa += d.w[i] * d.a[i];
+      sb += d.w[i] * d.b[i];
+    }
+    return sw > 0 ? Math.abs(sa / sw) - Math.abs(sb / sw) : NaN;
   }
 };
 
