@@ -51,6 +51,9 @@
 //              random-improve selection, seeded
 //   kuber-prune  Kuber's transaction runner, its pruning selection, in a
 //              Haskell helper process (deterministic)
+//   cwallet-rrri  cardano-wallet's balancer, cardano-balance-tx over
+//              cardano-coin-selection, its round-robin random-improve
+//              selection, in a Haskell helper process, seeded
 //   h12        UnFrack.It's H-12 input rule, with UnFrack.It's own change
 //
 // The study's replay plan answers two questions, in both windows alike. Every
@@ -71,8 +74,8 @@
 // L/layout alike, so the two arms share one seed sequence (common random
 // numbers; replay/run.mjs replayJobOpts). Per wallet and window that is 2 jobs
 // per deterministic library, 20 per random one and 2 for the rule: with the
-// twenty-two libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2
-// + 2 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 2 = 172.
+// twenty-three libraries below, 2 + 20 + 20 + 2 + 2 + 2 + 20 + 2 + 2 + 2 + 20 + 2 + 20 + 2
+// + 2 + 2 + 2 + 2 + 20 + 2 + 20 + 2 + 20 + 2 = 192.
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
@@ -99,7 +102,8 @@ export const LIBRARY_TABLE = Object.freeze([
   { role: 'pycardano-lf', method: 'pycardano-lf', random: true },
   { role: 'tx3-vd', method: 'tx3-vd', random: false },
   { role: 'ctl-rrri', method: 'ctl-rrri', random: true },
-  { role: 'kuber-prune', method: 'kuber-prune', random: false }
+  { role: 'kuber-prune', method: 'kuber-prune', random: false },
+  { role: 'cwallet-rrri', method: 'cwallet-rrri', random: true }
 ].map((r) => Object.freeze(r)));
 const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 

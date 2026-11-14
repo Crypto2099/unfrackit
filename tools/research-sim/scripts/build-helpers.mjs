@@ -95,6 +95,27 @@
 //           GHC, so only Kuber and the helper compile. --dry-run runs the
 //           same cabal command with --dry-run, prints its plan, and leaves
 //           the build and its record as they were. No step runs Nix.
+//   cwallet Haskell: cardano-balance-tx (cardano-foundation/cardano-balance-
+//           transaction at 897577325745729552495a9add56c713630c497e) over
+//           cardano-coin-selection (cardano-foundation/cardano-coin-selection
+//           at 176611048d5b9f33df19d106cd925d63a7858bb2), pinned as
+//           cardano-wallet pins them (helpers/cwallet/cabal.project). The
+//           toolchain is the development shell scripts/haskell-prep.sh wrote
+//           to <home>/cwallet/env.sh (<home> is RESEARCH_SIM_HASKELL_HOME, or
+//           ~/.local/share/unfrackit-research-sim/haskell), GHC 9.12.3, with
+//           every dependency already in that shell or in the cabal store
+//           under <home>/cwallet/cabal; without env.sh the script stops and
+//           names the prep script, which runs Nix and is not run from here.
+//           A bash child sources env.sh from <home>/cwallet/work, resets what
+//           the prep script resets after sourcing it (IFS, the shell options,
+//           CABAL_CONFIG, CABAL_DIR, the locale, SSL_CERT_FILE), checks the
+//           GHC version, and runs cabal's dry run first: when it would build
+//           anything but the helper, the script stops and lists it. The build
+//           (cabal build --builddir build/helpers/cwallet/dist-newstyle
+//           exe:cwallet-helper) runs under a five-minute limit; cabal's build
+//           directory stays, which a rebuild keeps. The resolved plan's
+//           commits of the two libraries are checked against the pins and
+//           recorded with their versions.
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync, readdirSync, existsSync } from 'node:fs';
@@ -105,6 +126,7 @@ import { TOOL, HELPER_SOURCE_DIR, HELPER_BUILD_DIR, BUILD_RECORD, HELPER_SCHEMA,
 import { PYCARDANO_VERSION, PYCARDANO_COMMIT, PYCARDANO_PYTHON, SITE_PACKAGES, environmentHash, launcherText } from '../src/methods/pycardano.mjs';
 import { KUBER_REPO, KUBER_COMMIT, KUBER_VERSION, KUBER_PATHS, KUBER_EXPOSED_MODULE, KUBER_CABAL_EDITED, SOURCE_DIR as KUBER_SOURCE_DIR, exposeTxFramework } from '../src/methods/kuber-source.mjs';
 import { freshClone, requireCommit, checkObject, extractPaths } from './wallet-source.mjs';
+import { CWALLET_PINS, CWALLET_GHC } from '../src/methods/cwallet.mjs';
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -264,6 +286,60 @@ HELPERS.tx3 = {
     run(cargo, ['build', '--release', '--locked', '--target-dir', target], { cwd: src, env: { ...env, CARGO_ENCODED_RUSTFLAGS: remap } });
     copyFileSync(join(target, 'release', this.executable), join(out, this.executable));
     return { toolchain, modules };
+  }
+};
+
+// The cwallet helper's build, in the prep's development shell (see the
+// header). Arguments: the prep's directory for the helper, the helper's
+// source, cabal's build directory, the GHC version the shell must provide.
+// Prints the GHC and cabal versions and the executable's path.
+const CWALLET_BUILD = String.raw`
+set -euo pipefail
+home=$1 src=$2 builddir=$3 want=$4
+cd "$home/work"
+set +eu
+. "$home/env.sh" >&2
+set -euo pipefail
+IFS=$' \t\n'
+trap 'rm -rf "$NIX_BUILD_TOP"' EXIT
+unset CABAL_CONFIG
+export CABAL_DIR="$home/cabal"
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+if [ -z "${'$'}{SSL_CERT_FILE:-}" ] && [ -f /etc/ssl/certs/ca-certificates.crt ]; then export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt; fi
+ghc=$(ghc --numeric-version)
+cabal=$(cabal --numeric-version)
+if [ "$ghc" != "$want" ]; then echo "the shell provides GHC $ghc, not $want" >&2; exit 1; fi
+cd "$src"
+plan=$(timeout 300 cabal build --dry-run --builddir "$builddir" exe:cwallet-helper)
+others=$(printf '%s\n' "$plan" | sed -n 's/^ - //p' | grep -v '^cwallet-helper-' || true)
+if [ -n "$others" ]; then printf 'cabal would build more than the helper:\n%s\n' "$others" >&2; exit 1; fi
+timeout 300 cabal build --builddir "$builddir" exe:cwallet-helper >&2
+printf '%s\n%s\n%s\n' "$ghc" "$cabal" "$(cabal list-bin --builddir "$builddir" exe:cwallet-helper)"
+`;
+
+HELPERS.cwallet = {
+  executable: 'cwallet-helper',
+  keep: ['dist-newstyle'],
+  build(src, out) {
+    const home = join(process.env.RESEARCH_SIM_HASKELL_HOME || join(homedir(), '.local', 'share', 'unfrackit-research-sim', 'haskell'), 'cwallet');
+    try {
+      readFileSync(join(home, 'env.sh'));
+    } catch {
+      throw new Error(`${join(home, 'env.sh')} is missing: the cwallet helper builds in the development shell scripts/haskell-prep.sh writes (it runs Nix; run it in a terminal of your own), or set RESEARCH_SIM_HASKELL_HOME to the prep's directory`);
+    }
+    const builddir = join(out, 'dist-newstyle');
+    const lines = run('bash', ['-c', CWALLET_BUILD, 'cwallet-build', home, src, builddir, CWALLET_GHC], { env: { ...process.env } }).trim().split('\n');
+    const [ghc, cabal, bin] = lines.slice(-3);
+    copyFileSync(bin, join(out, this.executable));
+    const plan = JSON.parse(readFileSync(join(builddir, 'cache', 'plan.json'), 'utf8'));
+    const modules = {};
+    for (const [name, pin] of Object.entries(CWALLET_PINS)) {
+      const found = plan['install-plan'].filter((p) => p['pkg-name'] === name);
+      const tags = [...new Set(found.map((p) => p['pkg-src'] && p['pkg-src']['source-repo'] ? p['pkg-src']['source-repo'].tag : null))];
+      if (!found.length || tags.length !== 1 || tags[0] !== pin.commit) throw new Error(`the plan resolves ${name} to ${tags.join(', ') || 'nothing'}, not commit ${pin.commit}`);
+      modules[name] = { version: found[0]['pkg-version'], commit: pin.commit, location: found[0]['pkg-src']['source-repo'].location };
+    }
+    return { toolchain: `GHC ${ghc}, cabal ${cabal} (${home}/env.sh)`, modules };
   }
 };
 

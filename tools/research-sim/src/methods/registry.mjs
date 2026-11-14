@@ -65,6 +65,12 @@
 //   kuber-prune         methods/kuber.mjs: Kuber's transaction runner and
 //                       its pruning selection, in a Haskell helper process
 //                       (scripts/build-helpers.mjs kuber) through the bridge
+//   cwallet-rrri        methods/cwallet.mjs: cardano-wallet's balancer,
+//                       cardano-balance-tx's balanceTx over
+//                       cardano-coin-selection, its round-robin
+//                       random-improve selection, seeded, in a Haskell
+//                       helper process (scripts/build-helpers.mjs cwallet)
+//                       through the bridge
 //   unfrackit-h12       methods/h12.mjs, the planner settings as options
 //   test-largest-first  methods/test-largest.mjs
 //   test-stall          a method that blocks its thread (as a synchronous
@@ -99,6 +105,7 @@ import { pycardanoMethod } from './pycardano.mjs';
 import { tx3Method } from './tx3.mjs';
 import { kuberMethod } from './kuber.mjs';
 import { ctlMethod } from './ctl.mjs';
+import { cwalletMethod } from './cwallet.mjs';
 import { checkMethod } from './contract.mjs';
 import { CLASSES } from '../kit/check.mjs';
 
@@ -127,7 +134,7 @@ const baseline = (name, make) => (T, o = {}) => {
   return make(T);
 };
 
-export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'pycardano-lf', 'tx3-vd', 'ctl-rrri', 'kuber-prune']);
+export const BASELINE_METHODS = Object.freeze(['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'pycardano-lf', 'tx3-vd', 'ctl-rrri', 'kuber-prune', 'cwallet-rrri']);
 
 const FACTORIES = new Map([
   ['csl-lf', baseline('csl-lf', (T) => cslMethod(T, { strategy: 'lf' }))],
@@ -152,6 +159,7 @@ const FACTORIES = new Map([
   ['tx3-vd', baseline('tx3-vd', (T) => tx3Method(T))],
   ['ctl-rrri', baseline('ctl-rrri', (T) => ctlMethod(T))],
   ['kuber-prune', baseline('kuber-prune', (T) => kuberMethod(T))],
+  ['cwallet-rrri', baseline('cwallet-rrri', (T) => cwalletMethod(T))],
   ['test-largest-first', (T) => testLargestMethod(T)],
   ['test-stall', (_T, o) => stallMethod(o)],
   ['unfrackit-h12', (T, o) => h12Method(T, o)]

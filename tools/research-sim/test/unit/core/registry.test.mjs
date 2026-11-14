@@ -28,6 +28,7 @@ const jvmBuild = helperBuild('jvm');
 const pycardanoBuild = helperBuild('pycardano');
 const tx3Build = helperBuild('tx3');
 const kuberBuild = helperBuild('kuber');
+const cwalletBuild = helperBuild('cwallet');
 import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
 import { HELIOS_PATCH_PROBLEM } from '../../../src/methods/helios.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
@@ -59,7 +60,8 @@ test('every study baseline is made by name, with its library version, determinis
     'pycardano-lf': [`PyCardano 0.19.2 (0445f30) LargestFirstSelector, RandomImproveMultiAsset fallback; helper pycardano sha256 ${pycardanoBuild.record ? pycardanoBuild.record.sha256.slice(0, 16) : ''}`, false, true],
     'tx3-vd': [`Tx3 tx3-resolver 0.25.0 (f2cadfd) many-input program; helper tx3 sha256 ${tx3Build.record ? tx3Build.record.sha256.slice(0, 16) : ''}`, true, true],
     'ctl-rrri': [`ctl v10.0.1 (5f960b9) purescript-cardano-transaction-balancer v2.0.1 (70df801) runBalancerAff as defaultBalancerWithErr calls it, purs 0.15.8, bundle ${ctlBuildProblem() ? '' : loadCtl().bundleSha256.slice(0, 12)}`, false, true],
-    'kuber-prune': [`Kuber 4.2.0 (2c55908) txWalletUtxos pruning selection; helper kuber sha256 ${kuberBuild.record ? kuberBuild.record.sha256.slice(0, 16) : ''}`, true, true]
+    'kuber-prune': [`Kuber 4.2.0 (2c55908) txWalletUtxos pruning selection; helper kuber sha256 ${kuberBuild.record ? kuberBuild.record.sha256.slice(0, 16) : ''}`, true, true],
+    'cwallet-rrri': [`cardano-balance-tx 0.1.0 (8975773) over cardano-coin-selection 0.1.0.0 (1766110), as cardano-wallet f293d92 pins them, balanceTx; helper cwallet sha256 ${cwalletBuild.record ? cwalletBuild.record.sha256.slice(0, 16) : ''}`, false, true]
   };
   // Lace's and AdaLite's methods load only with the build of the wallet's
   // source; without it, making the method names the build script.
@@ -118,12 +120,17 @@ test('every study baseline is made by name, with its library version, determinis
       assert.throws(() => makeMethod(T, name), /scripts\/build-helpers\.mjs kuber/);
       continue;
     }
+    // cardano-wallet's method loads only with its helper built.
+    if (name === 'cwallet-rrri' && cwalletBuild.problem) {
+      assert.throws(() => makeMethod(T, name), /scripts\/build-helpers\.mjs cwallet/);
+      continue;
+    }
     const m = makeMethod(T, name);
     assert.equal(m.name, name);
     assert.equal(m.version, version);
     assert.equal(m.deterministic, deterministic, name);
     assert.equal(m.seeded, seeded, name);
-    assert.equal(choosesOwnCollateral(m), name === 'evo-lf' || name === 'lucid-lf' || name === 'scalus-pool', name);
+    assert.equal(choosesOwnCollateral(m), name === 'evo-lf' || name === 'lucid-lf' || name === 'scalus-pool' || name === 'cwallet-rrri', name);
     assert.throws(() => makeMethod(T, name, { bundleCoin: 'shortest' }), /takes no options/);
   }
   for (const name of ['unfrackit-h12', 'test-largest-first', 'test-stall']) assert.deepEqual([makeMethod(T, name).deterministic, makeMethod(T, name).seeded], [true, true], name);
@@ -144,10 +151,10 @@ test('every method a study plan names resolves, and the test roles name only the
   const names = new Set(methodNames());
   const study = new Set();
   for (const w of ['recent', 'peak']) for (const needsCollateral of [false, true]) for (const j of expandJobs(windowPlan(w), { roles: STUDY_ROLES, needsCollateral })) study.add(j.method);
-  // The replays run the twenty-two libraries and UnFrack.It's H-12 rule.
-  assert.deepEqual([...study].sort(), ['adalite-lp', 'apollo-macs', 'blaze-wd', 'ccl-pw', 'cjs-rrri', 'cml-lf', 'cml-ri', 'cometa-lf', 'csl-lf', 'csl-ri', 'ctl-rrri', 'evo-lf', 'helios-sf', 'kuber-prune', 'lace-rrri', 'lucid-lf', 'mesh-rrri', 'pycardano-lf', 'scalus-pool', 'tx3-vd', 'typhon-lp', 'unfrackit-h12', 'yoroi-lf']);
+  // The replays run the twenty-three libraries and UnFrack.It's H-12 rule.
+  assert.deepEqual([...study].sort(), ['adalite-lp', 'apollo-macs', 'blaze-wd', 'ccl-pw', 'cjs-rrri', 'cml-lf', 'cml-ri', 'cometa-lf', 'csl-lf', 'csl-ri', 'ctl-rrri', 'cwallet-rrri', 'evo-lf', 'helios-sf', 'kuber-prune', 'lace-rrri', 'lucid-lf', 'mesh-rrri', 'pycardano-lf', 'scalus-pool', 'tx3-vd', 'typhon-lp', 'unfrackit-h12', 'yoroi-lf']);
   for (const n of study) assert.ok(names.has(n), n);
-  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'pycardano-lf', 'tx3-vd', 'ctl-rrri', 'kuber-prune', 'h12']);
+  assert.deepEqual(Object.keys(STUDY_ROLES), ['lf', 'ri', 'rrri', 'evo', 'blaze-wd', 'lucid-lf', 'mesh-rrri', 'typhon-lp', 'helios-sf', 'cml-lf', 'cml-ri', 'cometa-lf', 'lace-rrri', 'adalite-lp', 'yoroi-lf', 'apollo-macs', 'scalus-pool', 'ccl-pw', 'pycardano-lf', 'tx3-vd', 'ctl-rrri', 'kuber-prune', 'cwallet-rrri', 'h12']);
   for (const role of Object.keys(STUDY_ROLES)) assert.equal(TEST_ROLES[role], 'test-largest-first', role);
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);

@@ -118,6 +118,11 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //         treasury fields, a certificate's, withdrawal's or vote's redeemer
 //         and the parts its operations do not write as observed are not
 //         replayable (methods/kuber.mjs)
+//   cwallet cwallet-rrri: every part, in the partial transaction cardano-
+//         balance-tx balances, collateral as the library chooses it, since it
+//         refuses a transaction that carries any; a certificate's, a vote's
+//         or a proposal's redeemer and a Plutus script that is not a program
+//         are not replayable (methods/cwallet.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -139,7 +144,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   pycardano: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   tx3: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   ctl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  kuber: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  kuber: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  cwallet: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
