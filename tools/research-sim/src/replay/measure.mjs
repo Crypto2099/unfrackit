@@ -22,6 +22,7 @@
 //                 requested token no change output carries); a UTxO left with
 //                 no token adds nothing. Criterion A of H-7's drift compares
 //                 the two minimums.
+//   (a chained answer is measured as one spend: chainView)
 //   dragBytes     H-2's replayed drag: the bytes, in the change outputs' Values,
 //                 of the tokens that shared a consumed output with a requested
 //                 token without being requested themselves
@@ -80,12 +81,37 @@ function bytesOf(o, drop) {
   return valueSize(o.coin, o.assets) - valueSize(o.coin, kept);
 }
 
-export function spendMeasures(state, intent, tx, walletInputs, params, requested = requestedIndexes(intent, tx)) {
+// A chained answer (more than one transaction) measured as one spend, as the
+// pre-registration counts it (section 3): the wallet inputs are the UTxOs of
+// the state before the chain that any of its transactions spends (an input an
+// earlier transaction created is not one), and the change is the non-requested
+// wallet outputs the chain leaves in the state after it (an output a later
+// transaction spends is not one; the requested outputs belong to the last
+// transaction). `inspected` are the transactions' inspectTx results in order,
+// `txs` the method's transactions, `requested` the last one's requested
+// output indexes. Returns what spendMeasures takes as its walletInputs and
+// change arguments.
+export function chainView(before, after, txs, inspected, requested) {
+  const walletInputs = [...new Set(txs.flatMap((t) => t.walletInputs))].filter((r) => before.utxos.has(r));
+  const last = inspected.length - 1;
+  const change = [];
+  inspected.forEach((t, i) => {
+    for (const o of t.outputs) {
+      if (!isWalletAddress(before, o.addr)) continue;
+      if (i === last ? requested.has(o.index) : !after.utxos.has(`${t.hash}#${o.index}`)) continue;
+      change.push(o);
+    }
+  });
+  return { walletInputs, change };
+}
+
+// `change` replaces the outputs counted as change (a chain's, from chainView);
+// without it they are the transaction's non-requested wallet outputs.
+export function spendMeasures(state, intent, tx, walletInputs, params, requested = requestedIndexes(intent, tx), change = tx.outputs.filter((o) => !requested.has(o.index) && isWalletAddress(state, o.addr))) {
   const ins = walletInputs.map((r) => state.utxos.get(r)).filter(Boolean);
   const reqAssets = new Set(intent.requested.flatMap((o) => o.assets.map(key)));
   const inAssets = new Set(ins.flatMap((u) => u.assets.map(key)));
   const dragged = [...inAssets].filter((k) => !reqAssets.has(k)).length;
-  const change = tx.outputs.filter((o) => !requested.has(o.index) && isWalletAddress(state, o.addr));
   const sharing = new Set();
   for (const u of ins) if (u.assets.some((a) => reqAssets.has(key(a)))) for (const a of u.assets) if (!reqAssets.has(key(a))) sharing.add(key(a));
   let dragBytes = 0;

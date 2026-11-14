@@ -98,7 +98,7 @@
 // to finalization are released by settling the heap (kit/heap.mjs) after each
 // every `settleEvery` spends.
 
-import { makeState, addUtxos, removeHeld, withChangeAddress, changeAddressGap, heldOutputRefs, heldInputsFromState } from '../state/state.mjs';
+import { makeState, spendable, addUtxos, removeHeld, withChangeAddress, changeAddressGap, heldOutputRefs, heldInputsFromState } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
 import { newValidity, summarize } from '../kit/validity.mjs';
@@ -112,7 +112,7 @@ import { planOnly, StopPoint } from '../treatment/run.mjs';
 import { checkArm } from '../arms/arms.mjs';
 import { replaySuffices } from './feasible.mjs';
 import { eligibleCollateral, collateralAvailability, checkRule, totalCollateralFor, COLLATERAL_RULES } from './collateral.mjs';
-import { spendMeasures, stateMeasures, requestedIndexes } from './measure.mjs';
+import { spendMeasures, stateMeasures, requestedIndexes, chainView } from './measure.mjs';
 import { conformingShare } from './conform.mjs';
 import { blake2b224 } from '../history/blake2b.mjs';
 import { decode, raw } from '../history/cbor.mjs';
@@ -336,7 +336,8 @@ export async function replay(T, params, source, job) {
     advance(intent.time.blockTime);
     const n = ordinal++;
     counts.intents++;
-    const rec = { intent: n, type: intent.type, t: rel(intent.time.blockTime), burst: intent.burst ? { id: intent.burst.id, parallel: intent.burst.parallel, index: intent.burst.index } : null };
+    // spendableUtxos: the wallet UTxOs in the state before the spend that a planner or selector may consume (not held ones).
+    const rec = { intent: n, type: intent.type, t: rel(intent.time.blockTime), spendableUtxos: spendable(state).length, burst: intent.burst ? { id: intent.burst.id, parallel: intent.burst.parallel, index: intent.burst.index } : null };
 
     if (intent.burst && intent.burst.parallel && !passed.has(intent.burst.id)) {
       passed.add(intent.burst.id);
@@ -395,7 +396,9 @@ export async function replay(T, params, source, job) {
       const wcf = walletControlledFee(params, last.fee, { scriptFee: intent.fixed ? intent.fixed.scriptFee : 0n, fixedBytes: intent.fixed ? intent.fixed.fixedBytes : 0 });
       fees.spends += fee;
       fees.walletControlled += wcf;
-      const m = spendMeasures(before, intent, r.inspected, last.walletInputs, params, r.requested);
+      // A chain is one spend: its consumed UTxOs and its change, not the last transaction's alone.
+      const view = r.txs.length > 1 ? chainView(before, state, r.txs, r.txs.map((t) => (t === last ? r.inspected : inspectTx(t.bytes))), r.requested) : null;
+      const m = view ? spendMeasures(before, intent, r.inspected, view.walletInputs, params, r.requested, view.change) : spendMeasures(before, intent, r.inspected, last.walletInputs, params, r.requested);
       const st = stateMeasures(state, params);
       trajectory.push(st.largestValueBytes);
       out.spends.push({
