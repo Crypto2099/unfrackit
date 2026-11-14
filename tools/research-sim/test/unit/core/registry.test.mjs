@@ -61,7 +61,7 @@ test('every study baseline is made by name, with its library version, determinis
     'tx3-vd': [`Tx3 tx3-resolver 0.25.0 (f2cadfd) many-input program; helper tx3 sha256 ${tx3Build.record ? tx3Build.record.sha256.slice(0, 16) : ''}`, true, true],
     'ctl-rrri': [`ctl v10.0.1 (5f960b9) purescript-cardano-transaction-balancer v2.0.1 (70df801) runBalancerAff as defaultBalancerWithErr calls it, purs 0.15.8, bundle ${ctlBuildProblem() ? '' : loadCtl().bundleSha256.slice(0, 12)}`, false, true],
     'kuber-prune': [`Kuber 4.2.0 (2c55908) txWalletUtxos pruning selection; helper kuber sha256 ${kuberBuild.record ? kuberBuild.record.sha256.slice(0, 16) : ''}`, true, true],
-    'cwallet-rrri': [`cardano-balance-tx 0.1.0 (8975773) over cardano-coin-selection 0.1.0.0 (1766110), as cardano-wallet f293d92 pins them, balanceTx; helper cwallet sha256 ${cwalletBuild.record ? cwalletBuild.record.sha256.slice(0, 16) : ''}`, false, true]
+    'cwallet-rrri': [`cardano-balance-tx 0.1.0 (8975773; Redeemers.hs fae9037, the intent's execution units, no script run) over cardano-coin-selection 0.1.0.0 (1766110), as cardano-wallet f293d92 pins them, balanceTx; helper cwallet sha256 ${cwalletBuild.record ? cwalletBuild.record.sha256.slice(0, 16) : ''}`, false, true]
   };
   // Lace's and AdaLite's methods load only with the build of the wallet's
   // source; without it, making the method names the build script.

@@ -6,13 +6,26 @@
 -- at 897577325745729552495a9add56c713630c497e) and cardano-coin-selection
 -- (cardano-foundation/cardano-coin-selection at
 -- 176611048d5b9f33df19d106cd925d63a7858bb2), pinned as cardano-wallet pins them
--- at cardano-wallet@f293d922f1930714aca7ede3cbb5ebf3fb710af6. Every stanza below
--- the helper's own `packages:` line is copied unchanged from that commit's
--- cabal.project; each block names the lines it copies. Left out are the
--- wallet's own packages (:58-86), its program-options (:255-259), its
--- cabal-lib-version (:261) and its test settings (:265, :267-335, :340), which
--- configure the wallet's local packages and pin nothing, and its three other
--- source-repository-package stanzas (servant-openapi3 and openapi3, :88-108,
+-- at cardano-wallet@f293d922f1930714aca7ede3cbb5ebf3fb710af6.
+--
+-- cardano-balance-tx is built as a local package from
+-- ../../build/helpers/cwallet/source, which scripts/build-helpers.mjs cwallet
+-- extracts from that commit, each path checked against its git object hash,
+-- with one change: its evaluation step (lib/Cardano/Balance/Tx/Redeemers.hs)
+-- answers each redeemer with the execution units the helper gives it instead
+-- of running the transaction's scripts, and its package description drops
+-- the text dependency that step alone used (src/methods/cwallet-source.mjs).
+-- It takes the place of the wallet's
+-- source-repository-package stanza for it (:134-144); cardano-coin-selection
+-- stays the wallet's source-repository-package.
+--
+-- Every other stanza below the helper's own `packages:` line is copied
+-- unchanged from the wallet's cabal.project; each block names the lines it
+-- copies. Left out are the wallet's own packages (:58-86), its
+-- program-options (:255-259), its cabal-lib-version (:261) and its test
+-- settings (:265, :267-335, :340), which configure the wallet's local
+-- packages and pin nothing, and its three other source-repository-package
+-- stanzas (servant-openapi3 and openapi3, :88-108,
 -- and cardano-ledger-read, :122-132), packages that neither
 -- cardano-balance-tx nor cardano-coin-selection depends on. A constraint or
 -- flag on a package outside the helper's plan has no effect. The `--sha256`
@@ -26,7 +39,7 @@
 -- each ledger package it constrains at the version the wallet's block below
 -- constrains.
 
-packages: .
+packages: . ../../build/helpers/cwallet/source
 
 -- cardano-wallet@f293d92 cabal.project:40-49
 repository cardano-haskell-packages
@@ -59,19 +72,6 @@ source-repository-package
   --sha256: 1a5vssp9qva1yibrllg4dhxhs5fjcaf0maa721qvqbfr32kmd6g0
 
 -- END cardano-coin-selection
---------------------------------------------------------------------------------
-
--- cardano-wallet@f293d92 cabal.project:134-144
---------------------------------------------------------------------------------
--- BEGIN cardano-balance-tx
-
-source-repository-package
-  type: git
-  location: https://github.com/cardano-foundation/cardano-balance-transaction
-  tag: 897577325745729552495a9add56c713630c497e
-  --sha256: 1qdhdz3k2nc87xz2gqriy4yvmch8r2jb1g096skwvarkk1y96ykm
-
--- END cardano-balance-tx
 --------------------------------------------------------------------------------
 
 -- cardano-wallet@f293d92 cabal.project:146-231

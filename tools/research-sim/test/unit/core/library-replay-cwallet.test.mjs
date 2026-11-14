@@ -10,15 +10,18 @@
 // class change-minimum; a library failure is the library's under both; any
 // other change policy is refused; a payment carries the validity interval of
 // the wallet's transaction construction; a replayed spend's required signers
-// and metadata pass through; Plutus scripts are run by the library, which
-// sets their units and chooses its own collateral; each part the library
-// cannot express is not replayable; the intent's bootstrap witnesses are
-// written after the build. The tests that run the helper skip, naming the
-// build command, when it is not built.
+// and metadata pass through; the library writes each redeemer with the
+// intent's execution units and runs no script, so a failing program and the
+// synthetic streams' stand-in script build as a succeeding program does, and
+// it chooses its own collateral; each part the library cannot express is not
+// replayable; the intent's bootstrap witnesses are written after the build.
+// The tests that run the helper skip, naming the build command, when it is
+// not built.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cwalletMethod, classOfCwalletError } from '../../../src/methods/cwallet.mjs';
+import { CBT_CHANGES } from '../../../src/methods/cwallet-source.mjs';
 import { helperBuild, buildRequest, BUILD_SCRIPT } from '../../../src/methods/helper.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
 import { REPLAY_COVERAGE, inputOrder } from '../../../src/methods/library.mjs';
@@ -57,9 +60,10 @@ test('cwallet-rrri is seeded and not deterministic, chooses its own collateral, 
   assert.equal(m.name, 'cwallet-rrri');
   assert.deepEqual([m.deterministic, m.seeded, choosesOwnCollateral(m)], [false, true, true]);
   const { record } = helperBuild('cwallet');
-  assert.match(m.version, /^cardano-balance-tx 0\.1\.0 \(8975773\) over cardano-coin-selection 0\.1\.0\.0 \(1766110\), as cardano-wallet f293d92 pins them, balanceTx; helper cwallet sha256 [0-9a-f]{16}$/);
+  assert.match(m.version, /^cardano-balance-tx 0\.1\.0 \(8975773; Redeemers\.hs fae9037, the intent's execution units, no script run\) over cardano-coin-selection 0\.1\.0\.0 \(1766110\), as cardano-wallet f293d92 pins them, balanceTx; helper cwallet sha256 [0-9a-f]{16}$/);
   assert.ok(m.version.endsWith(record.sha256.slice(0, 16)));
   assert.equal(record.modules['cardano-balance-tx'].commit, '897577325745729552495a9add56c713630c497e');
+  assert.deepEqual(record.modules['cardano-balance-tx'].changes, Object.fromEntries(Object.entries(CBT_CHANGES).map(([path, c]) => [path, { original: c.original, edited: c.edited }])));
   assert.equal(record.modules['cardano-coin-selection'].commit, '176611048d5b9f33df19d106cd925d63a7858bb2');
 });
 
@@ -186,15 +190,17 @@ test('the intent\'s required signers and metadata pass through the library', { s
 
 // An always-succeeding Plutus V3 program, (program 1.1.0 (lam ctx (con unit
 // ()))), its flat encoding 01 01 00 24 99 wrapped as a CBOR byte string, as
-// the ledger holds a script's bytes.
-const V3 = Buffer.from('450101002499', 'hex');
-const V3_HASH = blake2b224(Buffer.concat([Buffer.from([3]), V3])).toString('hex');
+// the ledger holds a script's bytes; and an always-failing one, (program
+// 1.1.0 (error)), 01 01 00 61.
+const V3_SUCCEEDS = Buffer.from('450101002499', 'hex');
+const V3_FAILS = Buffer.from('4401010061', 'hex');
 const EX_UNITS = [107086n, 32858313n];
 const zeroRedeemers = (pointers) => encArray(pointers.map(([tag, index]) => encArray([encUint(tag), encUint(index), Buffer.from('00', 'hex'), encArray([encUint(EX_UNITS[0]), encUint(EX_UNITS[1])])]))).toString('hex');
 
 // A mint of one unit under the V3 program's policy and a withdrawal of zero
 // from its stake credential, each with its redeemer the integer 0.
-function runnableScriptIntents(state) {
+function scriptIntents(state, V3) {
+  const V3_HASH = blake2b224(Buffer.concat([Buffer.from([3]), V3])).toString('hex');
   const net = addressBytes(state.changeAddress)[0] & 15;
   const account = Buffer.concat([Buffer.from([0xf0 | net]), Buffer.from(V3_HASH, 'hex')]).toString('hex');
   const scriptFee = executionFee(P, EX_UNITS[0], EX_UNITS[1]);
@@ -216,10 +222,10 @@ function runnableScriptIntents(state) {
   ];
 }
 
-test('Plutus mints and withdrawals: the library runs their scripts, writes the units of the runs, and chooses its own ADA-only collateral', { skip }, async () => {
+test('Plutus mints and withdrawals: the library writes the intent\'s units and runs no script, so a failing program and the stand-in script build as a succeeding one does, and it chooses its own ADA-only collateral', { skip }, async () => {
   const m = makeMethod(T, 'cwallet-rrri');
   const s = constructState(T, [{ coin: 20n * ADA }, { coin: 8n * ADA }, { coin: 5n * ADA, assets: [{ policy: policy('c'), name: assetName('y'), qty: 1n }] }]);
-  for (const it of runnableScriptIntents(s)) {
+  for (const it of [...scriptIntents(s, V3_SUCCEEDS), ...scriptIntents(s, V3_FAILS), ...zeroRedeemerIntents(T, s)]) {
     for (const opts of [own, layout]) {
       const r = await m.build(s, it, P, opts);
       assert.equal(r.ok, true, r.detail);
@@ -232,7 +238,7 @@ test('Plutus mints and withdrawals: the library runs their scripts, writes the u
       // validity from the client's transaction: none, as the balance
       // endpoint takes it
       assert.equal(field(r.txs[0].bytes, 3), null);
-      if (opts === own) assert.notDeepEqual(tx.redeemers[0].exUnits.map(BigInt), EX_UNITS, 'the units of the library\'s own run');
+      assert.deepEqual(tx.redeemers[0].exUnits.map(BigInt), EX_UNITS, 'the intent\'s units');
       const applied = checkAndApply(s, P, r.txs, { fixed: it.fixed, implicit: it.implicit });
       assert.equal(applied.ok, true, applied.failure && applied.failure.detail);
     }
@@ -247,9 +253,7 @@ test('each part the library cannot express is not replayable', { skip }, async (
     [redeemerOf(2, { kind: 'certificate', index: 0 }), /^redeemers: a redeemer with tag 2 \(a certificate\)/],
     [redeemerOf(4, { kind: 'voter', voter: '8202581c' + '00'.repeat(28) }), /^redeemers: a redeemer with tag 4 \(a vote\)/],
     [redeemerOf(5, { kind: 'proposal', index: 0 }), /^redeemers: a redeemer with tag 5 \(a proposal\)/],
-    [payment([pay(0, 3n * ADA)], 100, { body: { 15: '00' } }), /^body field 15: /],
-    // The stand-in Plutus script of the synthetic streams is not a program.
-    [zeroRedeemerIntents(T, s)[0], /^plutus scripts: the script of the mint under [0-9a-f]{56} is not a program the ledger's evaluator can decode/]
+    [payment([pay(0, 3n * ADA)], 100, { body: { 15: '00' } }), /^body field 15: /]
   ];
   for (const [it, re] of cases) {
     for (const opts of [own, layout]) {
@@ -275,7 +279,7 @@ test('the intent\'s bootstrap witnesses are written after the build, and named u
 
 const replayCwallet = (source, changePolicy) => replay(T, source.params, source, { arm: 'observed', variant: 'default', repetition: 1, method: makeMethod(T, 'cwallet-rrri'), opts: { seed: 1, changePolicy, collateralRule: 'ledger' }, settleEvery: 25, keepTx: true, validity: true });
 
-test('replayed synthetic streams under both changes: no validity failure, fixed inputs kept, the stand-in script not replayable', { skip, timeout: 5 * 60 * 1000 }, async () => {
+test('replayed synthetic streams under both changes: no validity failure, fixed inputs kept, the stand-in script built with its intent\'s units', { skip, timeout: 5 * 60 * 1000 }, async () => {
   for (const name of ['S1', 'M1', 'CL1']) {
     const source = loadSource(T, { kind: 'shape', name, stream: 'synthetic' });
     const intents = source.events.filter((e) => e.kind === 'intent').map((e) => e.intent);
@@ -285,12 +289,14 @@ test('replayed synthetic streams under both changes: no validity failure, fixed 
       assert.equal(r.summary.validity.failed, 0, JSON.stringify(r.summary.validity.failures));
       for (const sp of r.spends) {
         assert.notEqual(sp.class, CLASSES.other, `${name} ${cp}: ${sp.detail}`);
-        if (sp.class === NOT_REPLAYABLE) assert.match(sp.detail, /^plutus scripts: /, `${name} ${cp}`);
+        assert.notEqual(sp.class, NOT_REPLAYABLE, `${name} ${cp}: ${sp.detail}`);
         if (sp.outcome !== 'built') continue;
         built++;
         const intent = intents[sp.intent];
         const tx = inspectTx(sp.built.txs[0].bytes);
         for (const x of intent.fixed ? intent.fixed.inputs : []) assert.ok(tx.inputs.some((y) => y.ref === x.ref), `${name} ${sp.type}: fixed input missing`);
+        const units = (rs) => rs.map((r) => r.exUnits.map(String).join(' ')).sort();
+        assert.deepEqual(units(tx.redeemers), units(intent.fixed ? intent.fixed.redeemers : []), `${name} ${sp.type}: the intent's units`);
       }
     }
     assert.ok(built > 0, name);

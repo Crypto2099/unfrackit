@@ -6,12 +6,12 @@ cabal-version: 3.0
 -- schema 1). Its dependencies are what the helper calls: cardano-balance-tx's
 -- balanceTx over cardano-coin-selection, the ledger packages that decode the
 -- request's CBOR, build the protocol parameters and encode the transaction,
--- cardano-slotting for the time translation, plutus-ledger-api for a
--- script's evaluation error, bech32 for the change address, and MonadRandom
--- and random, the source of the selection's random draws, which the helper
--- seeds from the request. Every one of them is in cardano-balance-tx's own
--- dependency closure except aeson, base16-bytestring and bech32, which the
--- ledger packages and cardano-addresses already depend on.
+-- cardano-slotting for the time translation, bech32 for the change address,
+-- and MonadRandom and random, the source of the selection's random draws,
+-- which the helper seeds from the request. Every one of them is in
+-- cardano-balance-tx's own dependency closure except aeson,
+-- base16-bytestring and bech32, which the ledger packages and
+-- cardano-addresses already depend on.
 name:          cwallet-helper
 version:       0.1.0.0
 license:       Apache-2.0
@@ -41,7 +41,6 @@ executable cwallet-helper
     , containers
     , microlens
     , MonadRandom
-    , plutus-ledger-api
     , random
     , text
     , time

@@ -121,8 +121,7 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   cwallet cwallet-rrri: every part, in the partial transaction cardano-
 //         balance-tx balances, collateral as the library chooses it, since it
 //         refuses a transaction that carries any; a certificate's, a vote's
-//         or a proposal's redeemer and a Plutus script that is not a program
-//         are not replayable (methods/cwallet.mjs)
+//         or a proposal's redeemer is not replayable (methods/cwallet.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),

@@ -99,23 +99,35 @@
 //           transaction at 897577325745729552495a9add56c713630c497e) over
 //           cardano-coin-selection (cardano-foundation/cardano-coin-selection
 //           at 176611048d5b9f33df19d106cd925d63a7858bb2), pinned as
-//           cardano-wallet pins them (helpers/cwallet/cabal.project). The
-//           toolchain is the development shell scripts/haskell-prep.sh wrote
-//           to <home>/cwallet/env.sh (<home> is RESEARCH_SIM_HASKELL_HOME, or
+//           cardano-wallet pins them (helpers/cwallet/cabal.project).
+//           cardano-balance-tx is built from its source with one change to
+//           its evaluation step (src/methods/cwallet-source.mjs). The source
+//           comes from a fresh shallow clone of the commit alone in
+//           build/helpers/cwallet/clone, which a rebuild keeps, or with
+//           --clone <dir> from a local clone that holds the commit; each
+//           pinned path's git object hash is checked, the paths are
+//           extracted with git archive (never from a working tree) into
+//           build/helpers/cwallet/source, the change is made there and each
+//           edited file's hash checked. The toolchain is the development
+//           shell scripts/haskell-prep.sh wrote to <home>/cwallet/env.sh
+//           (<home> is RESEARCH_SIM_HASKELL_HOME, or
 //           ~/.local/share/unfrackit-research-sim/haskell), GHC 9.12.3, with
-//           every dependency already in that shell or in the cabal store
-//           under <home>/cwallet/cabal; without env.sh the script stops and
-//           names the prep script, which runs Nix and is not run from here.
-//           A bash child sources env.sh from <home>/cwallet/work, resets what
-//           the prep script resets after sourcing it (IFS, the shell options,
-//           CABAL_CONFIG, CABAL_DIR, the locale, SSL_CERT_FILE), checks the
-//           GHC version, and runs cabal's dry run first: when it would build
-//           anything but the helper, the script stops and lists it. The build
-//           (cabal build --builddir build/helpers/cwallet/dist-newstyle
-//           exe:cwallet-helper) runs under a five-minute limit; cabal's build
-//           directory stays, which a rebuild keeps. The resolved plan's
-//           commits of the two libraries are checked against the pins and
-//           recorded with their versions.
+//           every other dependency already in that shell or in the cabal
+//           store under <home>/cwallet/cabal; without env.sh the script stops
+//           and names the prep script, which runs Nix and is not run from
+//           here. A bash child sources env.sh from <home>/cwallet/work, resets
+//           what the prep script resets after sourcing it (IFS, the shell
+//           options, CABAL_CONFIG, CABAL_DIR, the locale, SSL_CERT_FILE),
+//           checks the GHC version, and runs cabal's dry run first: when it
+//           would build anything but cardano-balance-tx and the helper, the
+//           script stops and lists it. The build (cabal build --builddir
+//           build/helpers/cwallet/dist-newstyle exe:cwallet-helper) runs
+//           under a five-minute limit; cabal's build directory stays, which a
+//           rebuild keeps. --dry-run extracts the source, prints cabal's dry
+//           run and leaves the build and its record as they were. The
+//           resolved plan's cardano-balance-tx is checked to be the extracted
+//           source and its cardano-coin-selection the pinned commit, and both
+//           are recorded with their versions. No step runs Nix.
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync, readdirSync, existsSync } from 'node:fs';
@@ -126,7 +138,8 @@ import { TOOL, HELPER_SOURCE_DIR, HELPER_BUILD_DIR, BUILD_RECORD, HELPER_SCHEMA,
 import { PYCARDANO_VERSION, PYCARDANO_COMMIT, PYCARDANO_PYTHON, SITE_PACKAGES, environmentHash, launcherText } from '../src/methods/pycardano.mjs';
 import { KUBER_REPO, KUBER_COMMIT, KUBER_VERSION, KUBER_PATHS, KUBER_EXPOSED_MODULE, KUBER_CABAL_EDITED, SOURCE_DIR as KUBER_SOURCE_DIR, exposeTxFramework } from '../src/methods/kuber-source.mjs';
 import { freshClone, requireCommit, checkObject, extractPaths } from './wallet-source.mjs';
-import { CWALLET_PINS, CWALLET_GHC } from '../src/methods/cwallet.mjs';
+import { CWALLET_GHC, CCS_COMMIT } from '../src/methods/cwallet.mjs';
+import { CBT_REPO, CBT_COMMIT, CBT_VERSION, CBT_PATHS, CBT_CHANGES, SOURCE_DIR as CBT_SOURCE_DIR, applyEdits } from '../src/methods/cwallet-source.mjs';
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -291,11 +304,12 @@ HELPERS.tx3 = {
 
 // The cwallet helper's build, in the prep's development shell (see the
 // header). Arguments: the prep's directory for the helper, the helper's
-// source, cabal's build directory, the GHC version the shell must provide.
-// Prints the GHC and cabal versions and the executable's path.
+// source, cabal's build directory, the GHC version the shell must provide,
+// and 'dry' or 'build'. A dry run prints cabal's plan; a build prints the
+// GHC and cabal versions and the executable's path.
 const CWALLET_BUILD = String.raw`
 set -euo pipefail
-home=$1 src=$2 builddir=$3 want=$4
+home=$1 src=$2 builddir=$3 want=$4 mode=$5
 cd "$home/work"
 set +eu
 . "$home/env.sh" >&2
@@ -311,34 +325,79 @@ cabal=$(cabal --numeric-version)
 if [ "$ghc" != "$want" ]; then echo "the shell provides GHC $ghc, not $want" >&2; exit 1; fi
 cd "$src"
 plan=$(timeout 300 cabal build --dry-run --builddir "$builddir" exe:cwallet-helper)
-others=$(printf '%s\n' "$plan" | sed -n 's/^ - //p' | grep -v '^cwallet-helper-' || true)
-if [ -n "$others" ]; then printf 'cabal would build more than the helper:\n%s\n' "$others" >&2; exit 1; fi
+if [ "$mode" = dry ]; then printf '%s\n' "$plan"; exit 0; fi
+others=$(printf '%s\n' "$plan" | sed -n 's/^ - //p' | grep -v '^cwallet-helper-' | grep -v '^cardano-balance-tx-' || true)
+if [ -n "$others" ]; then printf 'cabal would build more than cardano-balance-tx and the helper:\n%s\n' "$others" >&2; exit 1; fi
 timeout 300 cabal build --builddir "$builddir" exe:cwallet-helper >&2
 printf '%s\n%s\n%s\n' "$ghc" "$cabal" "$(cabal list-bin --builddir "$builddir" exe:cwallet-helper)"
 `;
 
+// The cardano-balance-tx source in CBT_SOURCE_DIR from a clone of the pinned
+// commit, with its one change; its facts.
+function cwalletSource(out, cloneArg) {
+  const clone = cloneArg || join(out, 'clone');
+  if (!cloneArg && !existsSync(clone)) freshClone('build-helpers', clone, CBT_REPO, CBT_COMMIT);
+  requireCommit(clone, CBT_COMMIT);
+  const objects = {};
+  for (const [path, [type, hash]] of Object.entries(CBT_PATHS)) objects[path] = checkObject(clone, CBT_COMMIT, path, type, hash);
+  for (const [path, { original }] of Object.entries(CBT_CHANGES)) checkObject(clone, CBT_COMMIT, path, 'blob', original);
+  const source = join(TOOL, CBT_SOURCE_DIR);
+  rmSync(source, { recursive: true, force: true });
+  mkdirSync(source, { recursive: true });
+  extractPaths(clone, CBT_COMMIT, Object.keys(CBT_PATHS), source);
+  const changes = {};
+  for (const [path, { original, edited }] of Object.entries(CBT_CHANGES)) {
+    const file = join(source, path);
+    if (blobHash(readFileSync(file)) !== original) throw new Error(`the extracted ${path} is not the pinned blob ${original}`);
+    writeFileSync(file, applyEdits(path, readFileSync(file, 'utf8')));
+    const got = blobHash(readFileSync(file));
+    if (got !== edited) throw new Error(`the edited ${path} hashes to ${got}, not ${edited}`);
+    changes[path] = { original, edited };
+  }
+  return { source, facts: { repository: CBT_REPO, commit: CBT_COMMIT, paths: objects, changes } };
+}
+
+function cwalletCabal(src, out, mode) {
+  const home = join(process.env.RESEARCH_SIM_HASKELL_HOME || join(homedir(), '.local', 'share', 'unfrackit-research-sim', 'haskell'), 'cwallet');
+  try {
+    readFileSync(join(home, 'env.sh'));
+  } catch {
+    throw new Error(`${join(home, 'env.sh')} is missing: the cwallet helper builds in the development shell scripts/haskell-prep.sh writes (it runs Nix; run it in a terminal of your own), or set RESEARCH_SIM_HASKELL_HOME to the prep's directory`);
+  }
+  const builddir = join(out, 'dist-newstyle');
+  return { home, builddir, text: run('bash', ['-c', CWALLET_BUILD, 'cwallet-build', home, src, builddir, CWALLET_GHC, mode], { env: { ...process.env } }) };
+}
+
 HELPERS.cwallet = {
   executable: 'cwallet-helper',
-  keep: ['dist-newstyle'],
-  build(src, out) {
-    const home = join(process.env.RESEARCH_SIM_HASKELL_HOME || join(homedir(), '.local', 'share', 'unfrackit-research-sim', 'haskell'), 'cwallet');
-    try {
-      readFileSync(join(home, 'env.sh'));
-    } catch {
-      throw new Error(`${join(home, 'env.sh')} is missing: the cwallet helper builds in the development shell scripts/haskell-prep.sh writes (it runs Nix; run it in a terminal of your own), or set RESEARCH_SIM_HASKELL_HOME to the prep's directory`);
-    }
-    const builddir = join(out, 'dist-newstyle');
-    const lines = run('bash', ['-c', CWALLET_BUILD, 'cwallet-build', home, src, builddir, CWALLET_GHC], { env: { ...process.env } }).trim().split('\n');
-    const [ghc, cabal, bin] = lines.slice(-3);
+  keep: ['dist-newstyle', 'clone'],
+  dryRun(src, out, { clone }) {
+    cwalletSource(out, clone);
+    process.stdout.write(cwalletCabal(src, out, 'dry').text);
+  },
+  build(src, out, { clone }) {
+    const cbt = cwalletSource(out, clone);
+    const { home, builddir, text } = cwalletCabal(src, out, 'build');
+    const [ghc, cabal, bin] = text.trim().split('\n').slice(-3);
     copyFileSync(bin, join(out, this.executable));
     const plan = JSON.parse(readFileSync(join(builddir, 'cache', 'plan.json'), 'utf8'));
-    const modules = {};
-    for (const [name, pin] of Object.entries(CWALLET_PINS)) {
+    const only = (name) => {
       const found = plan['install-plan'].filter((p) => p['pkg-name'] === name);
-      const tags = [...new Set(found.map((p) => p['pkg-src'] && p['pkg-src']['source-repo'] ? p['pkg-src']['source-repo'].tag : null))];
-      if (!found.length || tags.length !== 1 || tags[0] !== pin.commit) throw new Error(`the plan resolves ${name} to ${tags.join(', ') || 'nothing'}, not commit ${pin.commit}`);
-      modules[name] = { version: found[0]['pkg-version'], commit: pin.commit, location: found[0]['pkg-src']['source-repo'].location };
-    }
+      const versions = [...new Set(found.map((p) => p['pkg-version']))];
+      if (!found.length || versions.length !== 1) throw new Error(`the plan resolves ${name} ${found.length ? `to versions ${versions.join(', ')}` : 'to nothing'}`);
+      return found;
+    };
+    const cbtPlan = only('cardano-balance-tx');
+    const cbtSrc = cbtPlan[0]['pkg-src'] || {};
+    if (cbtPlan.some((p) => !p['pkg-src'] || p['pkg-src'].type !== 'local' || resolve(p['pkg-src'].path) !== resolve(cbt.source))) throw new Error(`the plan builds cardano-balance-tx from ${JSON.stringify(cbtSrc)}, not the extracted source ${cbt.source}`);
+    if (cbtPlan[0]['pkg-version'] !== CBT_VERSION) throw new Error(`the plan resolves cardano-balance-tx ${cbtPlan[0]['pkg-version']}, not ${CBT_VERSION}`);
+    const ccsPlan = only('cardano-coin-selection');
+    const tags = [...new Set(ccsPlan.map((p) => p['pkg-src'] && p['pkg-src']['source-repo'] ? p['pkg-src']['source-repo'].tag : null))];
+    if (tags.length !== 1 || tags[0] !== CCS_COMMIT) throw new Error(`the plan resolves cardano-coin-selection to ${tags.join(', ') || 'nothing'}, not commit ${CCS_COMMIT}`);
+    const modules = {
+      'cardano-balance-tx': { version: cbtPlan[0]['pkg-version'], ...cbt.facts },
+      'cardano-coin-selection': { version: ccsPlan[0]['pkg-version'], commit: CCS_COMMIT, location: ccsPlan[0]['pkg-src']['source-repo'].location }
+    };
     return { toolchain: `GHC ${ghc}, cabal ${cabal} (${home}/env.sh)`, modules };
   }
 };
@@ -439,8 +498,8 @@ function main() {
   const ci = all.indexOf('--clone');
   const clone = ci >= 0 && all[ci + 1] ? resolve(all[ci + 1]) : null;
   const args = all.filter((a, i) => a !== '--lock' && a !== '--dry-run' && i !== ci && !(ci >= 0 && i === ci + 1));
-  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm') || ((dryRun || ci >= 0) && args[0] !== 'kuber') || (ci >= 0 && !clone)) {
-    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock; kuber also takes --clone <dir> and --dry-run)`);
+  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm') || ((dryRun || ci >= 0) && !HELPERS[args[0]].dryRun) || (ci >= 0 && !clone)) {
+    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock; kuber and cwallet also take --clone <dir> and --dry-run)`);
     process.exit(1);
   }
   const name = args[0];

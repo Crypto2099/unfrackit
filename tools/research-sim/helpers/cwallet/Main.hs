@@ -34,8 +34,15 @@
 --     Shelley generator ('changeAddressGen');
 --   * the partial transaction: the requested outputs, the validity interval
 --     the wallet's construction writes, and the replay's fixed parts
---     ('partialTxBytes'); its redeemers; the stake deposits of the
---     credentials it deregisters; no timelock witness counts.
+--     ('partialTxBytes'); its redeemers, each with the intent's execution
+--     units ('redeemerOf'); the stake deposits of the credentials it
+--     deregisters; no timelock witness counts.
+--
+-- cardano-balance-tx is built from its source at that commit with one change,
+-- to its evaluation step (src/methods/cwallet-source.mjs): its 'Redeemer'
+-- carries execution units, and 'balanceTx' writes each redeemer with them
+-- instead of running the transaction's scripts, so no script's result can
+-- fail a build.
 --
 -- The selection's draws come through 'MonadRandom'; the helper runs
 -- 'balanceTx' in 'Rand StdGen' with the generator 'mkStdGen' makes from the
@@ -47,7 +54,6 @@ module Main (main) where
 
 import Cardano.Balance.Tx.Balance
     ( ChangeAddressGen (..)
-    , ErrAssignRedeemers (..)
     , ErrBalanceTx (..)
     , ErrBalanceTxAssetsInsufficientError (..)
     , ErrBalanceTxInsufficientCollateralError (..)
@@ -86,7 +92,6 @@ import Cardano.Balance.Tx.Tx
     )
 import Cardano.Crypto.Hash
     ( hashFromBytes
-    , hashToBytes
     )
 import Cardano.Ledger.Api
     ( AccountAddress
@@ -102,7 +107,6 @@ import Cardano.Ledger.Api
     , bootAddrTxWitsL
     , decodeAddr
     , deserialiseAccountAddress
-    , serialiseAccountAddress
     , eraProtVerLow
     , emptyPParams
     , hashTxAuxData
@@ -119,9 +123,6 @@ import Cardano.Ledger.Api
     , ppProtocolVersionL
     , referenceScriptTxOutL
     , witsTxL
-    )
-import Cardano.Ledger.Api.Tx
-    ( TransactionScriptFailure (..)
     )
 import Cardano.Ledger.BaseTypes
     ( ProtVer (..)
@@ -154,14 +155,9 @@ import Cardano.Ledger.Core
     )
 import Cardano.Ledger.Hashes
     ( ScriptHash (..)
-    , extractHash
     )
 import Cardano.Ledger.TxIn
-    ( TxId (..)
-    , TxIn (..)
-    )
-import Cardano.Ledger.BaseTypes
-    ( TxIx (..)
+    ( TxIn (..)
     )
 import Cardano.Ledger.Keys
     ( KeyRole (..)
@@ -262,9 +258,6 @@ import Data.Time.Clock.POSIX
 import Data.Word
     ( Word64
     , Word8
-    )
-import PlutusLedgerApi.Common
-    ( EvaluationError (..)
     )
 import Lens.Micro
     ( (&)
@@ -412,13 +405,10 @@ build st q = do
 -- | The library's call, in 'Rand StdGen' seeded from the request.
 balance :: St -> BuildArgs -> IO (Either Failure Text)
 balance st b = case run of
-    Left e -> case renderError e of
-        NotReplayable part msg -> do
-            _ <- evaluate (forceString msg)
-            pure (Left (NotReplayable part msg))
-        Failed stage msg -> do
-            _ <- evaluate (forceString msg)
-            pure (Left (Failed stage msg))
+    Left e -> do
+        let msg = renderError e
+        _ <- evaluate (forceString msg)
+        pure (Left (Failed "balanceTx" msg))
     Right (tx, ()) -> do
         let bytes = serializeTx tx
         _ <- evaluate (BS.length bytes)
@@ -608,8 +598,10 @@ decodeRefs what known0 = go known0 []
             go (Map.insert ref p k) ((ref, p) : acc) rest
 
 -- | A redeemer of the replay as the library's 'Redeemer': a spend's, a
--- mint's or a withdrawal's. The type has no constructor for a certificate's,
--- a vote's or a proposal's (cardano-balance-transaction
+-- mint's or a withdrawal's, with its data and the intent's execution units,
+-- which the library's evaluation step writes on the transaction
+-- (src/methods/cwallet-source.mjs). The type has no constructor for a
+-- certificate's, a vote's or a proposal's (cardano-balance-transaction
 -- lib/Cardano/Balance/Tx/Redeemers.hs:290-293), and 'balanceTx' replaces
 -- every redeemer of the partial transaction with its own list (:174-177).
 redeemerOf :: Map Text TxIn -> Object -> Either Failure Redeemer
@@ -620,23 +612,27 @@ redeemerOf inputs o = do
     target <- get (.: "target") "target"
     dataHex <- get (.: "data") "data"
     bytes <- unhex "replay parts" dataHex
+    unitsList <- get (.: "exUnits") "exUnits"
+    units <- case unitsList :: [Value] of
+        [m, s] | Just mem <- natOf m, Just steps <- natOf s -> Right (ExUnits mem steps)
+        _ -> Left (Failed "replay parts" "redeemer exUnits: expected [mem, steps]")
     let tget :: (Object -> Parser a) -> String -> Either Failure a
         tget p what = either (Left . Failed "replay parts" . (("redeemer target " <> what <> ": ") <>)) Right (parseEither p target)
     case (tag :: Int) of
         0 -> do
             ref <- tget (.: "ref") "ref"
             i <- maybe (Left (Failed "replay parts" ("a spend redeemer of " <> T.unpack ref <> ", which is not a fixed input"))) Right (Map.lookup ref inputs)
-            pure (RedeemerSpending bytes i)
+            pure (RedeemerSpending bytes i units)
         1 -> do
             p <- tget (.: "policy") "policy"
             h <- unhex "replay parts" p
             sh <- maybe (Left (Failed "replay parts" ("policy " <> T.unpack p))) Right (hashFromBytes h)
-            pure (RedeemerMinting bytes (PolicyID (ScriptHash sh)))
+            pure (RedeemerMinting bytes (PolicyID (ScriptHash sh)) units)
         3 -> do
             a <- tget (.: "account") "account"
             h <- unhex "replay parts" a
             acct <- maybe (Left (Failed "replay parts" ("reward account " <> T.unpack a))) Right (deserialiseAccountAddress h :: Maybe AccountAddress)
-            pure (RedeemerRewarding bytes acct)
+            pure (RedeemerRewarding bytes acct units)
         t ->
             Left $
                 NotReplayable
@@ -653,6 +649,10 @@ redeemerOf inputs o = do
         4 -> "a vote"
         5 -> "a proposal"
         _ -> "unknown"
+    natOf = \case
+        String t | Just n <- readWord64 t -> Just (fromIntegral n)
+        Number n | n >= 0, fromIntegral (truncate n :: Integer) == n -> Just (truncate n)
+        _ -> Nothing
 
 -- | The partial transaction's bytes: the body (fixed inputs, requested
 -- outputs, fee 0, the fixed fields and the validity interval, reference
@@ -858,33 +858,10 @@ changeAddress t = case decodeLenient t of
 --------------------------------------------------------------------------------
 
 -- | The library's error, named by its constructor, which the method's table
--- classifies (src/methods/cwallet.mjs). A Plutus script that the ledger's
--- evaluator cannot decode as a program is not replayable: no evaluator can
--- run it, and an observed transaction cannot hold one (the synthetic shapes'
--- stand-in script is such bytes).
-renderError :: ErrBalanceTx Conway -> Failure
-renderError = \case
-    ErrBalanceTxAssignRedeemers (ErrAssignRedeemersScriptFailure r (ValidationFailure _ (CodecError e) _ _)) ->
-        NotReplayable "plutus scripts" ("the script of " <> purposeOf r <> " is not a program the ledger's evaluator can decode: " <> flat (show e))
-    ErrBalanceTxAssignRedeemers (ErrAssignRedeemersScriptFailure r f) ->
-        Failed "balanceTx" ("ErrBalanceTxAssignRedeemers: the script of " <> purposeOf r <> " fails in the built transaction: " <> scriptFailure f)
-    e -> Failed "balanceTx" (renderOther e)
-
--- | What a redeemer redeems, for an error's text.
-purposeOf :: Redeemer -> String
-purposeOf = \case
-    RedeemerSpending _ i -> "the spend of " <> showTxIn i
-    RedeemerMinting _ (PolicyID (ScriptHash h)) -> "the mint under " <> T.unpack (hexText (hashToBytes h))
-    RedeemerRewarding _ a -> "the withdrawal from " <> T.unpack (hexText (serialiseAccountAddress a))
-  where
-    showTxIn (TxIn (TxId h) (TxIx ix)) = T.unpack (hexText (hashToBytes (extractHash h))) <> "#" <> show ix
-
--- | A script failure as one line: the evaluation error and the script's
--- logs.
-scriptFailure :: TransactionScriptFailure Conway -> String
-scriptFailure = \case
-    ValidationFailure _ e logs _ -> take 1500 (flat (show e)) <> (if null logs then "" else "; logs: " <> take 500 (T.unpack (T.intercalate " | " logs)))
-    f -> take 1500 (flat (show f))
+-- classifies (src/methods/cwallet.mjs). The evaluation step runs no script
+-- (src/methods/cwallet-source.mjs), so no script's result is among them.
+renderError :: ErrBalanceTx Conway -> String
+renderError = renderOther
 
 flat :: String -> String
 flat = unwords . words

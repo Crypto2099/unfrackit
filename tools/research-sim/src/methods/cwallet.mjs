@@ -16,6 +16,29 @@
 // Server.hs, Wallet.hs its lib/wallet/src/Cardano/Wallet.hs, Balance.hs
 // cbt's lib/Cardano/Balance/Tx/Balance.hs.
 //
+// One change to cbt (methods/cwallet-source.mjs). balanceTx sets each
+// redeemer's execution units in assignScriptRedeemers (cbt lib/Cardano/
+// Balance/Tx/Redeemers.hs:137-283) by running every script of the built
+// transaction with the ledger's evaluator (evaluateExecutionUnits, :197-211,
+// Ledger.evalTxExUnits at :205), and fails the build when a script fails or
+// cannot be decoded (hoistScriptFailure, :213-222). The study does not test
+// whether a script validates: every library's transaction is presumed to
+// validate, and every script is charged the intent's observed execution units
+// (a synthetic stream's stand-in script, the units its intent states). The
+// build therefore makes the smallest change that does this in cbt, which has
+// no option for it: its Redeemer type (:290-294) carries the redeemer's
+// execution units, which the helper fills from the request, and
+// evaluateExecutionUnits answers every redeemer with them and runs no script;
+// what only the evaluator used is removed. Nothing outside the evaluation
+// step changes: the redeemers' pointers and data, the script integrity hash,
+// the fee (which prices the units the transaction carries), the selection,
+// the change and the collateral are computed as before. cbt's source is
+// extracted from the pinned commit, each path checked against its git object
+// hash, and each edited file checked against its pin (CBT_CHANGES: the
+// evaluation step's file, and the package description, whose text dependency
+// goes with that file's only use of it); the method's version names the
+// evaluation step's hash.
+//
 // The call (helpers/cwallet/Main.hs). The wallet's transaction construction
 // endpoint (Server.hs:2904-3200) turns the payments into outputs, builds the
 // unbalanced transaction with W.constructTransaction (:3141-3147) and calls
@@ -110,14 +133,9 @@
 //   scripts, datums     the witness set's native and Plutus scripts and
 //                       datums as their own bytes
 //   redeemers           PartialTx's redeemers: a spend's, a mint's and a
-//                       withdrawal's with their own data. balanceTx sets
-//                       their execution units by running each script with
-//                       the ledger's evaluator (assignScriptRedeemers, cbt
-//                       lib/Cardano/Balance/Tx/Redeemers.hs:137-283,
-//                       evalTxExUnits at :205), so the transaction carries
-//                       the units of its own scripts' runs, not the
-//                       intent's, and a script that fails in the built
-//                       transaction fails the build. The construction
+//                       withdrawal's with their own data and the intent's
+//                       execution units, which the changed evaluation step
+//                       writes on the transaction (above). The construction
 //                       endpoint's request has no redeemers (Types.hs:
 //                       1301-1313), so a spend with Plutus redeemers comes
 //                       through the balance endpoint, which adds no validity
@@ -140,10 +158,9 @@
 // outside those above; a redeemer of a certificate, a vote or a proposal,
 // which the library's Redeemer type cannot hold (Redeemers.hs:290-293) and
 // balanceTx would drop with the rest of the transaction's redeemers
-// (:174-177); a Plutus script the ledger's evaluator cannot decode as a
-// program (no evaluator can run it, and no observed transaction holds one:
-// the synthetic streams' stand-in script). The library treats a pool
-// registration as a re-registration, with no deposit
+// (:174-177). A Plutus script reaches no evaluator, so the synthetic
+// streams' stand-in script builds with its intent's units. The library
+// treats a pool registration as a re-registration, with no deposit
 // (evaluateTransactionBalance, cbt lib/Cardano/Balance/Tx/Tx.hs:638-661,
 // assumePoolIsReg); a transaction it so underbalances is its own failure for
 // the kit to record.
@@ -169,13 +186,11 @@
 import { CLASSES } from '../kit/check.mjs';
 import { REPLAY_COVERAGE } from './library.mjs';
 import { helperMethod, helperBuild } from './helper.mjs';
+import { CBT_COMMIT, CBT_VERSION, CBT_REDEEMERS, CBT_CHANGES } from './cwallet-source.mjs';
 
 export const CWALLET_COMMIT = 'f293d922f1930714aca7ede3cbb5ebf3fb710af6';
 export const CWALLET_GHC = '9.12.3';
-export const CWALLET_PINS = Object.freeze({
-  'cardano-balance-tx': Object.freeze({ commit: '897577325745729552495a9add56c713630c497e' }),
-  'cardano-coin-selection': Object.freeze({ commit: '176611048d5b9f33df19d106cd925d63a7858bb2' })
-});
+export const CCS_COMMIT = '176611048d5b9f33df19d106cd925d63a7858bb2';
 
 const ERROR_CLASSES = [
   [/^ErrBalanceTxAssetsInsufficient\b/, CLASSES.balance],
@@ -196,14 +211,16 @@ export function cwalletMethod(T) {
   const { problem, record } = helperBuild('cwallet');
   if (problem) throw new Error(`${name}: ${problem}`);
   const mods = record.modules || {};
-  for (const [pkg, pin] of Object.entries(CWALLET_PINS)) {
-    if (!mods[pkg] || mods[pkg].commit !== pin.commit) throw new Error(`${name}: the cwallet helper was built with ${mods[pkg] ? `${pkg} at ${mods[pkg].commit}` : `no ${pkg}`}, not ${pin.commit}; ${hint}`);
-  }
   const cbt = mods['cardano-balance-tx'];
   const ccs = mods['cardano-coin-selection'];
+  const changed = cbt && cbt.changes && Object.keys(cbt.changes).length === Object.keys(CBT_CHANGES).length && Object.entries(CBT_CHANGES).every(([path, c]) => cbt.changes[path] && cbt.changes[path].edited === c.edited);
+  if (!cbt || cbt.version !== CBT_VERSION || cbt.commit !== CBT_COMMIT || !changed) {
+    throw new Error(`${name}: the cwallet helper was built with ${cbt ? `cardano-balance-tx ${cbt.version} at ${cbt.commit}` : 'no cardano-balance-tx'}, not ${CBT_VERSION} at ${CBT_COMMIT} with its one pinned change; ${hint}`);
+  }
+  if (!ccs || ccs.commit !== CCS_COMMIT) throw new Error(`${name}: the cwallet helper was built with ${ccs ? `cardano-coin-selection at ${ccs.commit}` : 'no cardano-coin-selection'}, not ${CCS_COMMIT}; ${hint}`);
   return helperMethod(T, {
     name,
-    version: `cardano-balance-tx ${cbt.version} (${cbt.commit.slice(0, 7)}) over cardano-coin-selection ${ccs.version} (${ccs.commit.slice(0, 7)}), as cardano-wallet ${CWALLET_COMMIT.slice(0, 7)} pins them, balanceTx; helper cwallet sha256 ${record.sha256.slice(0, 16)}`,
+    version: `cardano-balance-tx ${cbt.version} (${cbt.commit.slice(0, 7)}; Redeemers.hs ${cbt.changes[CBT_REDEEMERS].edited.slice(0, 7)}, the intent's execution units, no script run) over cardano-coin-selection ${ccs.version} (${ccs.commit.slice(0, 7)}), as cardano-wallet ${CWALLET_COMMIT.slice(0, 7)} pins them, balanceTx; helper cwallet sha256 ${record.sha256.slice(0, 16)}`,
     deterministic: false,
     seeded: true,
     library: 'cwallet',
