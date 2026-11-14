@@ -4,9 +4,9 @@ cabal-version: 3.0
 --
 -- The Kuber helper of the simulator's bridge (src/methods/helper.mjs, schema
 -- 1). Its dependencies are what the adapter calls: kuber's transaction
--- builder, and the cardano-api and ledger packages that decode the request's
--- CBOR and encode the transaction. Every one of them is in kuber's own
--- dependency closure. Kuber draws nothing at random.
+-- builder, runner and parsers, and the cardano-api, ledger, consensus and
+-- CBOR packages that decode the request and encode the transaction. Every one
+-- of them is in kuber's own dependency closure. Kuber draws nothing at random.
 name:          kuber-helper
 version:       0.1.0.0
 license:       Apache-2.0
@@ -17,18 +17,25 @@ executable kuber-helper
   main-is:          Main.hs
   hs-source-dirs:   .
   default-language: Haskell2010
-  ghc-options:      -threaded -rtsopts
+  ghc-options:      -Wall -threaded -rtsopts
   build-depends:
     , aeson
     , base
     , base16-bytestring
     , bytestring
     , cardano-api
+    , cardano-crypto-class
+    , cardano-ledger-alonzo
     , cardano-ledger-api
-    , cardano-ledger-binary
     , cardano-ledger-conway
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-slotting
+    , cborg
     , containers
     , kuber
+    , microlens
+    , ouroboros-consensus:{ouroboros-consensus, cardano}
+    , sop-extras
     , text
+    , time

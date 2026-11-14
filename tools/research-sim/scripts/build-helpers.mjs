@@ -72,14 +72,39 @@
 //           and the build directory remapped, so the executable depends on
 //           the helper's source and the toolchain alone. Cargo's build
 //           output stays in build/helpers/tx3/target, which a rebuild keeps.
+//   kuber   Haskell: Kuber 4.2.0 (dQuadrant/kuber, the release tag's commit
+//           2c559089e394ea7bc8a9bbde968bcdfb2ef7fac5) from its source, with
+//           the one change to its package description that exposes its
+//           transaction runner (src/methods/kuber-source.mjs). The source
+//           comes from a fresh shallow clone of the commit alone in
+//           build/helpers/kuber/clone, which a rebuild keeps, or with
+//           --clone <dir> from a local clone that holds the commit; each
+//           pinned path's git object hash is checked, the paths are
+//           extracted with git archive (never from a working tree) into
+//           build/helpers/kuber/source, the change is made there and the
+//           edited package description's hash checked. cabal then builds
+//           exe:kuber-helper in the environment scripts/haskell-prep.sh kuber
+//           wrote (<home>/kuber/env.sh, <home> RESEARCH_SIM_HASKELL_HOME or
+//           ~/.local/share/unfrackit-research-sim/haskell): a bash child
+//           sources it from <home>/kuber/work, resets what the prep resets
+//           after sourcing (IFS, strict mode, CABAL_CONFIG unset, CABAL_DIR
+//           <home>/kuber/cabal, a UTF-8 locale, SSL_CERT_FILE when unset),
+//           checks that ghc is 9.6.7, and runs cabal build with its build
+//           directory in build/helpers/kuber/dist, which a rebuild keeps.
+//           Every dependency is already in that cabal store or the shell's
+//           GHC, so only Kuber and the helper compile. --dry-run runs the
+//           same cabal command with --dry-run, prints its plan, and leaves
+//           the build and its record as they were. No step runs Nix.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, renameSync, copyFileSync, readdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { TOOL, HELPER_SOURCE_DIR, HELPER_BUILD_DIR, BUILD_RECORD, HELPER_SCHEMA, helperSourceFiles, helperSourceHash } from '../src/methods/helper.mjs';
 import { PYCARDANO_VERSION, PYCARDANO_COMMIT, PYCARDANO_PYTHON, SITE_PACKAGES, environmentHash, launcherText } from '../src/methods/pycardano.mjs';
+import { KUBER_REPO, KUBER_COMMIT, KUBER_VERSION, KUBER_PATHS, KUBER_EXPOSED_MODULE, KUBER_CABAL_EDITED, SOURCE_DIR as KUBER_SOURCE_DIR, exposeTxFramework } from '../src/methods/kuber-source.mjs';
+import { freshClone, requireCommit, checkObject, extractPaths } from './wallet-source.mjs';
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -249,25 +274,115 @@ const TX3_CRATES = {
   'tx3-tir': { version: '0.19.0', commit: 'd46c33eb4419fe15b6dbee11b92f139bbe9576da' }
 };
 
+// The git blob hash of a file's bytes.
+const blobHash = (buf) => createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
+
+const KUBER_GHC = '9.6.7';
+
+// The bash child that runs cabal in the prep's environment for the kuber
+// helper: $1 the prep's home for kuber, $2 the helper's source, $3 cabal's
+// build directory, $4 'dry' or 'build'. Its names start with KB_, since env.sh
+// assigns the shell derivation's own variables. The empty temporary directory
+// env.sh makes is removed on exit.
+const KUBER_CABAL = `
+set -euo pipefail
+KB_HOME=$1 KB_SRC=$2 KB_DIST=$3 KB_MODE=$4
+cd "$KB_HOME/work"
+set +eu
+. "$KB_HOME/env.sh"
+set -euo pipefail
+IFS=$' \\t\\n'
+trap 'rmdir "\${NIX_BUILD_TOP:-/nonexistent}" 2>/dev/null || true' EXIT
+unset CABAL_CONFIG
+export CABAL_DIR="$KB_HOME/cabal"
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+if [ -z "\${SSL_CERT_FILE:-}" ] && [ -f /etc/ssl/certs/ca-certificates.crt ]; then export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt; fi
+KB_GHC=$(ghc --numeric-version)
+[ "$KB_GHC" = ${KUBER_GHC} ] || { echo "the shell provides GHC $KB_GHC, not ${KUBER_GHC}" >&2; exit 3; }
+echo "toolchain: ghc $KB_GHC, cabal $(cabal --numeric-version)"
+cd "$KB_SRC"
+if [ "$KB_MODE" = dry ]; then
+  cabal build --builddir "$KB_DIST" --dry-run exe:kuber-helper
+else
+  cabal build --builddir "$KB_DIST" exe:kuber-helper
+  echo "executable: $(cabal list-bin --builddir "$KB_DIST" exe:kuber-helper)"
+fi
+`;
+
+// The kuber source in KUBER_SOURCE_DIR from a clone of the pinned commit, with
+// its one change; its facts.
+function kuberSource(out, cloneArg) {
+  const clone = cloneArg || join(out, 'clone');
+  if (!cloneArg && !existsSync(clone)) freshClone('build-helpers', clone, KUBER_REPO, KUBER_COMMIT);
+  requireCommit(clone, KUBER_COMMIT);
+  const objects = {};
+  for (const [path, [type, hash]] of Object.entries(KUBER_PATHS)) objects[path] = checkObject(clone, KUBER_COMMIT, path, type, hash);
+  const source = join(TOOL, KUBER_SOURCE_DIR);
+  rmSync(source, { recursive: true, force: true });
+  mkdirSync(source, { recursive: true });
+  extractPaths(clone, KUBER_COMMIT, Object.keys(KUBER_PATHS), source);
+  const cabalFile = join(source, 'kuber.cabal');
+  writeFileSync(cabalFile, exposeTxFramework(readFileSync(cabalFile, 'utf8')));
+  const edited = blobHash(readFileSync(cabalFile));
+  if (edited !== KUBER_CABAL_EDITED) throw new Error(`the edited kuber.cabal hashes to ${edited}, not ${KUBER_CABAL_EDITED}`);
+  return { version: KUBER_VERSION, repository: KUBER_REPO, commit: KUBER_COMMIT, paths: objects, packageDescription: { exposed: KUBER_EXPOSED_MODULE, original: KUBER_PATHS['kuber.cabal'][1], edited } };
+}
+
+function kuberCabal(src, out, mode) {
+  const home = join(process.env.RESEARCH_SIM_HASKELL_HOME || join(homedir(), '.local', 'share', 'unfrackit-research-sim', 'haskell'), 'kuber');
+  const envSh = join(home, 'env.sh');
+  if (!existsSync(envSh) || !existsSync(join(home, 'cabal'))) throw new Error(`${envSh} or ${join(home, 'cabal')} is missing: the kuber helper builds in the environment scripts/haskell-prep.sh kuber prepares`);
+  const env = { HOME: homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' };
+  const text = run('bash', ['-c', KUBER_CABAL, 'kuber-cabal', home, src, join(out, 'dist'), mode], { env });
+  return { text, envSh: sha256(readFileSync(envSh)), toolchainFile: existsSync(join(home, 'toolchain.txt')) ? readFileSync(join(home, 'toolchain.txt'), 'utf8') : '' };
+}
+
+HELPERS.kuber = {
+  executable: 'kuber-helper',
+  keep: ['dist', 'clone'],
+  dryRun(src, out, { clone }) {
+    kuberSource(out, clone);
+    process.stdout.write(kuberCabal(src, out, 'dry').text);
+  },
+  build(src, out, { clone }) {
+    const kuber = kuberSource(out, clone);
+    const { text, envSh, toolchainFile } = kuberCabal(src, out, 'build');
+    const tool = /^toolchain: (.*)$/m.exec(text);
+    const exe = /^executable: (.*)$/m.exec(text);
+    if (!tool || !exe) throw new Error(`cabal's output names no toolchain or executable:\n${text.slice(-2000)}`);
+    copyFileSync(exe[1].trim(), join(out, this.executable));
+    const shell = /^shell (.*)$/m.exec(toolchainFile);
+    return { toolchain: `${tool[1]}; shell ${shell ? shell[1] : '(unknown)'}, env.sh sha256 ${envSh}`, modules: { kuber } };
+  }
+};
+
 function main() {
   const all = process.argv.slice(2);
   const lock = all.includes('--lock');
-  const args = all.filter((a) => a !== '--lock');
-  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm')) {
-    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock)`);
+  const dryRun = all.includes('--dry-run');
+  const ci = all.indexOf('--clone');
+  const clone = ci >= 0 && all[ci + 1] ? resolve(all[ci + 1]) : null;
+  const args = all.filter((a, i) => a !== '--lock' && a !== '--dry-run' && i !== ci && !(ci >= 0 && i === ci + 1));
+  if (args.length !== 1 || !HELPERS[args[0]] || (lock && args[0] !== 'jvm') || ((dryRun || ci >= 0) && args[0] !== 'kuber') || (ci >= 0 && !clone)) {
+    console.error(`usage: node scripts/build-helpers.mjs <${Object.keys(HELPERS).join(' | ')}> (jvm also takes --lock; kuber also takes --clone <dir> and --dry-run)`);
     process.exit(1);
   }
   const name = args[0];
   const h = HELPERS[name];
   const src = join(TOOL, HELPER_SOURCE_DIR, name);
   const out = join(TOOL, HELPER_BUILD_DIR, name);
+  if (dryRun) {
+    mkdirSync(out, { recursive: true });
+    h.dryRun(src, out, { clone });
+    return;
+  }
   const sourceHash = helperSourceHash(name);
   const files = Object.fromEntries(helperSourceFiles(name).map((f) => [f, sha256(readFileSync(join(src, f)))]));
   // The previous build is removed, but for what the helper keeps between
   // builds (cargo's build directory).
   mkdirSync(out, { recursive: true });
   for (const e of readdirSync(out)) if (!(h.keep || []).includes(e)) rmSync(join(out, e), { recursive: true, force: true });
-  const facts = h.build(src, out, { lock });
+  const facts = h.build(src, out, { lock, clone });
   if (helperSourceHash(name) !== sourceHash) throw new Error(`the source under ${HELPER_SOURCE_DIR}/${name} changed during the build (a lockfile the toolchain rewrote?)`);
   const exe = join(out, h.executable);
   chmodSync(exe, 0o755);

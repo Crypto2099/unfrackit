@@ -113,6 +113,11 @@ export const REPLAY_PARTS = Object.freeze(['fixed', 'collateral', 'implicit', 'o
 //   ctl   ctl-rrri: every part, in the unbalanced transaction the balancer
 //         is given, through CTL's types; a certificate those types cannot
 //         hold (kinds 7 and 8) is not replayable (methods/ctl.mjs)
+//   kuber kuber-prune: every part, through Kuber's builder functions and its
+//         JSON form of a builder, the collateral set aside; withdrawals, the
+//         treasury fields, a certificate's, withdrawal's or vote's redeemer
+//         and the parts its operations do not write as observed are not
+//         replayable (methods/kuber.mjs)
 export const REPLAY_COVERAGE = Object.freeze({
   csl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   evo: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
@@ -133,7 +138,8 @@ export const REPLAY_COVERAGE = Object.freeze({
   ccl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   pycardano: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
   tx3: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
-  ctl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
+  ctl: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData']),
+  kuber: Object.freeze(['fixed', 'collateral', 'implicit', 'outputData'])
 });
 
 const hasImplicit = (imp) => !!(imp.withdrawals || imp.refunds || imp.deposits || imp.donation || imp.mint.length || imp.burn.length);
