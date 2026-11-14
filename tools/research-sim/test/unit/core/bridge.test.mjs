@@ -4,7 +4,7 @@
 // The bridge (methods/helper.mjs), tested without another language: a helper
 // in plain Node (test/lib/bridge-csl-helper.mjs) wraps the csl-lf adapter, and
 // the bridged method's replay records equal csl-lf's run directly, byte for
-// byte, under both changes, on the MI-3 shapes and on the preprod history
+// byte, under both changes, on nine synthetic shapes and on the preprod history
 // RESEARCH_SIM_BRIDGE_HISTORY names (that part skips without it). A helper
 // that exits or writes something that is not its response stops the job with
 // a run error and its stderr tail, never a spend outcome. A helper's build
@@ -30,7 +30,7 @@ import { treatment, skip } from '../../lib/treatment.mjs';
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 const HELPER = fileURLToPath(new URL('../../lib/bridge-csl-helper.mjs', import.meta.url));
-const MI3 = ['S1', 'S6', 'S8', 'S9', 'M1', 'M7', 'CL1', 'E2', 'M2'];
+const SHAPES = ['S1', 'S6', 'S8', 'S9', 'M1', 'M7', 'CL1', 'E2', 'M2'];
 const HISTORY = process.env.RESEARCH_SIM_BRIDGE_HISTORY || null;
 const T = skip ? null : await treatment();
 
@@ -69,9 +69,9 @@ async function sameRecords(spec, label) {
   return built;
 }
 
-test('through the bridge, csl-lf\'s records equal csl-lf\'s run directly on the MI-3 shapes, under both changes', { skip, timeout: 5 * 60 * 1000 }, async () => {
+test('through the bridge, csl-lf\'s records equal csl-lf\'s run directly on nine synthetic shapes, under both changes', { skip, timeout: 5 * 60 * 1000 }, async () => {
   let built = 0;
-  for (const name of MI3) built += await sameRecords({ kind: 'shape', name, stream: 'synthetic' }, name);
+  for (const name of SHAPES) built += await sameRecords({ kind: 'shape', name, stream: 'synthetic' }, name);
   assert.ok(built > 100);
 });
 
