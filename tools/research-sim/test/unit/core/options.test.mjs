@@ -25,7 +25,8 @@ function sample(key, command) {
   if (key === 'fromStudy') return 'random';
   if (key === 'bytes') return 'tx_cbor';
   if (key === 'window') return 'blocks:10-20';
-  if (['workers', 'reps', 'days', 'batch'].includes(key)) return '3';
+  if (['workers', 'reps', 'days', 'batch', 'resamples', 'sizingSamples', 'sizingResamples'].includes(key)) return '3';
+  if (key === 'split') return 'exploration';
   if (key === 'collateralRule') return 'ledger';
   if (key === 'shard') return '1/3';
   if (key === 'memoryBudget') return '2.5';
