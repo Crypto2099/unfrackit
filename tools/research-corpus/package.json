@@ -1,0 +1,26 @@
+{
+  "name": "unfrackit-research-corpus",
+  "version": "0.1.0",
+  "description": "Draws the UnFrack.It research corpus from a cardano-db-sync database and reconstructs each sampled wallet's UTxO set at any block.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Adam K. Dean",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "bin": {
+    "research-corpus": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/unit/*.test.mjs",
+    "test:preprod": "node --test --test-concurrency=1 test/integration/*.test.mjs",
+    "hash": "node src/cli.mjs hash"
+  },
+  "dependencies": {
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
+}
