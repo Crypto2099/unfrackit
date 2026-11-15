@@ -5,8 +5,7 @@
 --
 -- Frames are exact: every stake credential with a key hash, screened in SQL as
 -- of the snapshot block. Adam K. Dean's own wallets are eligible like any
--- other (decided 2026-10-21), so anyone can reproduce the draw exactly; the
--- private own-drawn command counts how many of his were drawn.
+-- other (decided 2026-10-21), so anyone can reproduce the draw exactly.
 --   recent  at least one transaction (spend or receipt) in the recent window,
 --           at least one UTxO at the snapshot, and the exclusions at the
 --           snapshot

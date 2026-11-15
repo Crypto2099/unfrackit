@@ -7,8 +7,7 @@
 // from the database and from Koios; guard 1,000 so the guard path runs; the
 // real sample size (1,000) and quotas, which preprod does not fill within the
 // guard. The flow table adds up stage by stage; the funder and S1 stay in the
-// frames like any wallet, and own-drawn counts them in the frames' samples
-// without writing anything; S1 is never token-holding; S3 and M2 are
+// frames like any wallet; S1 is never token-holding; S3 and M2 are
 // token-holding, M2 with at least 100 assets; S3 has one spend event (the
 // sweep), M2 and S1 none, so none of the three is a candidate of the draw.
 // The sample, its size groups, the drawn and taken counts per group and the
@@ -23,11 +22,9 @@ import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFileSync, readdirSync, rmSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { readFileSync, rmSync } from 'node:fs';
 import { db, blocks, record, S1_SEEDING_TX, TAG, RUN_A, RUN_B, SHAPES, FUNDER, seederAddress, stakeOf, saIdOf } from './env.mjs';
-import { encode } from '../../src/bech32.mjs';
-import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
+import { runPipeline } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
 import { Runner } from '../../src/runner.mjs';
 import { FIXED } from '../../src/params.mjs';
@@ -62,12 +59,6 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     const tip0 = (await q(c, blocks, 'tip_block'))[0];
     const views = Object.fromEntries(SHAPES.map((s) => [s, stakeOf(seederAddress(s)[0])]));
     views.funder = stakeOf(FUNDER);
-    // The funder's key (active in both windows) and S1's key (active in the
-    // recent window only). own-drawn is given them and a random
-    // key hash, checked to be absent from the database. (The CIP-19 test
-    // vector's stake key is not a safe choice: it is in use on preprod.)
-    const absent = encode('stake_test', Buffer.concat([Buffer.from([0xe0]), createHash('sha256').update(`absent ${TAG}`).digest().subarray(0, 28)]));
-    assert.equal(await saIdOf(c, absent), null, 'the absent key is not on preprod');
     const common = {
       expectNetwork: 'preprod',
       snapshot: 'tip',
@@ -123,15 +114,6 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
         assert.ok(!text.includes(views.funder) && !text.includes(views.S1), `${f} names no listed wallet`);
       }
     }
-    // own-drawn: the listed wallets' places in the frames' samples, counted
-    // from the sample table, and nothing written to the run directory.
-    const filesBefore = readdirSync(b.dir).sort();
-    const own = await ownDrawn(c, RUN_B, [views.funder, views.S1, absent]);
-    const ids = [await saIdOf(c, views.funder), await saIdOf(c, views.S1)];
-    const direct = (await c.query('SELECT frame, kind, count(*) AS n FROM study.sample WHERE sa_id = ANY($1) GROUP BY 1, 2', [ids])).rows;
-    assert.equal(own.by_sample.reduce((x, r) => x + r.drawn, 0), direct.reduce((x, r) => x + Number(r.n), 0));
-    assert.equal(own.listed, 3);
-    assert.deepEqual(readdirSync(b.dir).sort(), filesBefore);
     // The raw list carries no published identifier.
     assert.equal(readFileSync(join(b.dir, 'raw', 'sample.csv'), 'utf8').split('\n')[0], 'frame,kind,sa_id,stake_address,draw_rank,size_group,n_utxo_start,n_utxo_ref,n_window_tx,capped,history_hi,split,reconstruction_agree,franken_any,fragmented,franken_no_cospend,unfrackit_user,evolution_tidied,prior_treated');
 
@@ -281,7 +263,6 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       split: b.report.split,
       split_overall: b.report.split_overall,
       sample_bounds: b.report.sample_bounds,
-      own_drawn: own,
       pointer_wallets: b.report.pointer_wallets,
       probes: b.report.probes,
       era_coverage: b.report.era_coverage,

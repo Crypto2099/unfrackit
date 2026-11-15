@@ -8,13 +8,13 @@
 // block: the recent window ends there, the reconstruction check runs the
 // reference query and the life table and skips the direct read (defined at the
 // tip only), the shapes seeded before the snapshot land where T10 puts them,
-// and the reconstruction check counts are right. own-drawn reads the finished
-// run. This replaces the study tables T10 left; T14 runs after it.
+// and the reconstruction check counts are right. This replaces the study
+// tables T10 left; T14 runs after it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { db, blocks, record, S1_SEEDING_TX, TAG, SHAPES, FUNDER, seederAddress, stakeOf, saIdOf } from './env.mjs';
-import { runPipeline, ownDrawn } from '../../src/pipeline.mjs';
+import { runPipeline } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
 
 const RUN_C = `${TAG}-c`;
@@ -56,10 +56,7 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
     const m2 = await row(await saIdOf(c, views.M2));
     assert.equal(s3.tok, true);
     assert.equal(m2.ge100, true);
-    // own-drawn on the finished run.
-    const own = await ownDrawn(c, RUN_C, [views.funder, views.S1]);
-    assert.equal(own.listed, 2);
-    record('T15', { run_dir: r.dir, snapshot: snap, tip_block_no: Number(tip.block_no), windows: r.report.windows, reconstruction_check: r.report.reconstruction_check, draw: r.report.draw, own_drawn: own });
+    record('T15', { run_dir: r.dir, snapshot: snap, tip_block_no: Number(tip.block_no), windows: r.report.windows, reconstruction_check: r.report.reconstruction_check, draw: r.report.draw });
   } finally {
     await c.end();
   }

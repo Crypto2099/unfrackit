@@ -236,6 +236,13 @@ test('the strata and scam-screen options and commands are gone, refused with the
   }
 });
 
+test('the own-drawn command is gone, refused with the reason', () => {
+  assert.ok(!Object.hasOwn(COMMAND_OPTIONS, 'own-drawn'));
+  assert.ok(!USAGE.includes('own-drawn'));
+  assert.throws(() => parseArgs([], 'own-drawn'), /refusing: own-drawn was removed; Adam's own wallets are neither identified nor counted/);
+  assert.throws(() => parseArgs(['--list', 'x', '--run', 'r1'], 'own-drawn'), /own-drawn was removed/);
+});
+
 test('an option the command does not define is refused by name, with the nearest known option', () => {
   assert.throws(() => parseArgs(['--run-id', 'r1', '--expect-netwrok', 'mainnet'], 'run'), /unknown option --expect-netwrok for run; did you mean --expect-network\?/);
   assert.throws(() => parseArgs(['--run-id', 'r1', '--redoo', 'frames'], 'run'), /unknown option --redoo for run; did you mean --redo\?/);
@@ -280,7 +287,6 @@ test('every option the help text documents is accepted by some command, and by t
     run: ['run-id', 'snapshot', 'freeze-tx', 'hypotheses-tx', 'from-block', 'prereg', 'study-key', 'code-manifest', 'drawkey', 'stand-in-tx', 'live-fire', 'test-h', 'purpose', 'keep-for-debug', 'sim-wallets', 'explain', 'hmac-key', 'set', 'redo', 'capture', 'expect-network', 'work-mem', 'maintenance-work-mem', 'parallel-workers', 'temp-tablespaces', 'host', 'port', 'database', 'user'],
     'verify-freeze': ['prereg', 'study-key', 'code-manifest', 'freeze-tx', 'hypotheses-tx', 'from-block', 'drawkey'],
     cleanup: ['run-id', 'start-seq', 'network'],
-    'own-drawn': ['list', 'run'],
     'check-log': ['network', 'finding', 'commit', 'entry'],
     'confirm-snapshot': ['run-id'],
     'source-check': ['from-run', 'count', 'node-count', 'stake', 'node-stake', 'node-container', 'node-socket', 'magic', 'live-fire', 'purpose', 'expect-network', 'hypotheses-tx', 'keep-for-debug', 'freeze-tx', 'prereg', 'code-manifest'],
@@ -461,42 +467,4 @@ test('the study run wires the freeze checks, the check log, drawkey.json and the
   assert.doesNotMatch(r.error.message, /before the freeze block|not after the freeze block/);
   assert.equal(r.snapshot.hash, r.snap.hash);
   assert.equal(r.snapshot.block_no, 2500);
-}));
-
-// own-drawn: counts per drawn sample, only for a finished study run of a final
-// freeze (or a test run), never a live-fire run, and nothing written anywhere.
-test('own-drawn counts listed wallets per drawn sample of a finished study run and writes nothing', withHome(async (home) => {
-  const { ownDrawn } = await import('../../src/pipeline.mjs');
-  const db = await PGlite.create();
-  await db.exec(`CREATE SCHEMA study;
-    CREATE TABLE study.param (run_id text, key text, value jsonb, PRIMARY KEY (run_id, key));
-    CREATE TABLE study.cred (sa_id bigint PRIMARY KEY, view text);
-    CREATE TABLE study.sample (frame text, kind text, sa_id bigint);
-    INSERT INTO study.cred VALUES (1, '${STAKE_A}'), (2, 'stake1other'), (3, 'stake1third');
-    INSERT INTO study.sample VALUES ('recent', 'random', 1), ('recent', 'random', 3), ('peak', 'random', 2), ('peak', 'random', 1);`);
-  const owned = (run) => db.exec(`COMMENT ON TABLE study.sample IS 'research-corpus run ${run}'`);
-  const param = (run, key, value) => db.query(`INSERT INTO study.param VALUES ($1, $2, $3::jsonb) ON CONFLICT (run_id, key) DO UPDATE SET value = EXCLUDED.value`, [run, key, JSON.stringify(value)]);
-  // A live-fire run kept for debugging owns the sample table: refused.
-  await owned('lf1');
-  await param('lf1', 'mode', 'live-fire');
-  await param('lf1', 'finished', { at: 'now' });
-  await assert.rejects(ownDrawn(db, 'lf1', [STAKE_A]), /a live-fire run/);
-  // The study run, in progress, then finished.
-  await owned('r1');
-  await param('r1', 'mode', 'study');
-  await param('r1', 'freeze', { role: 'final-freeze' });
-  await assert.rejects(ownDrawn(db, 'r1', [STAKE_A]), /has not finished/);
-  await param('r1', 'finished', { at: 'now' });
-  const r = await ownDrawn(db, 'r1', [STAKE_A]);
-  assert.equal(r.drawn_wallets, 1);
-  assert.deepEqual(r.by_sample, [
-    { frame: 'recent', kind: 'random', drawn: 1 },
-    { frame: 'peak', kind: 'random', drawn: 1 }
-  ]);
-  // A finished run whose sample table another run has since replaced.
-  await param('r2', 'mode', 'test');
-  await param('r2', 'finished', { at: 'now' });
-  await assert.rejects(ownDrawn(db, 'r2', [STAKE_A]), /does not belong to run r2/);
-  const { readdirSync } = await import('node:fs');
-  assert.deepEqual(readdirSync(home), []);
 }));

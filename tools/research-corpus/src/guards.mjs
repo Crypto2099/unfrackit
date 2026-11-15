@@ -13,7 +13,6 @@
 // given at run time (the `npm run hash` output frozen with the final freeze),
 // path by path, and refuses on any difference.
 
-import { readFileSync } from 'node:fs';
 import { applyOverrides, defaultSettings, STUDY_KEY } from './params.mjs';
 import { decode as bech32decode } from './bech32.mjs';
 import { refuse } from './checklog.mjs';
@@ -71,15 +70,6 @@ export function codeManifestErrors(manifestText, files) {
   }
   for (const p of have.keys()) if (!want.has(p)) errors.push(`not in the manifest: ${p}`);
   return errors;
-}
-
-// A file of bech32 stake addresses, one per line, '#' starting a comment.
-export function readStakeList(path, what) {
-  const views = readFileSync(path, 'utf8')
-    .split('\n')
-    .map((l) => l.replace(/#.*/, '').trim())
-    .filter(Boolean);
-  return checkStakeAddresses(views, what);
 }
 
 export function checkStakeAddresses(views, what) {

@@ -623,33 +623,4 @@ export async function cleanupRun({ db, runId, command, client: given = null }) {
   }
 }
 
-// Private (decided 2026-10-21): Adam K. Dean's own wallets are eligible like
-// any other, and after the draw he checks how many were drawn, states the
-// number, and a sensitivity analysis drops them. This counts the listed
-// stake addresses in each drawn sample of a run and returns the counts; it
-// writes nothing to the run directory, the manifest or the check log.
-export async function ownDrawn(client, runId, views) {
-  // Only a finished run that drew with the study's key: the study run of a
-  // final freeze, or on a test network a test run. Never a live-fire run
-  // (kept or not), never a run in progress.
-  const p = await loadParams(client, runId);
-  const study = p.mode === 'study' && p.freeze && p.freeze.role === 'final-freeze';
-  if (!(study || p.mode === 'test')) throw refuse(`refusing: run ${runId} is ${p.mode ? `a ${p.mode} run` : 'not recorded'}; own-drawn reads only the study run of a final freeze (or a test run on a test network)`);
-  if (!p.finished) throw refuse(`refusing: run ${runId} has not finished`);
-  const owner = (await client.query('SELECT obj_description(to_regclass($1), $2) AS c', ['study.sample', 'pg_class'])).rows[0].c;
-  if (owner !== mark(runId)) throw refuse(`refusing: study.sample does not belong to run ${runId}`);
-  const rows = (
-    await client.query(
-      `SELECT s.frame, s.kind, count(*) AS drawn
-         FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id
-        WHERE c.view = ANY ($1::text[])
-        GROUP BY s.frame, s.kind ORDER BY s.frame DESC, s.kind`,
-      [views]
-    )
-  ).rows;
-  // drawn_wallets counts the sample's wallets only; the pilot's are counted beside them.
-  const wallets = (await client.query(`SELECT count(DISTINCT s.sa_id) FILTER (WHERE s.kind = 'random') AS n, count(DISTINCT s.sa_id) FILTER (WHERE s.kind = 'pilot') AS np FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id WHERE c.view = ANY ($1::text[])`, [views])).rows[0];
-  return { run_id: runId, listed: views.length, drawn_wallets: Number(wallets.n), pilot_wallets: Number(wallets.np), by_sample: rows.map((r) => ({ frame: r.frame, kind: r.kind, drawn: Number(r.drawn) })) };
-}
-
 export const resolvePath = (p) => (p ? resolve(p) : p);

@@ -7,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { initSecret } from './hmac.mjs';
-import { runPipeline, cleanupRun, ownDrawn } from './pipeline.mjs';
+import { runPipeline, cleanupRun } from './pipeline.mjs';
 import { explainCommand } from './explain.mjs';
-import { readStakeList } from './guards.mjs';
 import { formatHashList, hashList, codeVersion } from './hash.mjs';
 import { loadAll } from './sqlfile.mjs';
 import { connect, dbMeta, q } from './db.mjs';
@@ -67,10 +66,6 @@ export const USAGE = `research-corpus: draw the research corpus from a cardano-d
   cleanup --start-seq <n> --network <n>
                                   close the start entry a killed command left, by its sequence number; that
                                   start only, never a run's tables, kept output or other starts
-  own-drawn --list <file> --run <id>
-                                  print, privately, how many listed stake addresses fell in each frame's
-                                  sample of a run; writes nothing to the run directory, the manifest or the
-                                  check log
   check-log verify --network <n>  check the log's sequence and digest chain; list kept outputs not cleaned up
   check-log fix --network <n> --finding <text> --commit <sha> [--entry <seq>]
                                   log a fix made after a live-fire finding
@@ -105,6 +100,10 @@ const REMOVED = new Map([
   ['scam-list', NO_STRATA],
   ['scam-clone', NO_STRATA]
 ]);
+// Commands an earlier version had, refused by name with the reason.
+const REMOVED_COMMANDS = new Map([
+  ['own-drawn', "Adam's own wallets are neither identified nor counted"]
+]);
 const FLAGS = new Set(['capture', 'live-fire', 'keep-for-debug', 'explain', 'sim-wallets']);
 // Options that may be given more than once; every other option once only.
 const REPEATABLE = new Set(['set', 'redo', 'stake', 'node-stake']);
@@ -124,7 +123,6 @@ export const COMMAND_OPTIONS = {
   ],
   'verify-freeze': [...CONNECTION, ...FREEZE],
   cleanup: [...CONNECTION, 'run-id', 'start-seq', 'network'],
-  'own-drawn': [...CONNECTION, 'list', 'run'],
   'check-log': ['network', 'finding', 'commit', 'entry'],
   'confirm-snapshot': [...CONNECTION, 'run-id'],
   'source-check': [
@@ -173,6 +171,7 @@ function closest(k, known) {
 // anything runs. Values are taken as given: a value that begins with -- is
 // never a value.
 export function parseArgs(argv, command) {
+  if (REMOVED_COMMANDS.has(command)) throw new Error(`refusing: ${command} was removed; ${REMOVED_COMMANDS.get(command)}`);
   if (command !== undefined && !Object.hasOwn(COMMAND_OPTIONS, command)) throw new Error(`unknown command ${command}`);
   const known = command === undefined ? ALL_OPTIONS : new Set(COMMAND_OPTIONS[command]);
   const maxWords = command === undefined ? 1 : POSITIONALS[command] || 0;
@@ -432,6 +431,7 @@ export function snapshotRuleHolds(rs, error, hash) {
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   // An unknown or missing command prints the usage; its arguments are not read.
+  if (REMOVED_COMMANDS.has(cmd)) parseArgs(rest, cmd);
   const a = Object.hasOwn(COMMAND_OPTIONS, cmd) ? parseArgs(rest, cmd) : { _: [] };
   const command = redactCommand(process.argv.slice(2));
   switch (cmd) {
@@ -458,20 +458,6 @@ async function main() {
       }
       if (!a.runId) throw new Error('--run-id is required');
       console.log(JSON.stringify(await cleanupRun({ db: dbOpts(a), runId: a.runId, command }), null, 2));
-      return;
-    }
-    case 'own-drawn': {
-      // Private: how many of the listed wallets (Adam K. Dean's own) were
-      // drawn, so he can state the number and a sensitivity analysis can
-      // drop them. Prints to the terminal only.
-      if (!a.list || !a.run) throw new Error('own-drawn --list <file> --run <id>');
-      const views = readStakeList(a.list, 'the list');
-      const c = await connect(dbOpts(a));
-      try {
-        console.log(JSON.stringify(await ownDrawn(c, a.run, views), null, 2));
-      } finally {
-        await c.end();
-      }
       return;
     }
     case 'check-log': {
