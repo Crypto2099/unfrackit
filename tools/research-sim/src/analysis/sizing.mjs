@@ -13,9 +13,12 @@
 //      effect the exploration wallets already show is not part of the effect
 //      detected and the simulated samples are centered at zero.
 //   1. The centered per-wallet outcomes of the cell are resampled
-//      with replacement within each size group to the number of wallets the
-//      confirmation split holds in that group for the same cell. Each drawn
-//      wallet keeps its own weight and value.
+//      with replacement within each size group to the group's target: the
+//      sample's A_k (the wallets the frame's sample took in group k) times
+//      the share e_k of the pilot's group-k wallets that enter the cell,
+//      rounded half up; a group no pilot wallet enters has target 0. No
+//      confirmation record is read. Each drawn wallet keeps its own weight
+//      and value.
 //   2. Every simulated wallet is shifted by delta in the claimed direction, which
 //      is negative for all four outcomes (fewer failures, a lower fee ratio):
 //      v - delta.
@@ -67,7 +70,6 @@ const BATCH = 50;
 const STATISTIC = { failures: 'mean', fees: 'median' };
 const armOf = (t, method, kind) => t.arms.get(`${method}/${kind}`) || null;
 
-// Wallets by size group: { B1: n, ... }, keys in group order.
 // The cell's exploration point estimate, by the cell's statistic (questions.mjs).
 export function pointEstimate(statistic, wallets) {
   const v = wallets.map((w) => w.v[0]);
@@ -75,6 +77,7 @@ export function pointEstimate(statistic, wallets) {
   return statistic === 'median' ? weightedMedian(v, w, wallets.map((x) => x.id)) : weightedMean(v, w);
 }
 
+// Wallets by size group: { B1: n, ... }, keys in group order.
 export function groupCounts(wallets) {
   const out = {};
   for (const g of [...new Set(wallets.map((w) => w.group))].sort()) out[g] = wallets.filter((w) => w.group === g).length;
@@ -178,24 +181,48 @@ function cellsOf(tables, libraries) {
   return specs;
 }
 
-// The sizing of every primary outcome and library. `exploration` and
-// `confirmation` are the wallet tables of the two splits (read.mjs). Returns the
-// content of sizing.json:
+// The target of a size group in a cell (decision of 2026-11-15): the sample's
+// A_k times the share of the pilot's group-k wallets entering the cell,
+// rounded half up: floor((2 A entering + total) / (2 total)), in integers. A
+// group with no pilot wallet, or none entering, has target 0.
+export function groupTarget(sampleTaken, entering, total) {
+  if (!(total > 0) || !(entering > 0) || !(sampleTaken > 0)) return 0;
+  return Math.floor((2 * sampleTaken * entering + total) / (2 * total));
+}
+
+// The targets of a cell: per group of the sample, { sample, entering, total,
+// share, target }, in group order.
+export function cellTargets(sample, enteringByGroup, totalByGroup) {
+  const out = {};
+  for (const g of Object.keys(sample).sort()) {
+    const entering = enteringByGroup[g] || 0;
+    const total = totalByGroup[g] || 0;
+    out[g] = { sample: sample[g], entering, total, share: total > 0 ? entering / total : 0, target: groupTarget(sample[g], entering, total) };
+  }
+  return out;
+}
+
+// The sizing of every primary outcome and library. `pilot` are the wallet
+// tables of the pilot (read.mjs, the exploration split of the recent window);
+// `sample` maps each size group to A_k, the wallets the frame's sample took in
+// it. Returns the content of sizing.json:
 //   { format, level, direction, samples, resamples, power, tolerance, libraries, cells: [{ question,
 //     outcome, library, name, sesoi, exploration: { wallets, groups },
-//     confirmation: { wallets, groups }, estimate, estimateBelowZero, delta, deltaOverSesoi, reached,
+//     targets: { <group>: { sample, entering, total, share, target } }, targetWallets,
+//     estimate, estimateBelowZero, delta, deltaOverSesoi, reached,
 //     power, steps, resolution, reason? }] }
-// A cell no exploration wallet or no confirmation wallet enters, or whose
-// confirmation group has no exploration wallet to draw from, has a null delta
+// A cell no pilot wallet enters, or whose targets are all 0, has a null delta
 // and a `reason`.
-export async function runSizing(exploration, confirmation, { workers = 1, samples = SAMPLES, resamples = RESAMPLES, libraries, power = POWER, tolerance = TOLERANCE } = {}) {
-  const libs = libraries || studyLibraries([...exploration, ...confirmation]);
-  const ex = cellsOf(exploration, libs);
-  const co = cellsOf(confirmation, libs);
+export async function runSizing(pilot, sample, { workers = 1, samples = SAMPLES, resamples = RESAMPLES, libraries, power = POWER, tolerance = TOLERANCE } = {}) {
+  const libs = libraries || studyLibraries(pilot);
+  const ex = cellsOf(pilot, libs);
+  const totals = groupCounts(pilot.map((t) => ({ group: t.group })));
   const cells = [];
-  for (let i = 0; i < ex.length; i++) {
-    const e = ex[i];
-    const counts = groupCounts(co[i].wallets);
+  for (const e of ex) {
+    const entering = groupCounts(e.wallets);
+    const targets = cellTargets(sample, entering, totals);
+    const counts = Object.fromEntries(Object.entries(targets).map(([g, t]) => [g, t.target]));
+    const targetWallets = Object.values(counts).reduce((a, b) => a + b, 0);
     const sesoi = SESOI[e.outcome];
     const row = {
       question: e.question,
@@ -203,19 +230,20 @@ export async function runSizing(exploration, confirmation, { workers = 1, sample
       library: e.library,
       name: `sizing/${e.name}`,
       sesoi,
-      exploration: { wallets: e.wallets.length, groups: groupCounts(e.wallets) },
-      confirmation: { wallets: co[i].wallets.length, groups: counts }
+      exploration: { wallets: e.wallets.length, groups: entering },
+      targets,
+      targetWallets
     };
     let reason = null;
     let uppers = null;
     let estimate = null;
-    if (e.wallets.length === 0) reason = 'no exploration wallet enters the cell';
-    else if (co[i].wallets.length === 0) reason = 'no confirmation wallet enters the cell';
+    if (e.wallets.length === 0) reason = 'no pilot wallet enters the cell';
+    else if (targetWallets === 0) reason = 'every group\'s target is 0';
     else {
       estimate = pointEstimate(e.statistic, e.wallets);
       const centered = e.wallets.map((w) => ({ ...w, v: [w.v[0] - estimate] }));
       uppers = await sampleUpperEnds({ name: `sizing/${e.name}`, statistic: e.statistic, source: centered, counts }, { workers, samples, resamples });
-      if (uppers === null) reason = 'a confirmation group has no exploration wallet to draw from';
+      if (uppers === null) reason = 'a group with a target has no pilot wallet to draw from';
     }
     if (reason !== null) cells.push({ ...row, estimate, estimateBelowZero: estimate !== null && estimate < 0, delta: null, deltaOverSesoi: null, reached: false, power: null, steps: 0, resolution: tolerance * sesoi, reason });
     else {
@@ -223,7 +251,7 @@ export async function runSizing(exploration, confirmation, { workers = 1, sample
       cells.push({ ...row, estimate, estimateBelowZero: estimate < 0, delta: d.delta, deltaOverSesoi: d.delta === null ? null : d.delta / sesoi, reached: d.reached, power: d.power, steps: d.steps, resolution: d.resolution });
     }
   }
-  return { format: 1, level: LEVEL, direction: 'negative', samples, resamples, power, tolerance, libraries: libs, cells };
+  return { format: 2, level: LEVEL, direction: 'negative', samples, resamples, power, tolerance, libraries: libs, cells };
 }
 
 export const renderSizing = (res) => JSON.stringify(res, null, 2) + '\n';

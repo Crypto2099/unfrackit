@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { readStudy } from '../../../src/analysis/read.mjs';
 import { bootstrap } from '../../../src/analysis/stats.mjs';
 import { runQuestions } from '../../../src/analysis/questions.mjs';
-import { pointEstimate, resampleWallets, groupCounts, powerAt, detectableDelta, sampleUpperEnds, runSizing, renderSizing } from '../../../src/analysis/sizing.mjs';
+import { pointEstimate, resampleWallets, groupCounts, groupTarget, cellTargets, powerAt, detectableDelta, sampleUpperEnds, runSizing, renderSizing } from '../../../src/analysis/sizing.mjs';
 import { writeStudy, optionsFor, fullJobs, built, failed, TX } from '../../lib/analysis-fixtures.mjs';
 
 const dirs = [];
@@ -128,17 +128,21 @@ async function splits(explo, confi) {
   return [a.wallets, b.wallets];
 }
 
-test('sizing.json on a fixture: confirmation group counts, known deltas, and the same bytes at 1 and 2 workers', async () => {
+test('sizing.json on a fixture: the targets of the sample\'s groups, known deltas, and the same bytes at 1 and 2 workers', async () => {
   const [ex, co] = await splits([[1, 'B1'], [2, 'B1'], [3, 'B1'], [4, 'B2']], [[11, 'B1'], [12, 'B1'], [13, 'B1'], [14, 'B1'], [15, 'B2'], [16, 'B2']]);
   const opts = { samples: 6, resamples: 40, libraries: ['csl-lf'] };
-  const one = await runSizing(ex, co, { ...opts, workers: 1 });
-  const two = await runSizing(ex, co, { ...opts, workers: 2 });
+  const sample = { B1: 4, B2: 2 };
+  const one = await runSizing(ex, sample, { ...opts, workers: 1 });
+  const two = await runSizing(ex, sample, { ...opts, workers: 2 });
   assert.equal(renderSizing(one), renderSizing(two));
   assert.equal(one.cells.length, 4);
   const cell = (q, o) => one.cells.find((c) => c.question === q && c.outcome === o);
   const f = cell('q1', 'failures');
   assert.equal(f.name, 'sizing/q1/failures/csl-lf/layout-vs-own');
-  assert.deepEqual(f.confirmation.groups, { B1: 4, B2: 2 });
+  // Pilot: 3 of 3 B1 wallets and 1 of 1 B2 wallet enter, so the targets are A_k: 4 and 2.
+  assert.deepEqual(Object.fromEntries(Object.entries(f.targets).map(([g, t]) => [g, t.target])), { B1: 4, B2: 2 });
+  assert.equal(f.targetWallets, 6);
+  assert.equal('confirmation' in f, false);
   assert.deepEqual(f.exploration.groups, { B1: 3, B2: 1 });
   // Every wallet is -16.7 failures per 100: the estimate is already below zero,
   // and centering leaves identical values at zero, so the detectable delta is
@@ -167,14 +171,30 @@ test('sizing.json on a fixture: confirmation group counts, known deltas, and the
   assert.deepEqual(JSON.parse(renderSizing(one)).libraries, ['csl-lf']);
 });
 
-test('a confirmation group with no exploration wallet, and a cell with no wallets, give a null delta and a reason', async () => {
-  const [ex, co] = await splits([[1, 'B1'], [2, 'B1']], [[11, 'B1'], [12, 'B2']]);
-  const res = await runSizing(ex, co, { samples: 4, resamples: 20, libraries: ['csl-lf'] });
-  const f = res.cells.find((c) => c.question === 'q1' && c.outcome === 'failures');
-  assert.equal(f.delta, null);
-  assert.equal(f.reason, 'a confirmation group has no exploration wallet to draw from');
-  const none = await runSizing(ex, [], { samples: 4, resamples: 20, libraries: ['csl-lf'] });
-  assert.equal(none.cells[0].reason, 'no confirmation wallet enters the cell');
-  const empty = await runSizing([], co, { samples: 4, resamples: 20, libraries: ['csl-lf'] });
-  assert.equal(empty.cells[0].reason, 'no exploration wallet enters the cell');
+test('the target of a group is the sample\'s A_k times the share of pilot wallets entering the cell, rounded half up', () => {
+  // A = 10, 2 of 5 enter: 10 x 2 / 5 = 4. A = 7: 14 / 5 = 2.8, so 3. A = 5, 1 of 2: 2.5, so 3 (half up). A = 5, 1 of 4: 1.25, so 1.
+  assert.equal(groupTarget(10, 2, 5), 4);
+  assert.equal(groupTarget(7, 2, 5), 3);
+  assert.equal(groupTarget(5, 1, 2), 3);
+  assert.equal(groupTarget(5, 1, 4), 1);
+  // No pilot wallet of the group, none entering, or no wallet in the sample: 0.
+  assert.equal(groupTarget(5, 0, 4), 0);
+  assert.equal(groupTarget(5, 1, 0), 0);
+  assert.equal(groupTarget(0, 1, 2), 0);
+  const t = cellTargets({ B1: 7, B2: 5, B3: 2 }, { B1: 2, B2: 1 }, { B1: 5, B2: 2, B3: 1 });
+  assert.deepEqual(t, { B1: { sample: 7, entering: 2, total: 5, share: 0.4, target: 3 }, B2: { sample: 5, entering: 1, total: 2, share: 0.5, target: 3 }, B3: { sample: 2, entering: 0, total: 1, share: 0, target: 0 } });
+});
+
+test('a cell no pilot wallet enters, and one whose targets are all 0, give a null delta and a reason; a group the pilot lacks has target 0', async () => {
+  const [ex] = await splits([[1, 'B1'], [2, 'B1']], [[11, 'B1']]);
+  const o = { samples: 4, resamples: 20, libraries: ['csl-lf'] };
+  const zero = await runSizing(ex, { B1: 0, B2: 5 }, o);
+  assert.equal(zero.cells[0].delta, null);
+  assert.equal(zero.cells[0].reason, 'every group\'s target is 0');
+  const lacking = await runSizing(ex, { B1: 3, B2: 5 }, o);
+  assert.equal(lacking.cells[0].targets.B2.target, 0);
+  assert.equal(lacking.cells[0].targetWallets, 3);
+  assert.ok(lacking.cells[0].reason === undefined);
+  const empty = await runSizing([], { B1: 3 }, o);
+  assert.equal(empty.cells[0].reason, 'no pilot wallet enters the cell');
 });
