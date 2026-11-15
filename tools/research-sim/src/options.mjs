@@ -118,7 +118,7 @@ export const COMMAND_OPTIONS = Object.freeze({
 
 // Closed value sets, by command where the command matters.
 const BYTES = ['tx_cbor', 'immutable'];
-const FROM_STUDY = ['random', 'all'];
+const FROM_STUDY = ['random', 'pilot', 'all'];
 const CLOSED = Object.freeze({
   fromStudy: { '*': FROM_STUDY },
   bytes: { '*': BYTES },

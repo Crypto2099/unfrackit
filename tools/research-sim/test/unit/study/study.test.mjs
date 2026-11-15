@@ -23,6 +23,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { samplesFromRows, fromStudyWallets } from '../../../src/history/commands.mjs';
 import { runStudy, PLANS, studyOptions } from '../../../src/study/study.mjs';
 import { runDir, historyDir } from '../../../src/history/paths.mjs';
 import { stubCommands, STUB_RECORDS } from '../../lib/study-stubs.mjs';
@@ -140,13 +141,13 @@ test('the collateral rule is the measurement\'s pick: practice above one half un
   await assert.rejects(run(preprod('rule-db', { collateralRule: 'ledger' })), /does not use --collateral-rule/);
 });
 
-test('the corpus plan reads every sampled wallet with the analysis-freeze transaction', async () => {
+test('the corpus plan\'s random pass reads the sampled wallets with the analysis-freeze transaction', async () => {
   const calls = [];
-  await run({ _: [], plan: 'corpus', runId: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'preprod', extractionRun: walletsFile, analysisFreezeTx: FREEZE }, { calls });
+  await run({ _: [], plan: 'corpus', runId: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'preprod', extractionRun: walletsFile, fromStudy: 'random', analysisFreezeTx: FREEZE }, { calls });
   const by = new Map(calls);
   assert.deepEqual(calls.map(([s]) => s), [...PLANS.corpus]);
   for (const s of ['history-recent', 'history-peak']) {
-    assert.equal(by.get(s).fromStudy, 'all');
+    assert.equal(by.get(s).fromStudy, 'random');
     assert.equal(by.get(s).analysisFreezeTx, FREEZE);
   }
   assert.equal(by.get('census').fromStudy, true);
@@ -318,10 +319,10 @@ test('each plan refuses what it does not use, before anything is written', async
   await refuse(synthetic('r9', { methods: 'test' }), /does not use --methods/);
   await refuse(preprod('r10', { analysisFreezeTx: 'abc' }), /64 lowercase hex/);
   await refuse(preprod('r11', { extractionRun: walletsFile }), /not both/);
-  const corpus = { _: [], plan: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'mainnet', analysisFreezeTx: FREEZE };
+  const corpus = { _: [], plan: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'mainnet', fromStudy: 'random', analysisFreezeTx: FREEZE };
   await refuse({ ...corpus, runId: 'r12', analysisFreezeTx: undefined }, /--analysis-freeze-tx/);
   await refuse({ ...corpus, runId: 'r13', wallets: walletsFile }, /--wallets and --wallet are for the preprod plan/);
-  await refuse({ ...corpus, runId: 'r14', fromStudy: 'random' }, /--from-study is all/);
+  await refuse({ ...corpus, runId: 'r14', fromStudy: 'all' }, /pilot pass runs before the analysis freeze and the sample pass after it/);
   await refuse({ ...corpus, runId: 'r15', snapshot: '100' }, /give no --snapshot/);
   await refuse({ ...corpus, runId: 'r16', expectNetwork: 'preprod' }, /--extraction-run/);
   await refuse({ ...preprod('bad/id') }, /--run-id/);
@@ -336,7 +337,39 @@ test('each plan refuses what it does not use, before anything is written', async
   await refuse(synthetic('r22', { answerLimitMs: '60000' }), /does not use --answer-limit-ms/);
   assert.equal(studyOptions(synthetic('ok12', { workers: '48' })).workers, '48');
   assert.equal(studyOptions(synthetic('ok13', { workers: '64' })).workers, '64');
-  assert.equal(studyOptions({ ...corpus, runId: 'ok' }).fromStudy, 'all');
+  assert.equal(studyOptions({ ...corpus, runId: 'ok' }).fromStudy, 'random');
+});
+
+test('the corpus plan\'s pilot pass needs no analysis-freeze transaction and takes exactly the pilot wallets', async () => {
+  const corpus = { _: [], plan: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'mainnet', snapshot: undefined };
+  const pilot = studyOptions({ ...corpus, runId: 'pass-pilot', fromStudy: 'pilot' });
+  assert.equal(pilot.fromStudy, 'pilot');
+  assert.equal(pilot.analysisFreezeTx, undefined);
+  const calls = [];
+  await run({ ...corpus, expectNetwork: 'preprod', extractionRun: walletsFile, runId: 'pass-pilot2', fromStudy: 'pilot' }, { calls });
+  assert.deepEqual(calls.map(([s]) => s), [...PLANS.corpus]);
+  for (const s of ['history-recent', 'history-peak']) {
+    assert.equal(new Map(calls).get(s).fromStudy, 'pilot');
+    assert.equal(new Map(calls).get(s).analysisFreezeTx, undefined);
+  }
+  // 1 and 2 sampled, 3 and 4 pilot.
+  const samples = samplesFromRows([1, 2].map((id) => ({ sa_id: String(id), random: true, pilot: false, split: 'confirmation' })).concat([3, 4].map((id) => ({ sa_id: String(id), random: false, pilot: true, split: 'exploration' }))));
+  assert.deepEqual(fromStudyWallets(samples, 'pilot'), [3, 4]);
+  assert.deepEqual(fromStudyWallets(samples, 'random'), [1, 2]);
+});
+
+test('the corpus plan\'s random pass is refused without the freeze transaction, accepted with it; a missing or all --from-study is refused', async () => {
+  const refuse = async (opts, re) => {
+    await assert.rejects(run(opts), re);
+    assert.ok(!existsSync(runDir(opts.expectNetwork, opts.runId)), `${opts.runId} wrote nothing`);
+  };
+  const corpus = { _: [], plan: 'corpus', treatment: join(root, 'treatment'), expectNetwork: 'mainnet' };
+  await refuse({ ...corpus, runId: 'c1', fromStudy: 'random' }, /random pass reads the confirmation split; give --analysis-freeze-tx/);
+  assert.equal(studyOptions({ ...corpus, runId: 'c2', fromStudy: 'random', analysisFreezeTx: FREEZE }).fromStudy, 'random');
+  await refuse({ ...corpus, runId: 'c3', fromStudy: 'all', analysisFreezeTx: FREEZE }, /--from-study all would read the confirmation split before the freeze/);
+  await refuse({ ...corpus, runId: 'c4', analysisFreezeTx: FREEZE }, /needs --from-study pilot .* or --from-study random/);
+  // The preprod plan keeps all three.
+  for (const v of ['random', 'pilot', 'all']) assert.equal(studyOptions(preprod(`c5${v}`, { wallets: undefined, fromStudy: v })).fromStudy, v);
 });
 
 test('a confirmation-split wallet without the analysis-freeze transaction stops the run at the first history stage', async () => {

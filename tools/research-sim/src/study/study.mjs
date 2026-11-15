@@ -14,15 +14,21 @@
 //   preprod    history-recent, history-peak, census, near-cap, collateral,
 //              fidelity, replay-recent, replay-peak, on a test network
 //              (--expect-network): the wallets from --wallets or --wallet, or
-//              --from-study random or all; the snapshot from --snapshot (a
+//              --from-study random, pilot or all; the snapshot from --snapshot (a
 //              block id or hash) or --extraction-run, never the moving tip;
 //              the windows from --extraction-run or the test-network
 //              defaults; --days for the collateral measurement.
-//   corpus     the same stages over every sampled wallet (--from-study all),
-//              with --analysis-freeze-tx, since every sampled wallet's split
-//              is read; the snapshot and the windows are the extraction
-//              run's: on mainnet the final freeze's study run, through the
-//              gate (history/db.mjs), elsewhere --extraction-run.
+//   corpus     the same stages in two passes, each its own study run (its
+//              own run id) over the same extraction run: --from-study pilot
+//              reads the pilot wallets (the exploration split) and needs no
+//              --analysis-freeze-tx, so it runs before the analysis freeze;
+//              --from-study random reads the sampled wallets (the
+//              confirmation split) and needs --analysis-freeze-tx, so it
+//              runs after. --from-study all is refused: the pilot pass comes
+//              before the analysis freeze and the sample pass after it. The
+//              snapshot and the windows are the extraction run's: on mainnet
+//              the final freeze's study run, through the gate
+//              (history/db.mjs), elsewhere --extraction-run.
 // The two replay stages run the refocused arms (arms/plan.mjs): per library
 // its own change and UnFrack.It's change on its inputs, and UnFrack.It's
 // H-12 rule with absorption on and off.
@@ -206,17 +212,17 @@ export function studyOptions(opts) {
   if (plan === 'preprod') {
     if (o.expectNetwork === 'mainnet') throw new Refusal('refusing: the preprod plan runs on a test network; the study\'s mainnet run is the corpus plan');
     const sources = ['wallets', 'wallet', 'fromStudy'].filter((k) => o[k] !== undefined);
-    if (sources.length !== 1) throw new Refusal('refusing: name the wallets once: --wallets <file>, --wallet <id or stake address>..., or --from-study random | all');
-    if (o.fromStudy !== undefined && !['random', 'all'].includes(o.fromStudy)) throw new Refusal('refusing: --from-study random | all');
+    if (sources.length !== 1) throw new Refusal('refusing: name the wallets once: --wallets <file>, --wallet <id or stake address>..., or --from-study random | pilot | all');
+    if (o.fromStudy !== undefined && !['random', 'pilot', 'all'].includes(o.fromStudy)) throw new Refusal('refusing: --from-study random | pilot | all');
     if (o.extractionRun === undefined && (o.snapshot === undefined || o.snapshot === true || o.snapshot === 'tip')) throw new Refusal('refusing: the preprod plan reads every stage at one block: give --snapshot <block id or hash> or --extraction-run <params.json>, not the moving tip');
     return o;
   }
   // corpus
-  if (o.wallets !== undefined || o.wallet !== undefined) throw new Refusal('refusing: the corpus plan reads every sampled wallet (--from-study all); --wallets and --wallet are for the preprod plan');
-  if (o.fromStudy !== undefined && o.fromStudy !== 'all') throw new Refusal('refusing: the corpus plan reads every sampled wallet; --from-study is all');
-  o.fromStudy = 'all';
+  if (o.wallets !== undefined || o.wallet !== undefined) throw new Refusal('refusing: the corpus plan reads the pilot or the sampled wallets (--from-study pilot | random); --wallets and --wallet are for the preprod plan');
+  if (o.fromStudy === 'all') throw new Refusal('refusing: the corpus plan reads --from-study pilot or random, one pass each: the pilot pass runs before the analysis freeze and the sample pass after it, so --from-study all would read the confirmation split before the freeze');
+  if (o.fromStudy !== 'pilot' && o.fromStudy !== 'random') throw new Refusal('refusing: the corpus plan needs --from-study pilot (before the analysis freeze) or --from-study random (after it, with --analysis-freeze-tx)');
   if (o.snapshot !== undefined) throw new Refusal('refusing: the corpus plan\'s snapshot is the extraction run\'s; give no --snapshot');
-  if (o.analysisFreezeTx === undefined) throw new Refusal('refusing: the corpus plan reads the confirmation split; give --analysis-freeze-tx <hash>, the transaction whose record freezes the analysis scripts');
+  if (o.fromStudy === 'random' && o.analysisFreezeTx === undefined) throw new Refusal('refusing: the corpus plan\'s random pass reads the confirmation split; give --analysis-freeze-tx <hash>, the transaction whose record freezes the analysis scripts');
   if (o.expectNetwork !== 'mainnet' && o.extractionRun === undefined) throw new Refusal('refusing: on a test network the corpus plan needs --extraction-run <params.json>; on mainnet the gate reads the final freeze\'s study run');
   return o;
 }

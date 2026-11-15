@@ -123,11 +123,11 @@ test('the repeatable options: a string once, an array when repeated', () => {
   assert.deepEqual(parseArgs(['--wallet', 'a', '--wallet', 'b', '--set', 'c=1', '--set', 'd=2'], 'study'), { _: [], wallet: ['a', 'b'], set: ['c=1', 'd=2'] });
 });
 
-test('--from-study takes random or all for history and study, and is a flag for census and near-cap', () => {
+test('--from-study takes random, pilot or all for history and study, and is a flag for census and near-cap', () => {
   assert.equal(parseArgs(['--from-study', 'all'], 'history').fromStudy, 'all');
   assert.equal(parseArgs(['--from-study', 'random'], 'study').fromStudy, 'random');
-  refused(['--from-study', 'every'], 'history', /--from-study takes random \| all, not "every" for history/);
-  refused(['--from-study', 'x'], 'study', /--from-study takes random \| all/);
+  refused(['--from-study', 'every'], 'history', /--from-study takes random \| pilot \| all, not "every" for history/);
+  refused(['--from-study', 'x'], 'study', /--from-study takes random \| pilot \| all/);
   refused(['--from-study'], 'history', /--from-study needs a value for history/);
   for (const c of ['census', 'near-cap']) {
     assert.equal(parseArgs(['--from-study'], c).fromStudy, true);

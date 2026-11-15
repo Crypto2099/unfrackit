@@ -285,10 +285,10 @@ export function sampleMembership(samples, sa) {
 }
 
 // The wallets --from-study names: `random` the random samples' wallets (the
-// confirmation split), `all` every wallet of a study.sample row, the pilot's
-// (the exploration split) and the purposive strata's among them.
+// confirmation split), `pilot` the pilot's (the exploration split), `all`
+// every wallet of a study.sample row, the purposive strata's among them.
 export function fromStudyWallets(samples, mode) {
-  return [...samples].filter(([, s]) => mode === 'all' || s.random).map(([id]) => id);
+  return [...samples].filter(([, s]) => mode === 'all' || (mode === 'pilot' ? s.pilot : s.random)).map(([id]) => id);
 }
 
 // The wallets a history run reads, with the study tables' sample rows (null
