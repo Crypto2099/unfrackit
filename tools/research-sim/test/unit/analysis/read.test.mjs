@@ -10,8 +10,9 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { AnalysisRefusal, checkOptions, openStudy, readStudy, readCensus, readDropList, groupWeight, armIds } from '../../../src/analysis/read.mjs';
-import { writeStudy, optionsFor, fullJobs, built, failed, notReplayable, infeasible, infeasibleCollateral, forfeit, RULE, sha256, METHODS } from '../../lib/analysis-fixtures.mjs';
+import { AnalysisRefusal, checkOptions, openStudy, readStudy, readCensus, readDropList, groupWeight, armIds, walletTables } from '../../../src/analysis/read.mjs';
+import { TimingCollector, readMachines } from '../../../src/analysis/timings.mjs';
+import { writeStudy, optionsFor, fullJobs, built, failed, notReplayable, infeasible, infeasibleCollateral, forfeit, RULE, sha256, METHODS, DEFAULT_DRAW } from '../../lib/analysis-fixtures.mjs';
 
 const dirs = [];
 const tmp = () => {
@@ -33,10 +34,14 @@ function corpus(over = {}, wallet = {}) {
 const read = (c, o = {}) => readStudy({ ...c.opts, ...o });
 
 test('options: every required option and each value it is checked against', () => {
-  const ok = { network: 'preprod', study: 'st', window: 'recent', split: 'exploration', out: '/x' };
+  const ok = { network: 'preprod', study: 'st', split: 'exploration', out: '/x' };
   assert.equal(checkOptions(ok).workers, 1);
-  for (const k of ['network', 'study', 'window', 'split', 'out']) assert.throws(() => checkOptions({ ...ok, [k]: undefined }), refusal(new RegExp(`--${k}`)));
-  assert.throws(() => checkOptions({ ...ok, window: 'snapshot' }), refusal(/--window/));
+  assert.equal(checkOptions(ok).window, 'recent');
+  for (const k of ['network', 'study', 'split', 'out']) assert.throws(() => checkOptions({ ...ok, [k]: undefined }), refusal(new RegExp(`--${k}`)));
+  assert.throws(() => checkOptions({ ...ok, window: 'snapshot' }), refusal(/window must be/));
+  // A synthetic study takes no split.
+  assert.equal(checkOptions({ network: 'synthetic', study: 'st', out: '/x' }).split, null);
+  assert.throws(() => checkOptions({ network: 'synthetic', study: 'st', out: '/x', split: 'exploration' }), refusal(/takes no --split/));
   assert.throws(() => checkOptions({ ...ok, split: 'all' }), refusal(/--split/));
   assert.throws(() => checkOptions({ ...ok, study: 'a/b' }), refusal(/study run id/));
   assert.throws(() => checkOptions({ ...ok, workers: 0 }), refusal(/--workers/));
@@ -246,7 +251,8 @@ test('synthetic study: outcomes, classes, unpriced names and the conservation sh
   assert.deepEqual(run.spends.get(2).unpriced, ['foo', 'redeemers']);
   assert.deepEqual(run.spends.get(1).unpriced, []);
   assert.deepEqual(run.spends.get(3).conservation, { consumed: 5000000n, produced: 7000000n });
-  assert.equal(run.spends.get(4).reason, 'no inputs');
+  assert.equal(run.n.infeasible, 1);
+  assert.equal(run.spends.get(4).outcome, 'infeasible');
   assert.equal(run.spends.get(0).walletFee, 150000n);
   assert.equal(run.spends.get(8).walletFee, 210000n);
   assert.deepEqual([...run.spends.keys()], [0, 1, 2, 3, 4, 5, 6, 7, 8]);
@@ -272,7 +278,7 @@ test('synthetic study: a chained answer with no sibling stops the run naming the
   await assert.rejects(readStudy(optionsFor(root, w)), refusal(/wallet 0: a chained answer of intent 3 with no single-transaction record/));
 });
 
-test('synthetic study: H-7 fields of a random library, E1 at 0.5, 0.8 and 0.9, E2 and E3 at their boundaries, and the slope points', async () => {
+test('synthetic study: H-7 fields of a random library, E1 at 0.5, 0.8 and 0.9, E2 and E3 at their boundaries, and the slopes', async () => {
   const s = synthetic();
   const r = await readStudy(s.opts);
   const ri = r.wallets[0].arms.get('csl-ri/own');
@@ -284,9 +290,13 @@ test('synthetic study: H-7 fields of a random library, E1 at 0.5, 0.8 and 0.9, E
   // E3: 6,000,000 of change minimum less 1,000,000 consumed is exactly 5,000,000.
   assert.deepEqual(a.h7.e3, { net: 5000000n, worse: true });
   assert.equal(a.h7.worse, true);
-  assert.deepEqual(a.points.t, [0, 1000, 2000]);
-  assert.deepEqual(a.points.utxos, [3, 10, 17]);
-  assert.deepEqual(a.points.lockedAdaPerToken, [null, 900000n, null]);
+  // Points (t, utxos): (0, 3), (1000, 10), (2000, 17): slope 7 per 1000 s over a start of 3, times 31,536,000 s a year.
+  assert.ok(Math.abs(a.slopes.utxos - (0.007 / 3) * 31536000) < 1e-6);
+  // Largest value bytes: points (0, 5), (1000, 4500), (2000, 4500): sxy 4,495,000 over sxx 2,000,000 is 2.2475 per second, over a start of 5.
+  assert.ok(Math.abs(a.slopes.largestValueBytes - (4495000 / 2000000 / 5) * 31536000) < 1e-6);
+  // Per token: (0, none) has no positive start, so no slope.
+  assert.equal(a.slopes.lockedAdaPerToken, null);
+  assert.equal(a.points, undefined);
   const b = ri.runs.get(2);
   assert.deepEqual(b.h7.e1, { 0.5: false, 0.8: false, 0.9: false });
   assert.deepEqual(b.h7.e2, { net: 0, worse: false });
@@ -305,7 +315,7 @@ test('synthetic study: a refused rule job has no summary and no h7, and the arm 
   assert.deepEqual([...r.wallets[0].arms.keys()], armIds().filter((a) => a.startsWith('csl-lf/') || a.startsWith('csl-ri/') || a.startsWith(RULE)));
   const sum = r.wallets[0].arms.get('csl-lf/own').runs.get(1).summary;
   assert.equal(sum.capped, false);
-  assert.equal(sum.start.lockedAda, 0n);
+  assert.deepEqual(sum.end, { utxos: 3, largestValueBytes: 5, lockedAdaPerToken: null });
   assert.equal(sum.conformity.fee, 200000n);
 });
 
@@ -334,7 +344,7 @@ test('corpus study: size groups, weights D/A and the draw flags, a chain priced 
     ]
   });
   const r = await readStudy(optionsFor(root, w));
-  // draw: B1 40 drawn and 20 taken, B2 10 and 5, B3 2 and 2.
+  // Pilot wallets (split exploration) weigh by the pilot's draw: B1 4 drawn and 2 taken, B2 2 and 1, B3 1 and 1.
   assert.deepEqual(r.wallets.map((x) => [x.wallet, x.group, x.weight.w, x.capped]), [['101', 'B1', 2, false], ['102', 'B2', 2, true], ['103', 'B3', 1, false]]);
   assert.deepEqual(r.wallets[0].flags, { fragmented: true, frankenAny: false });
   assert.deepEqual(r.wallets[1].flags, {});
@@ -379,7 +389,7 @@ test('census rows are read with the coin when present and without it', async () 
 const REAL_ROOT = join(process.env.HOME || '/', '.local/share/unfrackit-research-sim/homes/r4-mesh/check3/head3');
 const realStage = join(REAL_ROOT, 'synthetic/cmp-study/replay-recent/done.json');
 test('smoke: the real synthetic-plan stage reads to nine wallets with the libraries it ran', { skip: !existsSync(realStage) }, async () => {
-  const r = await readStudy({ network: 'synthetic', study: 'cmp-study', window: 'recent', split: 'exploration', out: '/x', root: REAL_ROOT });
+  const r = await readStudy({ network: 'synthetic', study: 'cmp-study', window: 'recent', out: '/x', root: REAL_ROOT });
   assert.equal(r.wallets.length, 9);
   const ids = new Set(r.wallets.flatMap((w) => [...w.arms.keys()]));
   for (const m of ['csl-lf', 'csl-ri', 'cjs-rrri', 'evo-lf', 'blaze-wd', 'lucid-lf', 'mesh-rrri']) assert.ok(ids.has(`${m}/own`) && ids.has(`${m}/layout`), m);
@@ -393,4 +403,70 @@ test('the fixture builder\'s hash helper and method list are the plan\'s', () =>
   assert.equal(METHODS.length, 23);
   assert.equal(armIds().length, 48);
   assert.ok(SYN_METHODS.every((m) => METHODS.includes(m)));
+});
+
+test('a pilot wallet weighs by the pilot\'s groups and a sampled wallet by the sample\'s', async () => {
+  const draw = { ...DEFAULT_DRAW, groups: { ...DEFAULT_DRAW.groups, B1: { quota: 50, nDrawn: 40, nTaken: 20 } }, pilot: { ...DEFAULT_DRAW.pilot, groups: { ...DEFAULT_DRAW.pilot.groups, B1: { quota: 5, nDrawn: 9, nTaken: 3 } } } };
+  const freeze = 'c'.repeat(64);
+  const root = tmp();
+  const w = writeStudy(root, { draw, analysisFreezeTx: freeze, wallets: [{ id: 101, group: 'B1', split: 'exploration', jobs: fullJobs(plain) }, { id: 102, group: 'B1', split: 'confirmation', jobs: fullJobs(plain) }] });
+  // Pilot: 9 drawn, 3 taken, weight 3. Sample: 40 drawn, 20 taken, weight 2.
+  const exp = await readStudy(optionsFor(root, w, { analysisFreezeTx: freeze }));
+  assert.deepEqual(exp.wallets.map((x) => [x.wallet, x.kind, x.weight.w]), [['101', 'pilot', 3]]);
+  const conf = await readStudy(optionsFor(root, w, { split: 'confirmation', analysisFreezeTx: freeze }));
+  assert.deepEqual(conf.wallets.map((x) => [x.wallet, x.kind, x.weight.w]), [['102', 'random', 2]]);
+  assert.equal(groupWeight(draw, 'B1', 'pilot').w, 3);
+  assert.equal(groupWeight(draw, 'B1').w, 2);
+});
+
+test('refuses a wallet whose split and draw kind disagree or whose kind is missing, and a draw with no pilot groups', async () => {
+  let c = corpus({}, { split: 'exploration', kind: 'random' });
+  await assert.rejects(read(c), refusal(/split exploration and its draw kind random disagree/));
+  c = corpus({ analysisFreezeTx: 'c'.repeat(64) }, { split: 'confirmation', kind: 'pilot' });
+  await assert.rejects(read(c, { split: 'confirmation', analysisFreezeTx: 'c'.repeat(64) }), refusal(/split confirmation and its draw kind pilot disagree/));
+  c = corpus({}, { kind: 'other' });
+  await assert.rejects(read(c), refusal(/kind "other", not random or pilot/));
+  const { pilot, ...noPilot } = DEFAULT_DRAW;
+  c = corpus({ draw: noPilot });
+  assert.throws(() => openStudy(c.opts), refusal(/holds no pilot groups/));
+  c = corpus({ draw: { ...DEFAULT_DRAW, pilot: { ...pilot, groups: { B0: pilot.groups.B0 } } } });
+  assert.throws(() => openStudy(c.opts), refusal(/pilot holds no group B1/));
+});
+
+test('a built spend\'s spendable UTxO count is read from the field the replay writes, spendableUtxos', async () => {
+  const c = corpus({}, { jobs: fullJobs((m, arm) => [built(0, { spendable: 7 }), built(1)]) });
+  const r = await read(c);
+  const spends = r.wallets[0].arms.get('csl-lf/own').runs.get(1).spends;
+  assert.equal(spends.get(0).spendable, 7);
+  assert.equal(spends.get(1).spendable, undefined);
+});
+
+test('the spend records\' times are matched by wallet index and record number, with the spend type and the spendable count, and machine facts and reruns are read', async () => {
+  const root = tmp();
+  const jobs = fullJobs((m, arm) => (m === 'csl-lf' && arm === 'own' ? [built(0, { ms: 12, spendable: 5, type: 'T2' }), built(1, { ms: 8, spendable: 40 })] : [built(0)]));
+  const machines = [{ label: 'm1', invocations: [{ start: 'a', end: 'b', workers: 4, memoryBudgetBytes: 1000, cpuModel: 'x', logicalCores: 8, completed: [0, 1] }], log: [{ event: 'watchdog stop' }, { event: 'machine rerun' }, { event: 'machine rerun' }, { event: 'segment-done' }] }];
+  const w = writeStudy(root, { machines, wallets: [{ id: 101, jobs: fullJobs(() => [built(0)]) }, { id: 102, jobs }] });
+  const ctx = openStudy(optionsFor(root, w));
+  ctx.timings = new TimingCollector();
+  const got = [];
+  for await (const t of walletTables(ctx)) got.push(t.wallet);
+  const s = ctx.timings.summary();
+  assert.equal(s.rows, 2);
+  assert.deepEqual(s.byArm['csl-lf/own'], { n: 2, q1: 9, median: 10, q3: 11, max: 12, total: 20 });
+  assert.deepEqual(Object.keys(s.byMethodAndType), ['csl-lf/T1', 'csl-lf/T2']);
+  assert.deepEqual(Object.keys(s.byMethodAndSpendable), ['csl-lf/32-63', 'csl-lf/4-7']);
+  const m = readMachines(w.stageDir);
+  assert.deepEqual(m.map((x) => [x.label, x.watchdogStops, x.machineReruns, x.invocations[0].workers, x.invocations[0].wallets, x.invocations[0].start]), [['m1', 1, 2, 4, 2, undefined]]);
+});
+
+test('timing rows that do not match done.json are refused', async () => {
+  const root = tmp();
+  const w = writeStudy(root, { wallets: [{ id: 101, jobs: fullJobs(() => [built(0, { ms: 3 })]) }] });
+  const tp = join(w.stageDir, 'timings.jsonl.gz');
+  writeFileSync(tp, gzipSync(Buffer.from(gunzipSync(readFileSync(tp)).toString().replace('"ms":3', '"ms":4'))));
+  const ctx = openStudy(optionsFor(root, w));
+  ctx.timings = new TimingCollector();
+  await assert.rejects(async () => {
+    for await (const _ of walletTables(ctx)) void _;
+  }, refusal(/timings do not match done.json/));
 });

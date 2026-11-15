@@ -25,12 +25,11 @@ import { bootstrap, quantiles, weightedMean, weightedShare, LEVEL_REPORT, MIN_CE
 import { armIds, libraryMethods, RULE_METHOD } from './read.mjs';
 import { pairedRuns, failuresPer100, MIN_SPENDS } from './questions.mjs';
 import { LIBRARY_TABLE } from '../arms/plan.mjs';
+import { YEAR_SECONDS, SLOPE_METRICS, olsSlope } from './slope.mjs';
 
 const LEVEL = String(LEVEL_REPORT);
 const RANDOM = new Set(LIBRARY_TABLE.filter((r) => r.random).map((r) => r.method));
-// A year in seconds, the windows' length (src/history/windows.mjs).
-export const YEAR_SECONDS = 365 * 86400;
-export const SLOPE_METRICS = Object.freeze(['utxos', 'largestValueBytes', 'lockedAdaPerToken']);
+export { YEAR_SECONDS, SLOPE_METRICS, olsSlope };
 export const CENSUS_PERCENTILES = Object.freeze([1, 5, 10, 25, 50, 75, 90, 95, 99]);
 // The ADA bins of src/history/reports.mjs: bin i starts at ADA_BINS[i] ADA.
 export const ADA_BINS = Object.freeze([0, 1, 2, 5, 10, 20, 50, 100, 1000]);
@@ -99,45 +98,11 @@ export function driftFlags(arm) {
   return out;
 }
 
-// Ordinary least squares slope of y on t; null when the t values do not vary.
-export function olsSlope(t, y) {
-  const n = t.length;
-  if (n < 2) return null;
-  const tm = mean(t);
-  const ym = mean(y);
-  let sxx = 0;
-  let sxy = 0;
-  for (let i = 0; i < n; i++) {
-    sxx += (t[i] - tm) * (t[i] - tm);
-    sxy += (t[i] - tm) * (y[i] - ym);
-  }
-  return sxx > 0 ? sxy / sxx : null;
-}
-
-// A run's drift slope of one metric: the OLS slope over (0, start) and the
-// state after each built spend, divided by the start value and scaled to a
-// year. None unless the run has at least two built-spend points and a positive
-// start value. For locked ADA per token a point with no token held is left out
-// of the regression (the measure is undefined there), and the slope stays while
-// at least two built-spend points remain.
+// A run's drift slope of one metric (slope.mjs): the reader's value for the run.
 export function runSlope(run, metric) {
-  if (run.refused || !run.points) return null;
-  const { t, [metric]: raw } = run.points;
-  const y = raw.map((v) => (v === null || v === undefined ? null : Number(v)));
-  const start = y[0];
-  if (start === null || !(start > 0)) return null;
-  const ts = [t[0]];
-  const ys = [start];
-  let built = 0;
-  for (let i = 1; i < y.length; i++) {
-    if (y[i] === null) continue;
-    ts.push(t[i]);
-    ys.push(y[i]);
-    built++;
-  }
-  if (built < 2) return null;
-  const slope = olsSlope(ts, ys);
-  return slope === null ? null : (slope / start) * YEAR_SECONDS;
+  if (run.refused || !run.slopes) return null;
+  const v = run.slopes[metric];
+  return v === undefined ? null : v;
 }
 
 // A wallet's slope in an arm: the mean over the runs that have one.

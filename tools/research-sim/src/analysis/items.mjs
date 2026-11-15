@@ -55,7 +55,8 @@
 // compared wallet by wallet with the main cell and, when equal, reported under
 // the main cell's name, so it has the main cell's numbers by construction.
 
-import { bootstrap, mergeSizeGroups, quantile, MIN_CELL_WALLETS } from './stats.mjs';
+import { bootstrap, mergeSizeGroups, MIN_CELL_WALLETS } from './stats.mjs';
+import { TimingCollector } from './timings.mjs';
 import { failureValue, feeValue, pairedRuns, runQuestions, studyLibraries, cellName } from './questions.mjs';
 import { armIds, RULE_METHOD } from './read.mjs';
 import { isDepositSubset } from './deposits.mjs';
@@ -447,22 +448,11 @@ export async function runItems(tables, { workers = 1, resamples, libraries = stu
 
 // ---- Item 8's distribution: the times of rows { method, kind, type, ms }.
 
-const DISTRIBUTION = (xs) => {
-  const s = [...xs].sort((a, b) => a - b);
-  return { n: s.length, q1: quantile(s, 0.25), median: quantile(s, 0.5), q3: quantile(s, 0.75), max: s[s.length - 1], total: s.reduce((a, b) => a + b, 0) };
-};
-
 // Per library and arm (`<method>/<kind>`) and per method and spend type, the
 // distribution of the spend records' times in ms.
 export function timingSummary(rows) {
-  const group = (key) => {
-    const g = new Map();
-    for (const r of rows) {
-      const k = key(r);
-      if (!g.has(k)) g.set(k, []);
-      g.get(k).push(r.ms);
-    }
-    return Object.fromEntries([...g].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, xs]) => [k, DISTRIBUTION(xs)]));
-  };
-  return { byArm: group((r) => `${r.method}/${r.kind}`), byMethodAndType: group((r) => `${r.method}/${r.type}`) };
+  const c = new TimingCollector();
+  for (const r of rows) c.add(r);
+  const { byArm, byMethodAndType } = c.summary();
+  return { byArm, byMethodAndType };
 }

@@ -46,6 +46,7 @@ import { intentFromHistory } from '../state/intent.mjs';
 import { withoutLeftovers } from '../kit/replay.mjs';
 import { normalizeParams, SYNTHETIC_PARAMS } from '../kit/params.mjs';
 import { depositParts } from './deposits.mjs';
+import { slopesOfPoints } from './slope.mjs';
 
 export class AnalysisRefusal extends Error {
   constructor(message) {
@@ -108,7 +109,9 @@ const readJson = (path, what) => {
 };
 
 // The command line's options, checked and normalized. Nothing is read but the
-// --drop file's existence.
+// --drop file's existence. `window` is not a command-line option (a run reads
+// both windows' stages); it is the window one openStudy call reads, 'recent'
+// when not given. A synthetic study takes no --split: every wallet enters.
 export function checkOptions(o = {}) {
   const need = (k) => {
     if (o[k] === undefined || o[k] === null || o[k] === '') refuse(`--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is required`);
@@ -116,6 +119,7 @@ export function checkOptions(o = {}) {
   };
   const network = need('network');
   if (!/^[a-z]+$/.test(network)) refuse(`bad network name ${network}`);
+  const synthetic = network === 'synthetic';
   const study = need('study');
   try {
     runDir(network, study);
@@ -123,10 +127,15 @@ export function checkOptions(o = {}) {
     refuse(e.message);
   }
   if (String(study).includes('/')) refuse(`the study run id must name a study run, not a stage: ${study}`);
-  const window = need('window');
-  if (!WINDOWS.includes(window)) refuse(`--window must be one of ${WINDOWS.join(', ')}, not ${window}`);
-  const split = need('split');
-  if (!SPLITS.includes(split)) refuse(`--split must be one of ${SPLITS.join(', ')}, not ${split}`);
+  const window = o.window === undefined || o.window === null ? 'recent' : o.window;
+  if (!WINDOWS.includes(window)) refuse(`the window must be one of ${WINDOWS.join(', ')}, not ${window}`);
+  let split = null;
+  if (synthetic) {
+    if (o.split !== undefined && o.split !== null) refuse('--network synthetic takes no --split: every wallet of a synthetic study enters');
+  } else {
+    split = need('split');
+    if (!SPLITS.includes(split)) refuse(`--split must be one of ${SPLITS.join(', ')}, not ${split}`);
+  }
   const freeze = o.analysisFreezeTx === undefined || o.analysisFreezeTx === null ? null : String(o.analysisFreezeTx);
   if (freeze !== null && !SHA256.test(freeze)) refuse('--analysis-freeze-tx must be a transaction hash of 64 lowercase hex digits');
   if (split === 'confirmation' && freeze === null) refuse('--split confirmation needs --analysis-freeze-tx: the confirmation split is read only after the analysis scripts are frozen');
@@ -157,12 +166,29 @@ export function readDropList(path) {
 }
 
 // The weight D_k / A_k of a size group in a frame's draw (section 7.1), as
-// the pair and the ratio.
-export function groupWeight(draw, group) {
-  const g = draw && draw.groups ? draw.groups[group] : undefined;
-  if (!g) refuse(`the draw holds no group ${group}`);
-  if (!Number.isSafeInteger(g.nDrawn) || !Number.isSafeInteger(g.nTaken) || g.nTaken < 1 || g.nDrawn < g.nTaken) refuse(`the draw's group ${group} has D=${g.nDrawn}, A=${g.nTaken}`);
+// the pair and the ratio. A sampled wallet ('random') weighs by the sample's
+// groups, a pilot wallet by the pilot's own (`draw.pilot`).
+export function groupWeight(draw, group, kind = 'random') {
+  const part = draw && kind === 'pilot' ? draw.pilot : draw;
+  if (kind === 'pilot' && draw && !draw.pilot) refuse('the draw holds no pilot groups');
+  const g = part && part.groups ? part.groups[group] : undefined;
+  if (!g) refuse(`the draw holds no ${kind === 'pilot' ? 'pilot ' : ''}group ${group}`);
+  if (!Number.isSafeInteger(g.nDrawn) || !Number.isSafeInteger(g.nTaken) || g.nTaken < 1 || g.nDrawn < g.nTaken) refuse(`the draw's ${kind === 'pilot' ? 'pilot ' : ''}group ${group} has D=${g.nDrawn}, A=${g.nTaken}`);
   return { nDrawn: g.nDrawn, nTaken: g.nTaken, w: g.nDrawn / g.nTaken };
+}
+
+// A history file's header, read from its first line alone (a wallet of the
+// other split is not parsed any further).
+export function peekHeader(text) {
+  const at = text.indexOf('\n');
+  let header;
+  try {
+    header = JSON.parse(at < 0 ? text : text.slice(0, at));
+  } catch (e) {
+    return refuse(`a history file's first line does not parse (${e.message})`);
+  }
+  if (!header || header.kind !== 'header') refuse('a history file has no header');
+  return header;
 }
 
 // A history file read for what the analysis needs: the header, the end
@@ -194,9 +220,9 @@ export function parseHistoryFile(text, { analysisFreezeTx = null } = {}) {
   return { header, params, end, intents };
 }
 
-// A stage's records as a stream of parsed lines, hashed as they go. The
-// generator ends by checking the decompressed bytes against done.json.
-async function* recordLines(path, done) {
+// A gzip stream of JSON lines as parsed lines, hashed as they go. The generator
+// ends by checking the decompressed bytes against the digest of done.json.
+async function* gzLines(path, digest, what) {
   const hash = createHash('sha256');
   const dec = new StringDecoder('utf8');
   let bytes = 0;
@@ -218,9 +244,41 @@ async function* recordLines(path, done) {
     rest = rest.slice(from);
   }
   rest += dec.end();
-  if (rest.length) refuse('the stage\'s records do not end with a line break');
-  const rec = done.records;
-  if (!rec || hash.digest('hex') !== rec.sha256 || bytes !== rec.bytes || lines !== rec.lines) refuse('the stage\'s decompressed records do not match done.json (SHA-256, bytes or lines)');
+  if (rest.length) refuse(`the stage's ${what} do not end with a line break`);
+  if (!digest || hash.digest('hex') !== digest.sha256 || bytes !== digest.bytes || lines !== digest.lines) refuse(`the stage's decompressed ${what} do not match done.json (SHA-256, bytes or lines)`);
+}
+const recordLines = (path, done) => gzLines(path, done.records, 'records');
+
+// The timing rows of a stage, in step with the wallets: take(i) gives the rows
+// of wallet i (the stream is ordered by wallet index), end() reads the rest and
+// so checks the stream against done.json.
+class TimingCursor {
+  constructor(path, digest) {
+    this.it = gzLines(path, digest, 'timings')[Symbol.asyncIterator]();
+    this.head = undefined;
+  }
+  async fill() {
+    if (this.head === undefined) {
+      const r = await this.it.next();
+      this.head = r.done ? null : r.value;
+    }
+  }
+  async take(index) {
+    const rows = [];
+    for (;;) {
+      await this.fill();
+      if (this.head === null || this.head.walletIndex > index) return rows;
+      if (this.head.walletIndex === index) rows.push(this.head);
+      this.head = undefined;
+    }
+  }
+  async end() {
+    for (;;) {
+      await this.fill();
+      if (this.head === null) return;
+      this.head = undefined;
+    }
+  }
 }
 
 // The study opened: every refusal that needs no wallet. Returns the context
@@ -257,6 +315,8 @@ export function openStudy(rawOptions) {
     if (!historyRun.draw || typeof historyRun.draw !== 'object') refuse('history-run.json holds no draw: the study tables were not read');
     draw = historyRun.draw[o.window];
     if (!draw) refuse(`the draw holds no frame ${o.window}`);
+    if (!draw.pilot || typeof draw.pilot !== 'object') refuse(`the draw of frame ${o.window} holds no pilot groups`);
+    for (const g of SIZE_GROUPS) for (const [what, part] of [['sample', draw], ['pilot', draw.pilot]]) if (!part.groups || !part.groups[g]) refuse(`the draw's ${what} holds no group ${g}`);
     if (historyRun.analysisFreezeTx && o.analysisFreezeTx && historyRun.analysisFreezeTx !== o.analysisFreezeTx) refuse('history-run.json names another analysis-freeze transaction than --analysis-freeze-tx');
     if (o.split === 'confirmation' && historyRun.analysisFreezeTx !== o.analysisFreezeTx) refuse('history-run.json does not name the analysis-freeze transaction given');
   }
@@ -287,10 +347,28 @@ function flagsOf(draw) {
 // The wallet ids a wallets.json entry names: a file `<id>.<window>.jsonl` or a shape.
 const walletOfEntry = (e) => (e.shape !== undefined ? e.shape : e.file.split('.')[0]);
 
-// A run (one arm, one repetition) reduced. spends: the spend records in
-// order; arm: the wallet-arm record or null; refusedReason: the refused
-// record's reason or null; dOf(intent, s): the fixed part of a chained
-// answer's fee. maxValSize decides E1.
+// Strings that recur in every record (spend types, failure classes) kept once.
+const interned = new Map();
+const intern = (x) => {
+  if (typeof x !== 'string') return x;
+  let v = interned.get(x);
+  if (v === undefined) interned.set(x, (v = x));
+  return v;
+};
+const NO_NAMES = Object.freeze([]);
+
+// A run (one arm, one repetition) reduced to the values the computations read.
+// spends: the spend records in order; arm: the wallet-arm record or null;
+// refusedReason: the refused record's reason or null; feeFor(intent): the fixed
+// part of a chained answer's fee. maxValSize decides E1. A run holds:
+//   refused, n (counts by outcome), byClass, unpricedFailures,
+//   spends (by intent: intent, type, outcome; built: txs, chained, fee,
+//     walletFee, spendable; failed or not replayable: class, unpriced,
+//     conservation),
+//   h7 (E1 at 0.5, 0.8, 0.9, E2, E3, worse), slopes (the three drift
+//     slopes), summary ({ capped, end { utxos, largestValueBytes,
+//     lockedAdaPerToken }, conformity }).
+// Nothing else of a record is kept: the tables of every wallet are held at once.
 function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
   const run = {
     refused: refusedReason,
@@ -299,23 +377,16 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
     unpricedFailures: 0,
     spends: new Map(),
     h7: null,
-    points: null,
+    slopes: null,
     summary: null
   };
   if (armRecord) {
     const a = armRecord;
     const big = (x) => (x === null || x === undefined ? null : BigInt(x));
-    const state = (s) => (s ? { ...s, lockedAda: big(s.lockedAda), lockedAdaPerToken: big(s.lockedAdaPerToken) } : null);
     run.summary = {
-      absorb: a.absorb === undefined ? null : a.absorb,
-      hypotheses: a.hypotheses || [],
       capped: a.capped === true,
-      counts: a.counts,
-      failuresPer100: a.failuresPer100,
-      start: state(a.start),
-      end: state(a.end),
-      conformity: a.conformity ? { ...a.conformity, fee: big(a.conformity.fee) } : null,
-      trajectory: a.trajectory || null
+      end: a.end ? { utxos: a.end.utxos, largestValueBytes: a.end.largestValueBytes, lockedAdaPerToken: big(a.end.lockedAdaPerToken) } : null,
+      conformity: a.conformity ? { ...a.conformity, fee: big(a.conformity.fee) } : null
     };
   }
   const e1 = Object.fromEntries(E1_LEVELS.map((x) => [x, false]));
@@ -330,58 +401,45 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
     if (!OUTCOMES.includes(r.outcome)) refuse(`a spend record with the unknown outcome ${JSON.stringify(r.outcome)}`);
     if (!Number.isSafeInteger(r.intent) || r.intent <= last) refuse(`spend records of one run out of order at intent ${r.intent}`);
     last = r.intent;
-    const s = { intent: r.intent, type: r.type, t: r.t, outcome: r.outcome };
+    const s = { intent: r.intent, type: intern(r.type), outcome: r.outcome };
     if (r.outcome === 'built') {
       const fee = BigInt(r.fee);
       const chained = r.txs > 1;
-      Object.assign(s, {
-        txs: r.txs,
-        chained,
-        fee,
-        walletFee: chained ? fee - feeFor(r.intent, 'chain') : BigInt(r.walletFee),
-        size: r.size,
-        changeCount: r.changeOutputs.count,
-        changeLargestValueBytes: r.changeOutputs.largestValueBytes,
-        consumedWalletInputs: r.consumedWalletInputs,
-        largestConsumedValueBytes: r.largestConsumedValueBytes,
-        changeTokenMinimum: BigInt(r.changeTokenMinimum),
-        consumedTokenMinimum: BigInt(r.consumedTokenMinimum),
-        collateralUsed: r.collateralUsed !== null && r.collateralUsed !== undefined,
-        after: { utxos: r.utxosAfter, largestValueBytes: r.largestValueBytesAfter, lockedAda: BigInt(r.lockedAdaAfter), lockedAdaPerToken: r.lockedAdaPerTokenAfter === null ? null : BigInt(r.lockedAdaPerTokenAfter), tokens: r.tokensAfter }
-      });
-      if (r.spendable !== undefined) s.spendable = r.spendable;
+      s.txs = r.txs;
+      s.chained = chained;
+      s.fee = fee;
+      s.walletFee = chained ? fee - feeFor(r.intent, 'chain') : r.walletFee === r.fee ? fee : BigInt(r.walletFee);
+      if (r.spendableUtxos !== undefined) s.spendable = r.spendableUtxos;
       if (chained) run.n.chains++;
       run.n.built++;
       run.n.attempted++;
       builtN++;
-      for (const x of E1_LEVELS) if (s.changeLargestValueBytes > x * maxValSize && s.largestConsumedValueBytes <= x * maxValSize) e1[x] = true;
-      changeCount += s.changeCount;
-      consumed += s.consumedWalletInputs;
-      changeMin += s.changeTokenMinimum;
-      consumedMin += s.consumedTokenMinimum;
+      const changeBytes = r.changeOutputs.largestValueBytes;
+      for (const x of E1_LEVELS) if (changeBytes > x * maxValSize && r.largestConsumedValueBytes <= x * maxValSize) e1[x] = true;
+      changeCount += r.changeOutputs.count;
+      consumed += r.consumedWalletInputs;
+      changeMin += BigInt(r.changeTokenMinimum);
+      consumedMin += BigInt(r.consumedTokenMinimum);
       if (pts) {
-        pts.t.push(s.t);
-        pts.utxos.push(s.after.utxos);
-        pts.largestValueBytes.push(s.after.largestValueBytes);
-        pts.lockedAdaPerToken.push(s.after.lockedAdaPerToken);
+        pts.t.push(r.t);
+        pts.utxos.push(r.utxosAfter);
+        pts.largestValueBytes.push(r.largestValueBytesAfter);
+        pts.lockedAdaPerToken.push(r.lockedAdaPerTokenAfter === null ? null : BigInt(r.lockedAdaPerTokenAfter));
       }
     } else if (r.outcome === 'failed' || r.outcome === 'not-replayable') {
-      s.class = r.class;
-      s.detail = r.detail;
+      s.class = intern(r.class);
       const m = UNPRICED.exec(r.detail || '');
-      s.unpriced = m ? m[1].split(', ') : [];
+      s.unpriced = m ? m[1].split(', ').map(intern) : NO_NAMES;
       const c = CONSERVATION.exec(r.detail || '');
       s.conservation = c ? { consumed: BigInt(c[1]), produced: BigInt(c[2]) } : null;
       if (r.outcome === 'failed') {
         run.n.failed++;
         run.n.attempted++;
-        run.byClass[r.class] = (run.byClass[r.class] || 0) + 1;
+        run.byClass[s.class] = (run.byClass[s.class] || 0) + 1;
         if (s.unpriced.some((n) => n !== 'redeemers')) run.unpricedFailures++;
       } else run.n.notReplayable++;
-    } else if (r.outcome === 'infeasible') {
-      s.reason = r.reason;
-      run.n.infeasible++;
-    } else if (r.outcome === 'infeasible-collateral') run.n.infeasibleCollateral++;
+    } else if (r.outcome === 'infeasible') run.n.infeasible++;
+    else if (r.outcome === 'infeasible-collateral') run.n.infeasibleCollateral++;
     else run.n.forfeit++;
     run.spends.set(r.intent, s);
   }
@@ -395,7 +453,7 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
       e3: { net: minNet, worse: minNet >= E3_LOVELACE }
     };
     run.h7.worse = e1[0.8] || run.h7.e2.worse || run.h7.e3.worse;
-    run.points = pts;
+    run.slopes = slopesOfPoints(pts);
   }
   return run;
 }
@@ -403,22 +461,35 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
 // One wallet's records (and history file) reduced to its table. Refusals of
 // section "Inputs" of the analysis brief: unknown keys, missing arms,
 // disagreeing collateral or capped flags, a missing group, a history file
-// that does not match wallets.json.
+// that does not match wallets.json. A wallet in --drop, and one of the other
+// split, is not reduced: the result is { index, wallet, skip: 'dropped' |
+// 'otherSplit' } (its history file is still checked against wallets.json and
+// its header read; the done.json hash covers its records).
 export function reduceWallet(ctx, index, records) {
   const entry = ctx.entries[index];
   const id = walletOfEntry(entry);
   const o = ctx.options;
+  if (ctx.drop.has(id)) return { index, wallet: id, skip: 'dropped' };
   let hist = null;
   if (!ctx.synthetic) {
     const path = join(ctx.historyDir, 'history', entry.file);
     if (!existsSync(path)) refuse(`wallet ${index}: its history file is missing`);
     const bytes = readFileSync(path);
     if (sha256Of(bytes) !== entry.sha256) refuse(`wallet ${index}: its history file does not match wallets.json's SHA-256`);
-    hist = parseHistoryFile(bytes.toString('utf8'), { analysisFreezeTx: o.analysisFreezeTx });
-    if (String(hist.header.wallet) !== id) refuse(`wallet ${index}: its history file's wallet differs from its name`);
-    if (hist.header.frame !== o.window) refuse(`wallet ${index}: its history file is of the frame ${hist.header.frame}`);
-    if (hist.header.split !== 'exploration' && hist.header.split !== 'confirmation') refuse(`wallet ${index}: its history header names no split`);
-    if (hist.header.split === 'confirmation' && ctx.historyRun.analysisFreezeTx !== o.analysisFreezeTx) refuse(`wallet ${index}: a confirmation-split wallet, and history-run.json does not name the analysis-freeze transaction given`);
+    const text = bytes.toString('utf8');
+    const head = peekHeader(text);
+    if (head.format !== HISTORY_FORMAT) refuse(`a history file of format ${head.format}, expected ${HISTORY_FORMAT}`);
+    if (head.split === 'confirmation' && !o.analysisFreezeTx) refuse(`the history file of wallet ${head.wallet} is in the confirmation split, and no analysis-freeze transaction was given`);
+    if (String(head.wallet) !== id) refuse(`wallet ${index}: its history file's wallet differs from its name`);
+    if (head.frame !== o.window) refuse(`wallet ${index}: its history file is of the frame ${head.frame}`);
+    if (head.split !== 'exploration' && head.split !== 'confirmation') refuse(`wallet ${index}: its history header names no split`);
+    if (head.split === 'confirmation' && ctx.historyRun.analysisFreezeTx !== o.analysisFreezeTx) refuse(`wallet ${index}: a confirmation-split wallet, and history-run.json does not name the analysis-freeze transaction given`);
+    if (!head.draw) refuse(`wallet ${index}: its history header has no draw`);
+    const kind = head.draw.kind;
+    if (kind !== 'random' && kind !== 'pilot') refuse(`wallet ${index}: its history header's draw has the kind ${JSON.stringify(kind)}, not random or pilot`);
+    if ((kind === 'pilot') !== (head.split === 'exploration')) refuse(`wallet ${index}: its split ${head.split} and its draw kind ${kind} disagree`);
+    if (head.split !== o.split) return { index, wallet: id, skip: 'otherSplit' };
+    hist = parseHistoryFile(text, { analysisFreezeTx: o.analysisFreezeTx });
   }
   const header = hist ? hist.header : null;
   const params = hist ? hist.params : SYNTHETIC_PARAMS;
@@ -491,9 +562,8 @@ export function reduceWallet(ctx, index, records) {
   let weight = { nDrawn: 1, nTaken: 1, w: 1 };
   let flags = {};
   if (header) {
-    if (!header.draw) refuse(`wallet ${index}: its history header has no draw`);
     group = header.draw.sizeGroup;
-    weight = groupWeight(ctx.draw, group);
+    weight = groupWeight(ctx.draw, group, header.draw.kind);
     flags = flagsOf(header.draw);
   }
 
@@ -537,6 +607,7 @@ export function reduceWallet(ctx, index, records) {
     index,
     wallet: id,
     split: header ? header.split : null,
+    kind: header ? header.draw.kind : null,
     group,
     weight,
     capped,
@@ -554,26 +625,43 @@ export function reduceWallet(ctx, index, records) {
 // other split left out; the counts of what was left out are in ctx.flow when
 // the stream ends. The stream's end checks the decompressed records against
 // done.json, so a caller treats nothing as read until the loop has ended.
+// With ctx.timings (a TimingCollector) the spend records' times of the kept
+// wallets are matched by wallet index and record number and added to it.
 export async function* walletTables(ctx) {
   const flow = { stage: 0, dropped: 0, otherSplit: 0, kept: 0 };
   ctx.flow = flow;
+  const cursor = ctx.timings ? new TimingCursor(join(ctx.stageDir, 'timings.jsonl.gz'), ctx.done.timings) : null;
+  if (ctx.timings && !ctx.done.timings) refuse('the replay stage has no timings digest in done.json');
   let index = -1;
   let current = null;
   let records = [];
-  const finish = function* () {
+  const finish = async () => {
     flow.stage++;
     const t = reduceWallet(ctx, index, records);
-    if (ctx.drop.has(t.wallet)) flow.dropped++;
-    else if (t.split !== null && t.split !== ctx.options.split) flow.otherSplit++;
-    else {
-      flow.kept++;
-      yield t;
+    const rows = cursor ? await cursor.take(index) : null;
+    if (t.skip) {
+      flow[t.skip]++;
+      return null;
     }
+    flow.kept++;
+    if (rows) {
+      for (const row of rows) {
+        const rec = records[row.n - 1];
+        if (!rec || rec.kind !== 'spend' || row.kind !== 'spend') continue;
+        if (typeof row.times.ms !== 'number') continue;
+        const arm = armOf(rec);
+        ctx.timings.add({ method: arm.method, kind: arm.kind, type: rec.type, ms: row.times.ms, spendable: rec.spendableUtxos });
+      }
+    }
+    return t;
   };
   for await (const r of recordLines(join(ctx.stageDir, 'records.jsonl.gz'), ctx.done)) {
     const w = String(r.wallet);
     if (w !== current) {
-      if (current !== null) yield* finish();
+      if (current !== null) {
+        const t = await finish();
+        if (t) yield t;
+      }
       index++;
       if (index >= ctx.entries.length) refuse('the records name more wallets than wallets.json lists');
       if (w !== walletOfEntry(ctx.entries[index])) refuse(`the records' wallet ${index} is not the one wallets.json lists`);
@@ -582,8 +670,12 @@ export async function* walletTables(ctx) {
     }
     records.push(r);
   }
-  if (current !== null) yield* finish();
+  if (current !== null) {
+    const t = await finish();
+    if (t) yield t;
+  }
   if (index + 1 !== ctx.entries.length) refuse('the records name fewer wallets than wallets.json lists');
+  if (cursor) await cursor.end();
 }
 
 // Every wallet table, collected. For the tests and small studies; a study

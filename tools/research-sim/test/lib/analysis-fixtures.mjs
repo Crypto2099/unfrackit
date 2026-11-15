@@ -26,7 +26,7 @@
 // 20, and `deposits` defaults to their sum (type 0 at the key deposit,
 // 2,000,000) plus newPools pool deposits (500,000,000).
 
-import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, chmodSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
@@ -66,6 +66,8 @@ export function built(intent, o = {}) {
     dragBytes: 0,
     policies: [],
     collateralUsed: null,
+    ...(o.spendable === undefined ? {} : { spendableUtxos: o.spendable }),
+    ...(o.ms === undefined ? {} : { ms: o.ms }),
     utxosAfter: o.utxos === undefined ? 3 : o.utxos,
     largestValueBytesAfter: o.bytesAfter === undefined ? 5 : o.bytesAfter,
     lockedAdaAfter: String(o.locked || 0),
@@ -180,6 +182,17 @@ function intentEvent(i, it) {
   };
 }
 
+// The draw of a frame: the sample's groups and the pilot's. Weights D/A are the
+// same for both, B0 10, B1 2, B2 2 and B3 1, so a test that is not about the
+// pilot reads one number whichever kind a wallet has.
+export const DEFAULT_DRAW = {
+  quotaScale: '1',
+  sampleN: 100,
+  historyCap: 1000,
+  groups: { B0: { quota: null, nDrawn: 100, nTaken: 10 }, B1: { quota: 50, nDrawn: 40, nTaken: 20 }, B2: { quota: 10, nDrawn: 10, nTaken: 5 }, B3: { quota: 2, nDrawn: 2, nTaken: 2 } },
+  pilot: { quotaScale: '1', sampleN: 10, historyCap: 1000, groups: { B0: { quota: null, nDrawn: 50, nTaken: 5 }, B1: { quota: 5, nDrawn: 4, nTaken: 2 }, B2: { quota: 1, nDrawn: 2, nTaken: 1 }, B3: { quota: 1, nDrawn: 1, nTaken: 1 } } }
+};
+
 const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
 const put = (path, data) => {
   writeFileSync(path, data, { mode: 0o600 });
@@ -199,12 +212,43 @@ export function writeStudy(root, desc) {
   mkdirSync(stageDir, { recursive: true });
   put(join(studyDir, 'study.json'), JSON.stringify({ command: 'study', plan: synthetic ? 'synthetic' : 'corpus', network, runId, stages: [`replay-${window}`], collateralRule: { rule, source: '--collateral-rule' } }, null, 2) + '\n');
 
-  const draw = desc.draw === undefined ? { quotaScale: '1', sampleN: 100, historyCap: 1000, groups: { B0: { quota: null, nDrawn: 100, nTaken: 10 }, B1: { quota: 50, nDrawn: 40, nTaken: 20 }, B2: { quota: 10, nDrawn: 10, nTaken: 5 }, B3: { quota: 2, nDrawn: 2, nTaken: 2 } } } : desc.draw;
+  const draw = desc.draw === undefined ? DEFAULT_DRAW : desc.draw;
   const entries = [];
-  const records = [];
+  const recordsPath = join(stageDir, 'records.jsonl.gz');
+  const timingsPath = join(stageDir, 'timings.jsonl.gz');
+  writeFileSync(recordsPath, '', { mode: 0o600 });
+  writeFileSync(timingsPath, '', { mode: 0o600 });
+  // The joined streams as the stage writes them: each wallet's lines one gzip
+  // member, the digest over the decompressed bytes; a record's ms moves to a
+  // timing row under the record's number within the wallet.
+  const digest = { records: { hash: createHash('sha256'), bytes: 0, lines: 0 }, timings: { hash: createHash('sha256'), bytes: 0, lines: 0 } };
+  const flush = (which, path, rows) => {
+    if (!rows.length) return;
+    const text = jsonl(rows);
+    const d = digest[which];
+    d.hash.update(text);
+    d.bytes += Buffer.byteLength(text);
+    d.lines += rows.length;
+    appendFileSync(path, gzipSync(Buffer.from(text)));
+  };
+  const writeWalletRecords = (walletIndex, recs) => {
+    const lines = [];
+    const times = [];
+    recs.forEach((r, i) => {
+      const { ms, ...rest } = r;
+      lines.push(rest);
+      if (typeof ms === 'number') times.push({ walletIndex, n: i + 1, kind: r.kind, wallet: r.wallet, window: r.window, arm: r.arm, variant: r.variant, method: r.method, change: r.change, collateral: r.collateral, repetition: r.repetition, times: { ms } });
+    });
+    flush('records', recordsPath, lines);
+    flush('timings', timingsPath, times);
+  };
+  const all = desc.mutate ? [] : null;
+  let confirmationWallets = 0;
+  let walletIndex = 0;
   for (const w of desc.wallets) {
     const id = String(w.id);
     const jobs = w.jobs || [];
+    if (w.split === 'confirmation') confirmationWallets++;
     const nIntents = w.intents ? w.intents.length : Math.max(0, ...jobs.flatMap((j) => (j.spends || []).map((s) => s.intent + 1)));
     const intents = w.intents || Array.from({ length: nIntents }, () => ({}));
     if (synthetic) entries.push({ shape: id });
@@ -218,7 +262,7 @@ export function writeStudy(root, desc) {
         frame: window,
         split: w.split === undefined ? 'exploration' : w.split,
         sample: null,
-        draw: { sizeGroup: w.group || 'B1', nWindowTx: 10, capped: !!w.capped, historyHi: 100, ...(w.flags || {}) },
+        draw: { sizeGroup: w.group || 'B1', nWindowTx: 10, capped: !!w.capped, historyHi: 100, kind: w.kind || ((w.split === undefined ? 'exploration' : w.split) === 'exploration' ? 'pilot' : 'random'), ...(w.flags || {}) },
         window: null,
         snapshot: null,
         params: PARAMS(network, w),
@@ -229,25 +273,44 @@ export function writeStudy(root, desc) {
       put(join(historyDir, 'history', name), text);
       entries.push({ file: name, sha256: sha256(Buffer.from(text)) });
     }
+    const recs = [];
     for (const job of jobs) {
       const key = keyOf(synthetic ? id : Number(id), synthetic ? 'synthetic' : window, w.collateral || rule, job);
       if (job.refused) {
-        records.push({ kind: 'refused', ...key, reason: job.refused });
+        recs.push({ kind: 'refused', ...key, reason: job.refused });
         continue;
       }
-      for (const s of job.spends || []) records.push({ ...s, ...key });
-      records.push(walletArm(key, w, job));
+      for (const s of typeof job.spends === 'function' ? job.spends() : job.spends || []) recs.push({ ...s, ...key });
+      recs.push(walletArm(key, w, job));
     }
+    if (all) all.push(...recs);
+    else writeWalletRecords(walletIndex, recs);
+    walletIndex++;
   }
-  if (desc.mutate) desc.mutate(records);
-  const text = jsonl(records);
-  const gz = gzipSync(Buffer.from(text));
-  put(join(stageDir, 'records.jsonl.gz'), gz);
+  if (all) {
+    desc.mutate(all);
+    const byWallet = new Map();
+    for (const r of all) {
+      const k = String(r.wallet);
+      if (!byWallet.has(k)) byWallet.set(k, []);
+      byWallet.get(k).push(r);
+    }
+    [...byWallet.values()].forEach((recs, i) => writeWalletRecords(i, recs));
+  }
+  const gzBytes = (path) => statSync(path).size;
+  const dig = (which) => ({ sha256: digest[which].hash.digest('hex'), bytes: digest[which].bytes, lines: digest[which].lines, gzipBytes: gzBytes(which === 'records' ? recordsPath : timingsPath) });
   put(join(stageDir, 'wallets.json'), JSON.stringify(entries, null, 2) + '\n');
   const runText = JSON.stringify({ stage: 'test' }) + '\n';
   put(join(stageDir, 'run.json'), runText);
-  put(join(stageDir, 'done.json'), JSON.stringify({ runSha256: sha256(Buffer.from(runText)), wallets: entries.length, records: { sha256: sha256(Buffer.from(text)), bytes: Buffer.byteLength(text), lines: records.length, gzipBytes: gz.length }, counts: {} }, null, 2) + '\n');
-  if (!synthetic) put(join(historyDir, 'history-run.json'), JSON.stringify({ network, runId, studyTables: 'read', draw: draw === null ? null : { [window]: draw }, analysisFreezeTx: desc.analysisFreezeTx || null, confirmationWallets: desc.wallets.filter((w) => w.split === 'confirmation').length, runs: [] }, null, 2) + '\n');
+  put(join(stageDir, 'done.json'), JSON.stringify({ runSha256: sha256(Buffer.from(runText)), wallets: entries.length, records: dig('records'), timings: dig('timings'), counts: {} }, null, 2) + '\n');
+  if (desc.machines) {
+    mkdirSync(join(stageDir, 'machines'), { recursive: true });
+    for (const m of desc.machines) {
+      put(join(stageDir, 'machines', `${m.label}.json`), JSON.stringify({ label: m.label, invocations: m.invocations }, null, 2) + '\n');
+      put(join(stageDir, 'machines', `${m.label}.log.jsonl`), jsonl(m.log || []));
+    }
+  }
+  if (!synthetic) put(join(historyDir, 'history-run.json'), JSON.stringify({ network, runId, studyTables: 'read', draw: draw === null ? null : { [window]: draw }, analysisFreezeTx: desc.analysisFreezeTx || null, confirmationWallets, runs: [] }, null, 2) + '\n');
   if (desc.census) {
     mkdirSync(join(studyDir, 'census'), { recursive: true });
     put(join(studyDir, 'census', 'census.jsonl'), jsonl(desc.census));
@@ -257,4 +320,4 @@ export function writeStudy(root, desc) {
 }
 
 // The options of a read of a fixture written by writeStudy.
-export const optionsFor = (root, w, o = {}) => ({ network: w.network, study: w.runId, window: w.window, split: 'exploration', out: '/nonexistent-out', root, ...o });
+export const optionsFor = (root, w, o = {}) => ({ network: w.network, study: w.runId, window: w.window, ...(w.network === 'synthetic' ? {} : { split: 'exploration' }), out: '/nonexistent-out', root, ...o });
