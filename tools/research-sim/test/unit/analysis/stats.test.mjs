@@ -224,3 +224,12 @@ test('bootstrap: identical across two runs, input order, and 1, 2 and 4 workers'
   const shuffled = cells.map((c) => ({ ...c, wallets: [...c.wallets].reverse() }));
   assert.equal(JSON.stringify(await bootstrap(shuffled, { ...opts, workers: 2 })), base);
 });
+
+test('cells beyond one batch give the same results as the same cells in separate calls', async () => {
+  const cell = (i) => ({ name: `batch/${i}`, statistic: 'mean', wallets: Array.from({ length: 5 }, (_, k) => ({ id: `w${k}`, group: 'B1', weight: 1 + (k % 2), v: [((i * 7 + k * 3) % 11) - 5] })) });
+  const cells = Array.from({ length: 600 }, (_, i) => cell(i));
+  const whole = await bootstrap(cells, { resamples: 20 });
+  const parts = [...(await bootstrap(cells.slice(0, 300), { resamples: 20 })), ...(await bootstrap(cells.slice(300), { resamples: 20 }))];
+  assert.deepEqual(whole, parts);
+  assert.equal(whole.length, 600);
+});

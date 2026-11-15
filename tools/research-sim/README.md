@@ -150,6 +150,7 @@ Every transaction read from either source must hash to db-sync's transaction has
 | `merge-stage --into <dir> [--machine <label>] <source dir>...` | The shards of one replay stage, written in several directories, joined into the stage in `--into`, which then ends as an unsharded stage does ("A replay split across machines" below). |
 | `fidelity --treatment <dir> [--treatment-pins <file>] --history <file or dir>...` | Every observed spend that runs no script, rebuilt by the ledger kit, its minimum fee compared with the one its observed size implies: per window, the share within 2% and whether it reaches 99% ("The fidelity check" below). `--run-id`, `--analysis-freeze-tx`. Reads no database. |
 | `study --plan synthetic\|preprod\|corpus --run-id <id> --treatment <dir> [--treatment-pins <file>]` | The study's run: a plan's stages in order under one run ID, resumed at the first unfinished stage when run again ("The study run" below). `--shard`, `--wallet-indexes` and `--stop-before <stage>` split it across machines ("The study split across machines" below). |
+| `analyze --network <name> --study <run-id> --split exploration\|confirmation [--analysis-freeze-tx <hash>] [--drop <file>] [--workers <n>] --out <dir>` | A study's replay stages of both windows analyzed on one split: the verdicts, the items beside them, H-7, H-9 and H-11, the census, the sizing and the build times ("The analysis" below). `--network synthetic` takes no `--split`. `--resamples`, `--sizing-samples` and `--sizing-resamples` set the bootstrap sizes. |
 | `live-fire --run-id sim-<id> --extraction-run <id> --purpose <text> --expect-network <name> --treatment <dir> [--treatment-pins <file>]` | Before the final freeze, the simulator's steps on the wallets an extraction live-fire run picked, logged in the extraction tool's check log in functional terms only, with the wallet-level output deleted at the end ("Live-fire checks" below). `--workers`, `--bytes`, `--immutable-dir`, `--immutable-host`, `--keep-for-debug`; `live-fire --cleanup --run-id sim-<id> --network <name>` deletes a kept run's output. |
 | `hash` | SHA-256 of every hashed file, the pinned dependencies and the Node version. Also `npm run hash`. |
 
@@ -426,6 +427,34 @@ The replay stages can be split between machines; every other stage runs once, on
 A synthetic plan has no stage before its replays and takes its collateral rule from `--collateral-rule`, so each machine starts its shard with no copy (step 4), and steps 5 and 6 follow.
 
 The refusals. A sharded study is refused before anything is written when a stage other than the replays has no end entry in the log ("run the stages before the replays where the database is reachable"), when an end entry records no outputs (a log written before outputs were recorded), and when a stage's directory does not hold the outputs its end recorded, naming the stage with the recorded and present file counts and bytes. The replay refuses an index file it cannot read, one that is not a `plan-shards` file, one with no entry for its plan, one planned for another wallet list, and one whose indexes are not increasing indexes below the wallet count. `plan-shards` refuses a `--machines` entry that is not `<label>` or `<label>=<positive number>`, a label given twice, a file in `--out` planned for other machines, and the shapes without `--treatment`. `merge-stage`'s refusals are listed under "A replay split across machines" above.
+
+## The analysis
+
+`analyze` computes the results of pre-registration section 7 from a study run's replay stages and writes them to `--out`, a directory it creates (mode 0700, files 0600) and refuses when it is not empty. It reads the stages of both windows, `replay-recent` and `replay-peak`, and for a corpus study the history stages, the census and the carried collateral and near-cap reports of the same study run. It reads no database and loads no CSL.
+
+```
+node src/cli.mjs analyze --network <name> --study <run-id> --split exploration|confirmation \
+  [--analysis-freeze-tx <hash>] [--drop <file>] [--workers <n>] --out <dir>
+node src/cli.mjs analyze --network synthetic --study <run-id> [--drop <file>] [--workers <n>] --out <dir>
+```
+
+The splits. A sampled wallet is a confirmation wallet (draw kind `random`) and weighs `nDrawn / nTaken` of its size group in the sample's draw. A pilot wallet is an exploration wallet (kind `pilot`) and weighs the same ratio of the pilot's own draw. Every result is computed on the chosen split's wallets, the verdicts and the peak window included; the census of H-8 keeps every eligible wallet. A wallet whose split and draw kind disagree is refused. `--split confirmation` needs `--analysis-freeze-tx`, and `history-run.json` must name the same transaction. A synthetic-plan study takes no `--split`: every wallet enters, in group B0 at weight 1.
+
+What is refused, before anything is written: a replay stage of either window that has no `done.json` or whose decompressed records or timing rows do not hash to it, a wallet whose history file does not match `wallets.json`, a record of an unknown kind, arm, variant, change or method, a stage missing any of the 23 libraries or the rule's two arms for a wallet, a wallet whose jobs disagree on `collateral` or whose collateral rule differs from `study.json`'s, a wallet whose header, history end and wallet-arm records disagree on `capped`, a draw missing a size group of the sample or the pilot, and a chained answer whose fixed fee part no history intent or single-transaction record of the same intent gives. A synthetic study's missing `replay-peak` stage is skipped; a corpus study's is refused.
+
+Outputs:
+
+| File | Content |
+|---|---|
+| `results.json` | Every figure as canonical JSON (keys sorted, lovelace as decimal strings): questions 1 and 2 on the recent and the peak window, the items beside the verdicts with their breakdowns by size group, spend type and fragmentation flag, H-7, H-9 and H-11, the census, the exclusion flow of each window, the carried collateral and near-cap figures, and the four sensitivity re-runs. Every cell carries its wallet count; a cell under ten wallets carries the count and no estimate, and a size breakdown whose merge reaches B0 is written as an absent cell. No wallet id, path, time of day, host fact or wall-clock value. |
+| `verdicts.json`, `verdicts.md` | The four outcomes per library, across libraries, the answers of the two questions and the two defaults, and the same for each sensitivity re-run; the Markdown is generated from the JSON by a fixed template. |
+| `sizing.json` | The detectable effect of each primary outcome and library, simulated on the pilot, in an exploration or synthetic run only. For each cell and size group the target is the sample's `A_k` times the share of the pilot's wallets of that group that enter the cell, rounded half up; no confirmation record is read. |
+| `timings.json` | The build times of every spend record by library and arm, by method and spend type and by method and the count of spendable UTxOs before the spend, and each machine's label, host facts, worker counts and rerun counts. The only output that carries them. |
+| `inputs.json` | Each input file by role with its SHA-256, the code manifest's SHA-256, Node's version and the options that decide a figure. |
+
+The sensitivity re-runs recompute questions 1 and 2 with their verdicts and defaults on the chosen split without the wallets whose draw flag `franken_any`, `franken_no_cospend` or `prior_treated` is set, and on the `prior_treated` wallets only. `--drop <file>`, a private list of wallet ids (a JSON array or one id per line), leaves wallets out of every result and is recorded in `inputs.json` by its SHA-256 only.
+
+Two runs over the same input files write the same bytes at any `--workers`; the workers only share the bootstrap. Each bootstrap cell draws its resamples from a stream named by the cell, 10,000 resamples by default (`--resamples`), 1,000 samples of 1,000 resamples for the sizing (`--sizing-samples`, `--sizing-resamples`). A corpus run holds every wallet's table in memory: a table keeps only the values the computations read, so a spend is about 210 bytes and a wallet of 1,000 intents in 192 runs about 40 MB.
 
 ## Running jobs unattended
 

@@ -13,7 +13,7 @@
 //     flags = {}, minFeeA = 44, maxValSize = 5000, intents, jobs }] }.
 // A synthetic study (network 'synthetic') has no history stage and no draw;
 // its wallets are shapes named by id.
-// A job: { method, arm: 'own' | 'layout' | 'on' | 'off', rep = 1, spends,
+// A job: { method, arm: 'own' | 'layout' | 'on' | 'off', rep = 1, spends (a list, or a function giving it),
 //   wa (fields of the wallet-arm record), refused (a reason) }.
 // A spend is made with built(), failed() and the other makers below; the
 // record's key and the defaults the trunk's records carry are filled in.
@@ -282,8 +282,9 @@ export function writeStudy(root, desc) {
         recs.push({ kind: 'refused', ...key, reason: job.refused });
         continue;
       }
-      for (const s of typeof job.spends === 'function' ? job.spends() : job.spends || []) recs.push({ ...s, ...key });
-      recs.push(walletArm(key, w, job));
+      const spends = typeof job.spends === 'function' ? job.spends() : job.spends || [];
+      for (const s of spends) recs.push({ ...s, ...key });
+      recs.push(walletArm(key, w, { ...job, spends }));
     }
     if (all) all.push(...recs);
     else writeWalletRecords(walletIndex, recs);

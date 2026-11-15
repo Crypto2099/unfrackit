@@ -30,6 +30,7 @@ import { makeRng } from '../shapes/rng.mjs';
 // record is analyzed and never changed afterwards.
 export const SEED_CONSTANT = 20261114;
 export const CHUNK_SIZE = 250;
+export const BATCH_CELLS = 512;
 export const RESAMPLES = 10000;
 export const LEVEL_DECISION = 0.9875;
 export const LEVEL_REPORT = 0.95;
@@ -296,6 +297,15 @@ function levelKey(level) {
 // (such resamples are left out of the percentiles). A cell with no wallets has
 // a null estimate and null intervals.
 export async function bootstrap(cells, { workers = 1, resamples = RESAMPLES, levels = [LEVEL_DECISION, LEVEL_REPORT] } = {}) {
+  // The cells go through in batches, so that the resamples of the cells of one
+  // batch are all that is held at once; each cell's stream is its own, so the
+  // result is the same at any batch size.
+  const out = [];
+  for (let i = 0; i < cells.length; i += BATCH_CELLS) out.push(...(await bootstrapBatch(cells.slice(i, i + BATCH_CELLS), { workers, resamples, levels })));
+  return out;
+}
+
+async function bootstrapBatch(cells, { workers, resamples, levels }) {
   const tasks = [];
   const owners = [];
   cells.forEach((cell, ci) => {
