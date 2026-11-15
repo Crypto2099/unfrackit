@@ -101,13 +101,14 @@ test('per-wallet flags on study.sample: each reported count equals the sum of it
   await runBlock('reconstruction_check_table');
   await db.exec('CREATE TABLE study.sample_frame (frame text, sa_id bigint, lo bigint, hi bigint, PRIMARY KEY (frame, sa_id))');
   const A = '0a'.repeat(28), B = '0b'.repeat(28), C = '0c'.repeat(28), D = '0d'.repeat(28), E = '0e'.repeat(28), F = '0f'.repeat(28);
-  const wallets = [21, 22, 23, 24, 25, 26, 27];
+  const wallets = [21, 22, 23, 24, 25, 26, 27, 28];
   await db.exec(`INSERT INTO study.sample_wallet VALUES ${wallets.map((w) => `(${w})`).join(', ')}`);
   for (const w of wallets) {
     for (const frame of ['recent', 'peak']) {
-      if (frame === 'peak' && w === 27) continue; // one wallet in one frame only
+      if (frame === 'peak' && w >= 27) continue; // one wallet in one frame only
+      // 28 is a pilot wallet: extracted like the others, counted apart.
       await db.query(`INSERT INTO study.sample (frame, kind, sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi)
-                      VALUES ($1, 'random', $2, $2, 'B0', 1, 1, 1, false, 1)`, [frame, w]);
+                      VALUES ($1, $3, $2, $2, 'B0', 1, 1, 1, false, 1)`, [frame, w, w === 28 ? 'pilot' : 'random']);
       await db.query('INSERT INTO study.sample_frame VALUES ($1, $2, 1, 100000)', [frame, w]);
     }
   }
@@ -126,8 +127,12 @@ test('per-wallet flags on study.sample: each reported count equals the sum of it
   await out({ sa: 26, created: 1, consumed: 240, cred: B });
   await out({ sa: 27, created: 1, consumed: 250, cred: A });
   await out({ sa: 27, created: 1, consumed: 250, cred: B });
+  // 28, a pilot wallet, is flagged and treated like 21.
+  await out({ sa: 28, created: 1, consumed: 260, cred: A });
+  await out({ sa: 28, created: 1, consumed: 260, cred: B });
+  await out({ sa: 28, created: 1, consumed: 261, cred: C });
   // Prior-treated: 21 a UnFrack.It key spend (tx 200), 22 a script-only match, 23 an Evolution split, 26 both, 25 neither.
-  await db.exec(`INSERT INTO study.unfrackit_tx VALUES (200, 'json'), (240, 'json'), (212, 'json')`);
+  await db.exec(`INSERT INTO study.unfrackit_tx VALUES (200, 'json'), (240, 'json'), (212, 'json'), (260, 'json')`);
   await out({ sa: 22, created: 1, consumed: 212, cred: '5c'.repeat(28), script: true });
   const e = 1000000;
   let tx = 300;
@@ -142,16 +147,21 @@ test('per-wallet flags on study.sample: each reported count equals the sum of it
   await runBlock('prior_flags', params());
   await runBlock('franken', params());
 
-  const fr = (await rows(blocks.get('franken_counts').statements[0]))[0];
-  const flagSum = async (col) => Number((await rows(`SELECT count(DISTINCT sa_id) AS n FROM study.sample WHERE ${col} AND reconstruction_excluded IS NOT TRUE`))[0].n);
+  // The reported counts are the sample's: the pilot wallet 28 is counted in its own row.
+  const frRows = await rows(blocks.get('franken_counts').statements[0]);
+  assert.deepEqual(frRows.map((r) => [r.kind, Number(r.n_wallets_flagged)]), [['pilot', 1], ['random', 1]]);
+  const fr = frRows.find((r) => r.kind === 'random');
+  const flagSum = async (col) => Number((await rows(`SELECT count(DISTINCT sa_id) AS n FROM study.sample WHERE kind = 'random' AND ${col} AND reconstruction_excluded IS NOT TRUE`))[0].n);
   assert.equal(Number(fr.n_wallets_flagged), 1);
   assert.equal(await flagSum('franken_any'), Number(fr.n_wallets_flagged));
   assert.equal(Number(fr.n_multi_cred_no_cospend), 1);
   assert.equal(await flagSum('franken_no_cospend'), Number(fr.n_multi_cred_no_cospend));
-  const prior = await rows(blocks.get('prior_counts').statements[0]);
+  const priorAll = await rows(blocks.get('prior_counts').statements[0]);
+  assert.deepEqual(priorAll.filter((p) => p.kind === 'pilot').map((p) => [p.frame, Number(p.n_wallets), Number(p.unfrackit_any)]), [['recent', 1, 1]]);
+  const prior = priorAll.filter((p) => p.kind === 'random');
   assert.equal(prior.length, 2);
   for (const p of prior) {
-    const sum = async (col) => Number((await rows(`SELECT count(*) AS n FROM study.sample WHERE frame = $1 AND ${col} AND reconstruction_excluded IS NOT TRUE`, [p.frame]))[0].n);
+    const sum = async (col) => Number((await rows(`SELECT count(*) AS n FROM study.sample WHERE kind = 'random' AND frame = $1 AND ${col} AND reconstruction_excluded IS NOT TRUE`, [p.frame]))[0].n);
     assert.equal(await sum('unfrackit_user'), Number(p.unfrackit_any));
     assert.equal(await sum('evolution_tidied'), Number(p.evolution_any));
   }

@@ -9,9 +9,10 @@
 // the window's transactions, quotas filled in draw order with later wallets
 // of a full group skipped and counted, the stop at the full sample, the
 // guard, the frame's end, the quota scale, held UTxOs, the history cap and
-// where each history ends); the fragmentation flag on every sample row; the
+// where each history ends, and the pilot drawn after the sample by the same
+// statement of the rule); the fragmentation flag on every sample row; the
 // state step's fragmentation measure; and the split on a fixture small
-// enough to check by hand.
+// enough to check by hand (the pilot exploration, every sampled wallet confirmation).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -133,19 +134,21 @@ test('stages, flow, draw order, samples and split on the fixture', async () => {
     // transactions in the window; two UTxOs at the snapshot.
     assert.deepEqual([r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)], ['B0', 0, 2, Number(r.sa_id), false, 1]);
   }
-  assert.equal((await rows(`SELECT count(*) AS n FROM study.sample WHERE kind <> 'random'`))[0].n, 0);
+  // The pilot continues after the sample's stopping point: 12, the one
+  // candidate left, is the recent frame's pilot (pilot_n 100 is not reached);
+  // the peak frame has no 12-th key, so its pilot is whatever candidates the
+  // peak order holds after its own sample.
+  const pilotRecent = await rows(`SELECT sa_id, draw_rank FROM study.sample WHERE frame = 'recent' AND kind = 'pilot'`);
+  assert.deepEqual(pilotRecent.map((r) => [Number(r.sa_id), Number(r.draw_rank)]), [[Number(cands[2].sa_id), Number(cands[2].k)]]);
   const sum = (await rows(`SELECT k_full, k_stop, guard_reached, n_taken FROM study.draw_summary WHERE frame = 'recent'`))[0];
   assert.deepEqual([Number(sum.k_full), Number(sum.k_stop), sum.guard_reached, Number(sum.n_taken)], [Number(cands[1].k), Number(cands[1].k), false, 2]);
 
   await db.exec(`CREATE TABLE study.sample_frame_dummy (x int)`);
   await runBlock('split', p);
-  // One label per credential: every sampled credential ranked once by its split
-  // key, the first floor(N / 5) exploration (the one-label rule of split.sql).
-  const all = await rows(`SELECT DISTINCT s.sa_id, encode(f.split_key, 'hex') AS k FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id ORDER BY k`);
-  const nExp = Math.floor(all.length / 5);
-  const want = new Map(all.map((r, i) => [Number(r.sa_id), i < nExp ? 'exploration' : 'confirmation']));
+  // The label follows the kind: pilot rows exploration, sample rows confirmation.
   const got = await rows(`SELECT frame, kind, sa_id, split FROM study.sample`);
-  for (const r of got) assert.equal(r.split, want.get(Number(r.sa_id)), `${r.frame} ${r.kind} ${r.sa_id}`);
+  assert.ok(got.some((r) => r.kind === 'pilot') && got.some((r) => r.kind === 'random'));
+  for (const r of got) assert.equal(r.split, r.kind === 'pilot' ? 'exploration' : 'confirmation', `${r.frame} ${r.kind} ${r.sa_id}`);
 });
 
 // The published draw vector: h is preprod's epoch 320 nonce (as db-sync's
@@ -188,43 +191,63 @@ const GROUPS = ['B0', 'B1', 'B2', 'B3'];
 
 // Each quota is its value times s rounded to a whole number, halves up,
 // computed exactly from s's decimal digits.
-function quotaAt(base, s) {
+function quotaAt(base, s, mult = 1, div = 1) {
   const [whole, frac = ''] = s.split('.');
-  const den = 10n ** BigInt(frac.length);
-  return Number((2n * BigInt(base) * BigInt(whole + frac) + den) / (2n * den));
+  const den = 10n ** BigInt(frac.length) * BigInt(div);
+  return Number((2n * BigInt(base) * BigInt(whole + frac) * BigInt(mult) + den) / (2n * den));
 }
 
 function rule({ wallets, txo }, settings, windows = W) {
   const out = {};
-  for (const frame of ['recent', 'peak']) {
+  const eligOf = (frame) => wallets.filter((x) => x.frames[frame] && x.frames[frame].eligible).sort((a, b) => Buffer.compare(a.frames[frame].key, b.frames[frame].key));
+  // A candidate's place: the group, the counts and the history end.
+  const place = (x, frame, w) => {
+    const f = x.frames[frame];
+    const rows = txo.filter((t) => t.sa === x.sa);
+    const start = rows.filter((t) => t.created <= w.t_start && (t.consumed === null || t.consumed > w.t_start) && (settings.x9_count_held || !t.held)).length;
+    const txs = [...new Set(rows.flatMap((t) => [t.created, t.consumed]).filter((v) => v !== null && v >= w.lo && v <= w.hi))].sort((a, b) => a - b);
+    const u = Math.max(start, f.nUtxo);
+    const t = txs.length;
+    const reaches = (e) => u >= e || t >= e;
+    const g = reaches(settings.group_edge_b3) ? 'B3' : reaches(settings.group_edge_b2) ? 'B2' : reaches(settings.group_edge_b1) ? 'B1' : 'B0';
+    const capped = t > settings.history_cap;
+    return { sa: x.sa, g, start, ref: f.nUtxo, t, capped, hi: capped ? txs[settings.history_cap - 1] : w.hi };
+  };
+  // One draw over a frame's order from key k0 + 1: candidates not in `skip`,
+  // taken under the quotas until `n` are taken.
+  const run = (frame, elig, k0, quota, n, skip) => {
     const w = windows[frame];
-    const elig = wallets.filter((x) => x.frames[frame] && x.frames[frame].eligible).sort((a, b) => Buffer.compare(a.frames[frame].key, b.frames[frame].key));
-    const quota = { B0: null, B1: quotaAt(settings.quota_b1, settings.quota_scale), B2: quotaAt(settings.quota_b2, settings.quota_scale), B3: quotaAt(settings.quota_b3, settings.quota_scale) };
     const groups = Object.fromEntries(GROUPS.map((g) => [g, { quota: quota[g], drawn: 0, taken: 0 }]));
     const sample = [];
     let kFull = null;
-    for (let k = 1; k <= Math.min(elig.length, settings.guard); k++) {
+    for (let k = k0 + 1; k <= Math.min(elig.length, settings.guard); k++) {
       const x = elig[k - 1];
       const f = x.frames[frame];
-      if (!(f.tok && f.ge5)) continue;
-      const rows = txo.filter((t) => t.sa === x.sa);
-      const start = rows.filter((t) => t.created <= w.t_start && (t.consumed === null || t.consumed > w.t_start) && (settings.x9_count_held || !t.held)).length;
-      const txs = [...new Set(rows.flatMap((t) => [t.created, t.consumed]).filter((v) => v !== null && v >= w.lo && v <= w.hi))].sort((a, b) => a - b);
-      const u = Math.max(start, f.nUtxo);
-      const t = txs.length;
-      const reaches = (e) => u >= e || t >= e;
-      const g = reaches(settings.group_edge_b3) ? 'B3' : reaches(settings.group_edge_b2) ? 'B2' : reaches(settings.group_edge_b1) ? 'B1' : 'B0';
-      groups[g].drawn++;
-      if (quota[g] !== null && groups[g].taken >= quota[g]) continue;
-      groups[g].taken++;
-      const capped = t > settings.history_cap;
-      sample.push({ sa: x.sa, k, g, start, ref: f.nUtxo, t, capped, hi: capped ? txs[settings.history_cap - 1] : w.hi });
-      if (sample.length === settings.sample_n) {
+      if (!(f.tok && f.ge5) || skip.has(x.sa)) continue;
+      const p = place(x, frame, w);
+      groups[p.g].drawn++;
+      if (quota[p.g] !== null && groups[p.g].taken >= quota[p.g]) continue;
+      groups[p.g].taken++;
+      sample.push({ ...p, k });
+      if (sample.length === n) {
         kFull = k;
         break;
       }
     }
-    out[frame] = { sample, groups, kFull, kStop: kFull ?? Math.min(settings.guard, elig.length), guardReached: kFull === null && elig.length >= settings.guard, nEligible: elig.length };
+    return { sample, groups, kFull, kStop: kFull ?? Math.min(settings.guard, elig.length), guardReached: kFull === null && elig.length >= settings.guard, nEligible: elig.length };
+  };
+  const sampled = new Set();
+  for (const frame of ['recent', 'peak']) {
+    const quota = { B0: null, B1: quotaAt(settings.quota_b1, settings.quota_scale), B2: quotaAt(settings.quota_b2, settings.quota_scale), B3: quotaAt(settings.quota_b3, settings.quota_scale) };
+    out[frame] = run(frame, eligOf(frame), 0, quota, settings.sample_n, new Set());
+    for (const x of out[frame].sample) sampled.add(x.sa);
+  }
+  // The pilot: after each frame's sample stopping point, outside both samples,
+  // quotas scaled by pilot_n / sample_n, at least one each.
+  for (const frame of ['recent', 'peak']) {
+    const q = (b) => Math.max(1, quotaAt(b, settings.quota_scale, settings.pilot_n, settings.sample_n));
+    const quota = { B0: null, B1: q(settings.quota_b1), B2: q(settings.quota_b2), B3: q(settings.quota_b3) };
+    out[frame].pilot = run(frame, eligOf(frame), out[frame].kStop, quota, settings.pilot_n, sampled);
   }
   return out;
 }
@@ -286,7 +309,7 @@ async function loadWorld(db, { wallets, txo }) {
                     FROM json_to_recordset($1::json) AS x(id bigint, created bigint, consumed bigint, sa bigint, held boolean)`, [JSON.stringify(txo)]);
 }
 
-const SMALL = { sample_n: 15, group_edge_b1: 5, group_edge_b2: 10, group_edge_b3: 20, quota_b1: 3, quota_b2: 2, quota_b3: 1, history_cap: 8, guard: 1000 };
+const SMALL = { sample_n: 15, pilot_n: 6, group_edge_b1: 5, group_edge_b2: 10, group_edge_b3: 20, quota_b1: 3, quota_b2: 2, quota_b3: 1, history_cap: 8, guard: 1000 };
 
 // Runs the activity and draw steps (and the split) on a loaded world, and
 // compares every sample row, group and frame summary with the rule above.
@@ -298,28 +321,30 @@ async function drawAgainstRule(h, w, over, windows = W) {
   await h.runBlock('split', p);
   const want = rule(w, settings, windows);
   for (const frame of ['recent', 'peak']) {
-    const m = want[frame];
-    const got = await h.rows(`SELECT sa_id, kind, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 ORDER BY draw_rank`, [frame]);
-    assert.deepEqual(
-      got.map((r) => [Number(r.sa_id), r.kind, Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)]),
-      m.sample.map((x) => [x.sa, 'random', x.k, x.g, x.start, x.ref, x.t, x.capped, x.hi]),
-      `${frame}: the sample`
-    );
-    const groups = await h.rows(`SELECT size_group, quota, n_drawn, n_taken, n_skipped FROM study.draw_group WHERE frame = $1 ORDER BY size_group`, [frame]);
-    assert.deepEqual(
-      groups.map((r) => [r.size_group, r.quota === null ? null : Number(r.quota), Number(r.n_drawn), Number(r.n_taken), Number(r.n_skipped)]),
-      GROUPS.map((g) => [g, m.groups[g].quota, m.groups[g].drawn, m.groups[g].taken, m.groups[g].drawn - m.groups[g].taken]),
-      `${frame}: D_k and A_k`
-    );
-    const sum = (await h.rows(`SELECT k_full, k_stop, n_eligible, guard_reached, n_drawn, n_taken, sample_n, quota_scale::text AS s, history_cap FROM study.draw_summary WHERE frame = $1`, [frame]))[0];
-    assert.deepEqual(
-      [sum.k_full === null ? null : Number(sum.k_full), Number(sum.k_stop), Number(sum.n_eligible), sum.guard_reached, Number(sum.n_drawn), Number(sum.n_taken), Number(sum.sample_n), sum.s, Number(sum.history_cap)],
-      [m.kFull, m.kStop, m.nEligible, m.guardReached, GROUPS.reduce((a, g) => a + m.groups[g].drawn, 0), m.sample.length, settings.sample_n, settings.quota_scale, settings.history_cap],
-      `${frame}: the summary`
-    );
+    for (const [kind, m, n] of [['random', want[frame], settings.sample_n], ['pilot', want[frame].pilot, settings.pilot_n]]) {
+      const label = `${frame} ${kind}`;
+      const got = await h.rows(`SELECT sa_id, kind, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi, split FROM study.sample WHERE frame = $1 AND kind = $2 ORDER BY draw_rank`, [frame, kind]);
+      assert.deepEqual(
+        got.map((r) => [Number(r.sa_id), r.kind, Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi), r.split]),
+        m.sample.map((x) => [x.sa, kind, x.k, x.g, x.start, x.ref, x.t, x.capped, x.hi, kind === 'pilot' ? 'exploration' : 'confirmation']),
+        `${label}: the rows`
+      );
+      const groups = await h.rows(`SELECT size_group, quota, n_drawn, n_taken, n_skipped FROM study.draw_group WHERE frame = $1 AND kind = $2 ORDER BY size_group`, [frame, kind]);
+      assert.deepEqual(
+        groups.map((r) => [r.size_group, r.quota === null ? null : Number(r.quota), Number(r.n_drawn), Number(r.n_taken), Number(r.n_skipped)]),
+        GROUPS.map((g) => [g, m.groups[g].quota, m.groups[g].drawn, m.groups[g].taken, m.groups[g].drawn - m.groups[g].taken]),
+        `${label}: D_k and A_k`
+      );
+      const sum = (await h.rows(`SELECT k_full, k_stop, n_eligible, guard_reached, n_drawn, n_taken, sample_n, quota_scale::text AS s, history_cap FROM study.draw_summary WHERE frame = $1 AND kind = $2`, [frame, kind]))[0];
+      assert.deepEqual(
+        [sum.k_full === null ? null : Number(sum.k_full), Number(sum.k_stop), Number(sum.n_eligible), sum.guard_reached, Number(sum.n_drawn), Number(sum.n_taken), Number(sum.sample_n), sum.s, Number(sum.history_cap)],
+        [m.kFull, m.kStop, m.nEligible, m.guardReached, GROUPS.reduce((a, g) => a + m.groups[g].drawn, 0), m.sample.length, n, settings.quota_scale, settings.history_cap],
+        `${label}: the summary`
+      );
+    }
   }
   const check = (await h.db.query(fill(h.blocks.get('draw_check').statements[0], p))).rows[0];
-  assert.deepEqual(check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true });
+  assert.deepEqual(check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true, pilot_outside_samples: true, pilot_after_sample: true });
   // Every sample row carries its frame's fragmentation flag.
   const flags = await h.rows(`SELECT s.fragmented, f.frag FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id`);
   assert.ok(flags.length > 0 && flags.every((r) => r.fragmented === r.frag));
@@ -340,6 +365,13 @@ test('the draw: groups, quotas filled in draw order, skipped wallets counted, th
     assert.ok(m.groups.B0.taken === 15 - 6 && m.groups.B0.drawn === m.groups.B0.taken, `${frame}: B0 takes the rest and skips none`);
     assert.ok(m.sample.some((x) => x.capped) && m.sample.some((x) => !x.capped), `${frame}: capped and uncapped wallets`);
     assert.ok(m.sample.some((x) => x.start > x.ref) && m.sample.some((x) => x.ref > x.start), `${frame}: U from the window's start and from the reference block`);
+    // The pilot: scaled quotas (B1 1, B2 1, B3 1 at pilot_n 6 of 15), none of
+    // it in either sample, filled and skipping.
+    const pl = m.pilot;
+    assert.equal(pl.sample.length, 6, `${frame}: the pilot fills`);
+    assert.deepEqual([pl.groups.B1.quota, pl.groups.B2.quota, pl.groups.B3.quota], [1, 1, 1]);
+    assert.ok(pl.sample.every((x) => x.k > m.kStop), `${frame}: the pilot starts after the sample`);
+    assert.ok(pl.groups.B1.drawn > pl.groups.B1.taken, `${frame}: the pilot skips a full group`);
   }
   // One label per credential across both frames.
   const labels = await h.rows(`SELECT sa_id FROM study.sample GROUP BY sa_id HAVING count(DISTINCT split) > 1`);

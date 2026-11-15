@@ -14,6 +14,7 @@ export const FIXED = {
   recent_days: 365, // the recent window: the 365 days up to the snapshot
   guard: 200000, // the draw's guard per frame; it counts eligible keys taken in draw order
   sample_n: 1000, // the sample per frame: active token-holding wallets taken in draw order
+  pilot_n: 100, // the pilot per frame: drawn after the sample, outside it, the exploration set; its quotas are the sample's scaled by pilot_n / sample_n, at least one each
   spends_min: 5, // active: at least 5 spends in the window
   group_edge_b1: 250, // size groups: B1 from 250 UTxOs or window transactions,
   group_edge_b2: 1000, // B2 from 1,000,
@@ -29,7 +30,6 @@ export const FIXED = {
   pay_cred_cap: 200, // exclusion: more than 200 distinct payment credentials
   script_share: '0.5', // exclusion: more than half of the value
   heavy_tx: 5000, // eligible wallets with more than 5,000 transactions in the window: reported, not excluded
-  split_den: 5, // the split: 20% exploration, the first floor(N / 5) of each sample
   months: 12, // the window as 12 months, for the per-month profile cut points
   power_spends_pm: 30, // profile cut points: power, 30 spends and 10 market interactions a month
   power_market_pm: 10,
@@ -144,6 +144,11 @@ export function defaultSettings() {
   return s;
 }
 
+// Settings an earlier version took, refused by name with the reason.
+export const REMOVED_SETTINGS = new Map([
+  ['split_den', 'the split no longer takes a share of each sample: every sampled wallet is confirmation and the pilot, drawn after the sample, is the exploration set']
+]);
+
 // --set name=value overrides, typed by the default's type.
 export function applyOverrides(settings, overrides) {
   const out = { ...settings };
@@ -151,6 +156,7 @@ export function applyOverrides(settings, overrides) {
     const m = /^([a-z0-9_]+)=(.*)$/.exec(o);
     if (!m) throw new Error(`--set expects name=value, got ${o}`);
     const [, k, raw] = m;
+    if (REMOVED_SETTINGS.has(k)) throw new Error(`${k} is not a setting: ${REMOVED_SETTINGS.get(k)}`);
     if (!(k in out)) throw new Error(`unknown setting ${k}`);
     const cur = out[k];
     if (typeof cur === 'boolean') {

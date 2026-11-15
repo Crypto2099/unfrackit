@@ -49,7 +49,7 @@ test('T15 a full run at the rule snapshot, below the tip', { timeout: 4 * 3600 *
     assert.equal(r.report.reconstruction_check.direct_valid, false);
     assert.equal(r.report.reconstruction_check.n_excluded, 0);
     assert.ok(!('n_case_wallets' in r.report.reconstruction_check) && !('n_case_disagree' in r.report.reconstruction_check));
-    assert.deepEqual(r.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true });
+    assert.deepEqual(r.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true, pilot_outside_samples: true, pilot_after_sample: true });
     // The shapes seeded before the snapshot.
     const row = async (id) => (await c.query(`SELECT tok, ge100 FROM study.frame WHERE frame = 'recent' AND sa_id = $1`, [id])).rows[0];
     const s3 = await row(await saIdOf(c, views.S3));

@@ -38,6 +38,11 @@ test('f5 counts receipts that consume none of the wallet\'s outputs, f8 the UTxO
     CREATE TABLE study.sample_frame (frame text, sa_id bigint, lo bigint, hi bigint, t_start bigint, t_end bigint);
     CREATE TABLE study.frame (frame text, sa_id bigint, n_spends bigint, n_utxo bigint);
   `);
+  // The sampled wallets, as the draw step declares study.sample (the check
+  // counts by the wallet's kind).
+  await db.exec(blocks.get('draw').statements.find((s) => /CREATE TABLE study\.sample \(/.test(s)));
+  await db.exec(`INSERT INTO study.sample (frame, kind, sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi)
+                 VALUES ('recent', 'random', 1, 1, 'B0', 0, 0, 1, false, 1), ('peak', 'random', 1, 1, 'B0', 0, 0, 1, false, 1), ('recent', 'random', 2, 2, 'B0', 0, 0, 1, false, 1)`);
   // Wallet 1's outputs: (id, created, consumed, script payment credential, datum).
   //   o1 a receipt before the recent window, spent at 25
   //   o2 at 20, a receipt that consumes nothing of the wallet

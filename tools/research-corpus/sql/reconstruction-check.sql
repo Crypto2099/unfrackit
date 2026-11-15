@@ -38,28 +38,31 @@ SELECT x.sa_id, x.n_ref, x.d_ref, x.n_life, x.d_life, x.n_direct, x.d_direct, x.
 -- @query reconstruction_check_mark
 UPDATE study.sample s SET reconstruction_excluded = NOT k.agree FROM study.reconstruction_check k WHERE k.sa_id = s.sa_id;
 
--- Sampled wallets with any output at a pointer address (CIP-19 header types 4
+-- Sampled wallets (and, beside them, pilot wallets) with any output at a pointer address (CIP-19 header types 4
 -- and 5, which bech32-encode as addr1g / addr12, or addr_test1g /
 -- addr_test12: the first five data bits are the header's type and the high
 -- bit of the network tag, 0 on both networks). db-sync gives pointer outputs
 -- a stake_address_id before Conway and none from Conway on, so such a wallet
 -- keeps its pointer outputs from before Conway and loses later ones.
 -- @query pointer_wallets
-SELECT count(DISTINCT t.sa_id) AS n_wallets_with_pointer_outputs
+SELECT w.kind, count(DISTINCT t.sa_id) AS n_wallets_with_pointer_outputs
   FROM study.txo t
-  JOIN study.sample_wallet w ON w.sa_id = t.sa_id
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = t.sa_id
   JOIN public.tx_out o ON o.id = t.tx_out_id
- WHERE o.address ~ '^addr(_test)?1[g2]';
+ WHERE o.address ~ '^addr(_test)?1[g2]'
+ GROUP BY w.kind ORDER BY w.kind;
 
 -- @query reconstruction_check_counts
-SELECT count(*) AS n_wallets,
+SELECT w.kind, count(*) AS n_wallets,
        count(*) FILTER (WHERE k.agree) AS n_agree,
        count(*) FILTER (WHERE NOT k.agree) AS n_excluded,
        count(*) FILTER (WHERE k.d_ref <> k.d_life) AS n_ref_life_differ,
        count(*) FILTER (WHERE k.direct_valid AND k.d_life <> k.d_direct) AS n_life_direct_differ,
        bool_and(k.direct_valid) AS direct_valid,
        sum(k.n_life) AS n_utxo_total
-  FROM study.reconstruction_check k JOIN study.sample_wallet w ON w.sa_id = k.sa_id;
+  FROM study.reconstruction_check k
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = k.sa_id
+ GROUP BY w.kind ORDER BY w.kind;
 
 -- @query sample_wallet_ids
 SELECT sa_id FROM study.sample_wallet ORDER BY sa_id;

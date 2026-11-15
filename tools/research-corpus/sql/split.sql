@@ -3,32 +3,24 @@
 --
 -- The exploration and confirmation split.
 --
--- Wallets are split 20% exploration and 80% confirmation by the "split" order
--- (split_key in study.frame, frames.sql), before any outcome is computed. One
--- label per stake credential (decided on 2026-10-21): every credential sampled
--- in either frame is ranked once by its split key, and the first
--- floor(N / 5) of the N distinct credentials (split_den) are exploration, the
--- rest confirmation. The split key depends only on h and the credential, so a
--- wallet drawn in both frames has the same key and the same label in both; each
--- frame's sample is then about, not exactly, 20% exploration.
+-- Labels follow the kind of the row, set once the draw has filled each frame's
+-- sample and then its pilot: a pilot row (kind 'pilot') is exploration, a
+-- sample row (kind 'random') is confirmation, so every sampled wallet is
+-- confirmation and the pilot, drawn after the sample outside it, is the
+-- exploration set. A wallet is never in a pilot and a sample (the pilot's
+-- candidates leave out both samples' wallets), so a wallet in both frames'
+-- pilots, or in both frames' samples, carries one label in both.
 --
--- study.sample_wallet lists every sampled credential once, for the per-wallet
--- steps that follow (the reconstruction check, prior-treated flags, franken
+-- study.sample_wallet lists every sampled and pilot credential once, for the
+-- per-wallet steps that follow (the reconstruction check, prior-treated flags, franken
 -- flags), and study.sample_frame each (frame, wallet) once, for the profile
 -- inputs.
 
 -- @step split
 -- @outputs study.sample
-UPDATE study.sample x
-   SET split = CASE WHEN r.rn <= r.n / {{split_den}} THEN 'exploration' ELSE 'confirmation' END
-  FROM (SELECT u.sa_id,
-               row_number() OVER (ORDER BY u.split_key, u.sa_id) AS rn,
-               count(*) OVER () AS n
-          FROM (SELECT DISTINCT s.sa_id, f.split_key
-                  FROM study.sample s JOIN study.frame f ON f.frame = s.frame AND f.sa_id = s.sa_id) u) r
- WHERE x.sa_id = r.sa_id;
--- Every sampled wallet carries its frame's fragmentation flag (frames.sql),
--- a descriptive field, so outcomes can be reported by it.
+UPDATE study.sample SET split = CASE kind WHEN 'pilot' THEN 'exploration' ELSE 'confirmation' END;
+-- Every sampled and pilot wallet carries its frame's fragmentation flag
+-- (frames.sql), a descriptive field, so outcomes can be reported by it.
 UPDATE study.sample x
    SET fragmented = f.frag
   FROM study.frame f
@@ -63,9 +55,9 @@ SELECT frame, kind, size_group, count(*) AS n,
        count(*) FILTER (WHERE capped) AS n_capped
   FROM study.sample GROUP BY frame, kind, size_group ORDER BY frame DESC, kind, size_group;
 
--- The split over all sampled credentials, each counted once.
+-- The split over the credentials of each kind, each counted once.
 -- @query split_overall
-SELECT count(DISTINCT sa_id) AS n_credentials,
+SELECT kind, count(DISTINCT sa_id) AS n_credentials,
        count(DISTINCT sa_id) FILTER (WHERE split = 'exploration') AS n_exploration,
        count(DISTINCT sa_id) FILTER (WHERE split = 'confirmation') AS n_confirmation
-  FROM study.sample;
+  FROM study.sample GROUP BY kind ORDER BY kind;

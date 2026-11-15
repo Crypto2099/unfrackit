@@ -54,15 +54,18 @@ UPDATE study.sample x
           FROM study.franken GROUP BY sa_id) w
  WHERE w.sa_id = x.sa_id;
 
--- Over the sampled wallets, less those the reconstruction check excluded. n_multi_cred_no_cospend counts the
+-- Per kind (the sample's wallets and the pilot's, counted apart), less those
+-- the reconstruction check excluded. n_multi_cred_no_cospend counts the
 -- wallets the rule cannot flag because no pair of their key credentials ever
 -- co-spends: one real credential beside a third party's output at a mangled
 -- address (CIP-19, "Delegation part") is such a case.
 -- @query franken_counts
-SELECT count(DISTINCT f.sa_id) AS n_wallets,
+SELECT w.kind, count(DISTINCT f.sa_id) AS n_wallets,
        count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2) AS n_multi_cred,
        count(DISTINCT f.sa_id) FILTER (WHERE f.flagged) AS n_wallets_flagged,
        count(*) FILTER (WHERE f.flagged) AS n_creds_flagged,
        count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2 AND NOT f.any_cospend) AS n_multi_cred_no_cospend
-  FROM study.franken f JOIN study.sample_wallet w ON w.sa_id = f.sa_id
- WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree);
+  FROM study.franken f
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = f.sa_id
+ WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree)
+ GROUP BY w.kind ORDER BY w.kind;

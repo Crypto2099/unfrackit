@@ -3,7 +3,9 @@
 
 // The corpus manifest: the snapshot block (height, hash, time), the published
 // identifiers per frame with their split, the flow tables, the draw with its
-// size groups' quotas and drawn and taken counts, and the code version. It
+// size groups' quotas and drawn and taken counts, and the code version. Every
+// count is the sample's, with the pilot's beside it under a _pilot key; the
+// samples list has one entry per frame and kind. It
 // names no stake address, address or policy of a wallet's holdings; the only
 // transaction hashes it names are the freeze records' carriers: the final
 // freeze, the hypotheses record's first carrier and the carrier the final
@@ -68,13 +70,17 @@ export async function buildManifest({ client, run, report, hmacKeyPath, dir }) {
     flow: report.flow,
     frame_report: report.frame_report,
     draw: report.draw,
+    draw_pilot: report.draw_pilot,
     // Per frame and size group: the quota, the wallets drawn (D_k) and taken
     // (A_k), sample sizes anyone can reproduce from the chain at the
     // snapshot. No identifier carries its group.
     draw_groups: report.draw_groups,
+    draw_groups_pilot: report.draw_groups_pilot,
     sample_bounds: report.sample_bounds,
     split: report.split_overall,
+    split_pilot: report.split_overall_pilot || null,
     reconstruction_check: report.reconstruction_check || {},
+    reconstruction_check_pilot: report.reconstruction_check_pilot || null,
     code_version: report.code_version,
     samples: list
   };

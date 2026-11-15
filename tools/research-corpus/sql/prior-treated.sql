@@ -116,11 +116,11 @@ UPDATE study.sample x
        evolution_tidied = EXISTS (SELECT 1 FROM study.prior_evolution p WHERE p.sa_id = x.sa_id);
 UPDATE study.sample SET prior_treated = unfrackit_user OR evolution_tidied;
 
--- Per frame of the sample, less the wallets the reconstruction check excluded:
+-- Per frame and kind (the sample and the pilot, counted apart), less the wallets the reconstruction check excluded:
 -- wallets flagged by each classifier over their whole history, and those with
 -- a flagged transaction inside the frame's window.
 -- @query prior_counts
-SELECT f.frame,
+SELECT f.frame, w.kind,
        count(*) AS n_wallets,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM study.prior_unfrackit p WHERE p.sa_id = f.sa_id AND p.key_spend)) AS unfrackit_any,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM study.prior_unfrackit p WHERE p.sa_id = f.sa_id AND p.key_spend
@@ -130,5 +130,6 @@ SELECT f.frame,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM study.prior_evolution p WHERE p.sa_id = f.sa_id
                                        AND p.tx BETWEEN f.lo AND f.hi)) AS evolution_in_window
   FROM study.sample_frame f
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = f.sa_id
  WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree)
- GROUP BY f.frame ORDER BY f.frame DESC;
+ GROUP BY f.frame, w.kind ORDER BY f.frame DESC, w.kind;

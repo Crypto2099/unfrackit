@@ -75,12 +75,14 @@ function functionalChecks(report) {
   if (report.order_check) c.order_check = report.order_check.passed;
   if (report.cred_checks) c.credential_checks = true;
   if (report.peak_vs_frozen) c.peak_rule_reproduces_frozen = report.peak_vs_frozen.agrees;
-  if (report.reconstruction_check) c.reconstruction_check_all_agree = report.reconstruction_check.n_excluded === 0;
+  if (report.reconstruction_check) c.reconstruction_check_all_agree = report.reconstruction_check.n_excluded === 0 && (report.reconstruction_check_pilot ? report.reconstruction_check_pilot.n_excluded === 0 : true);
   if (report.draw_check) for (const [k, v] of Object.entries(report.draw_check)) c[`draw_${k}`] = v;
   if (report.profile_check) {
-    c.profile_spends_match_frame = report.profile_check.spend_count_mismatch === 0;
-    c.profile_receipts_within_frame = report.profile_check.receipt_count_mismatch === 0;
-    c.profile_utxos_match_frame = report.profile_check.utxo_count_mismatch === 0;
+    // Both kinds are checked: the pilot's features are extracted like the sample's.
+    const both = [report.profile_check, report.profile_check_pilot].filter(Boolean);
+    c.profile_spends_match_frame = both.every((x) => x.spend_count_mismatch === 0);
+    c.profile_receipts_within_frame = both.every((x) => x.receipt_count_mismatch === 0);
+    c.profile_utxos_match_frame = both.every((x) => x.utxo_count_mismatch === 0);
   }
   return c;
 }
@@ -404,8 +406,13 @@ export async function runPipeline(opts) {
 
     // The draw and the sample.
     await runner.run('draw');
-    report.draw = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'guard_reached', 'quota_scale']));
-    report.draw_groups = (await q(client, blocks, 'draw_group_rows')).map((r) => numRow(r, ['frame', 'size_group']));
+    // Every count is the sample's (kind 'random'); the pilot's is beside it under a _pilot key, never summed in.
+    const drawRows = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'kind', 'guard_reached', 'quota_scale']));
+    report.draw = drawRows.filter((r) => r.kind === 'random');
+    report.draw_pilot = drawRows.filter((r) => r.kind === 'pilot');
+    const groupRows = (await q(client, blocks, 'draw_group_rows')).map((r) => numRow(r, ['frame', 'kind', 'size_group']));
+    report.draw_groups = groupRows.filter((r) => r.kind === 'random');
+    report.draw_groups_pilot = groupRows.filter((r) => r.kind === 'pilot');
     report.draw_check = (await q(client, blocks, 'draw_check', runner.params))[0];
     const badDraw = Object.entries(report.draw_check).filter(([, v]) => v !== true).map(([k]) => k);
     if (badDraw.length) throw new Error(`draw checks failed: ${badDraw.join(', ')}`);
@@ -417,27 +424,41 @@ export async function runPipeline(opts) {
       report.reconstruction_check_run = await reconstructionCheck({ client: c, blocks, run, params: runner.params, log, batch: opts.batch || 500 });
       await q(c, blocks, 'reconstruction_check_mark');
     });
-    report.reconstruction_check = numRow((await q(client, blocks, 'reconstruction_check_counts'))[0], ['direct_valid']);
+    const reconRows = (await q(client, blocks, 'reconstruction_check_counts')).map((r) => numRow(r, ['kind', 'direct_valid']));
+    report.reconstruction_check = reconRows.find((r) => r.kind === 'random');
+    report.reconstruction_check_pilot = reconRows.find((r) => r.kind === 'pilot');
     report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'size_group']));
-    report.split_overall = numRow((await q(client, blocks, 'split_overall'))[0]);
+    const splitRows = (await q(client, blocks, 'split_overall')).map((r) => numRow(r, ['kind']));
+    report.split_overall = splitRows.find((r) => r.kind === 'random');
+    report.split_overall_pilot = splitRows.find((r) => r.kind === 'pilot');
     report.sample_bounds = (await q(client, blocks, 'sample_bounds')).map((r) => ({ ...r, n: num(r.n) }));
-    report.pointer_wallets = numRow((await q(client, blocks, 'pointer_wallets'))[0]);
+    const pointerRows = (await q(client, blocks, 'pointer_wallets')).map((r) => numRow(r, ['kind']));
+    report.pointer_wallets = pointerRows.find((r) => r.kind === 'random') || { kind: 'random', n_wallets_with_pointer_outputs: 0 };
+    report.pointer_wallets_pilot = pointerRows.find((r) => r.kind === 'pilot') || { kind: 'pilot', n_wallets_with_pointer_outputs: 0 };
 
     // Prior-treated and franken flags.
     await runner.run('unfrackit_tx');
     report.unfrackit = numRow((await q(client, blocks, 'unfrackit_report', runner.params))[0], ['earliest_match_time', 'latest_match_time']);
     if (!live) report.unfrackit_matches = await q(client, blocks, 'unfrackit_matches');
     await runner.run('prior_flags');
-    report.prior = (await q(client, blocks, 'prior_counts')).map((r) => numRow(r, ['frame']));
+    const priorRows = (await q(client, blocks, 'prior_counts')).map((r) => numRow(r, ['frame', 'kind']));
+    report.prior = priorRows.filter((r) => r.kind === 'random');
+    report.prior_pilot = priorRows.filter((r) => r.kind === 'pilot');
     await runner.run('franken');
-    report.franken = numRow((await q(client, blocks, 'franken_counts'))[0]);
+    const frankenRows = (await q(client, blocks, 'franken_counts')).map((r) => numRow(r, ['kind']));
+    report.franken = frankenRows.find((r) => r.kind === 'random');
+    report.franken_pilot = frankenRows.find((r) => r.kind === 'pilot');
 
     // Profile inputs: the eight features of the clustering procedure, and the
     // descriptive cut-point profiles and flags.
     await runner.run('script_tx');
     await runner.run('profile');
-    report.profile_check = numRow((await q(client, blocks, 'profile_check', runner.params))[0]);
-    report.profiles = (await q(client, blocks, 'profile_counts')).map((r) => ({ ...r, n: num(r.n), nft_heavy: num(r.nft_heavy), ft_heavy: num(r.ft_heavy), dex_active: num(r.dex_active) }));
+    const checkRows = (await q(client, blocks, 'profile_check', runner.params)).map((r) => numRow(r, ['kind']));
+    report.profile_check = checkRows.find((r) => r.kind === 'random');
+    report.profile_check_pilot = checkRows.find((r) => r.kind === 'pilot');
+    const profileRows = (await q(client, blocks, 'profile_counts')).map((r) => ({ ...r, n: num(r.n), nft_heavy: num(r.nft_heavy), ft_heavy: num(r.ft_heavy), dex_active: num(r.dex_active) }));
+    report.profiles = profileRows.filter((r) => r.kind === 'random');
+    report.profiles_pilot = profileRows.filter((r) => r.kind === 'pilot');
 
     // The simulator's live-fire wallets, picked from this run's draw order;
     // the selection is written once the run's tables are dropped.
@@ -626,8 +647,9 @@ export async function ownDrawn(client, runId, views) {
       [views]
     )
   ).rows;
-  const wallets = (await client.query(`SELECT count(DISTINCT s.sa_id) AS n FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id WHERE c.view = ANY ($1::text[])`, [views])).rows[0].n;
-  return { run_id: runId, listed: views.length, drawn_wallets: Number(wallets), by_sample: rows.map((r) => ({ frame: r.frame, kind: r.kind, drawn: Number(r.drawn) })) };
+  // drawn_wallets counts the sample's wallets only; the pilot's are counted beside them.
+  const wallets = (await client.query(`SELECT count(DISTINCT s.sa_id) FILTER (WHERE s.kind = 'random') AS n, count(DISTINCT s.sa_id) FILTER (WHERE s.kind = 'pilot') AS np FROM study.sample s JOIN study.cred c ON c.sa_id = s.sa_id WHERE c.view = ANY ($1::text[])`, [views])).rows[0];
+  return { run_id: runId, listed: views.length, drawn_wallets: Number(wallets.n), pilot_wallets: Number(wallets.np), by_sample: rows.map((r) => ({ frame: r.frame, kind: r.kind, drawn: Number(r.drawn) })) };
 }
 
 export const resolvePath = (p) => (p ? resolve(p) : p);

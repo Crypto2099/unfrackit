@@ -190,19 +190,22 @@ ALTER TABLE study.profile ADD PRIMARY KEY (frame, sa_id);
 -- f8 is the frame's UTxO count at its reference block, which is the window's
 -- end.
 -- @query profile_check
-SELECT count(*) AS n,
+SELECT w.kind, count(*) AS n,
        count(*) FILTER (WHERE p.n_spends <> f.n_spends) AS spend_count_mismatch,
        count(*) FILTER (WHERE p.n_receipts_no_input > coalesce(a.n_receipts, 0)) AS receipt_count_mismatch,
        count(*) FILTER (WHERE {{x9_count_held}} AND p.n_utxo_end <> f.n_utxo) AS utxo_count_mismatch
   FROM study.profile p
   JOIN study.frame f ON f.frame = p.frame AND f.sa_id = p.sa_id
-  LEFT JOIN study.activity a ON a.win = p.frame AND a.sa_id = p.sa_id;
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = p.sa_id
+  LEFT JOIN study.activity a ON a.win = p.frame AND a.sa_id = p.sa_id
+ GROUP BY w.kind ORDER BY w.kind;
 
 -- @query profile_counts
-SELECT p.frame, p.profile, count(*) AS n,
+SELECT p.frame, w.kind, p.profile, count(*) AS n,
        count(*) FILTER (WHERE p.nft_heavy) AS nft_heavy,
        count(*) FILTER (WHERE p.ft_heavy) AS ft_heavy,
        count(*) FILTER (WHERE p.dex_active) AS dex_active
   FROM study.profile p JOIN study.sample_frame f ON f.frame = p.frame AND f.sa_id = p.sa_id
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = p.sa_id
  WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = p.sa_id AND NOT k.agree)
- GROUP BY p.frame, p.profile ORDER BY p.frame DESC, p.profile;
+ GROUP BY p.frame, w.kind, p.profile ORDER BY p.frame DESC, w.kind, p.profile;

@@ -142,20 +142,22 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(dk.readings.db, dk.readings.koios);
     assert.equal(b.report.freeze.h, dk.nonce);
 
-    // The split: one label per credential, the first fifth of all sampled
-    // credentials by split key.
+    // The split by kind: one label per credential; every sampled wallet is
+    // confirmation, and any pilot wallet exploration.
     const labels = (await c.query(`SELECT sa_id, count(DISTINCT split) AS n FROM study.sample GROUP BY sa_id HAVING count(DISTINCT split) > 1`)).rows;
     assert.equal(labels.length, 0, 'no credential has two labels');
-    assert.equal(b.report.split_overall.n_exploration, Math.floor(b.report.split_overall.n_credentials / 5));
+    assert.deepEqual([b.report.split_overall.n_exploration, b.report.split_overall.n_confirmation], [0, b.report.split_overall.n_credentials]);
+    assert.equal((await c.query(`SELECT count(*) AS n FROM study.sample WHERE (kind = 'pilot') <> (split = 'exploration')`)).rows[0].n, '0');
 
-    // The guard path ran in both frames, and the sample did not fill.
+    // The guard path ran in both frames, and the sample did not fill, so the pilot, which starts after the sample's stopping point at the guard, is empty.
     for (const d of b.report.draw) {
       assert.equal(d.guard_reached, true, `${d.frame}: guard reached`);
       assert.equal(d.k_stop, 1000);
       assert.equal(d.k_full, null);
       assert.ok(d.n_sample < 1000);
     }
-    assert.deepEqual(b.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true });
+    assert.deepEqual(b.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true, pilot_outside_samples: true, pilot_after_sample: true });
+    assert.deepEqual(b.report.draw_pilot.map((d) => d.n_taken), [0, 0]);
 
     // The draw against the rule, computed here from the frame and the life
     // table: within the guard, the token-holding wallets with at least 5 spends
@@ -193,7 +195,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
         want.push([Number(r.sa_id), Number(r.k), g, Number(r.start), Number(r.ref), t, t > 1000, t > 1000 ? txs[999] : Number(w.hi)]);
         if (want.length === 1000) break;
       }
-      const got = (await c.query(`SELECT sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 ORDER BY draw_rank`, [frame])).rows
+      const got = (await c.query(`SELECT sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 AND kind = 'random' ORDER BY draw_rank`, [frame])).rows
         .map((r) => [Number(r.sa_id), Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)]);
       assert.deepEqual(got, want, `${frame}: the sample`);
       const groups = b.report.draw_groups.filter((x) => x.frame === frame);
