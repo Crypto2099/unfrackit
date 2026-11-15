@@ -206,7 +206,7 @@ async function studyReadable(ctx) {
   return true;
 }
 
-export const DRAW_MISSING = 'refusing: the extraction run lacks the size groups, draw counts and window cap (study.sample size_group, n_window_tx, capped, history_hi, fragmented, franken_any, franken_no_cospend, unfrackit_user, evolution_tidied and prior_treated; study.draw_group; study.draw_summary quota_scale, sample_n and history_cap); rerun the extraction at 93fb81e or later';
+export const DRAW_MISSING = 'refusing: the extraction run lacks the size groups, draw counts and window cap (study.sample size_group, n_window_tx, capped, history_hi, fragmented, franken_any, franken_no_cospend, unfrackit_user, evolution_tidied and prior_treated; study.draw_group and study.draw_summary, each with kind, and quota_scale, sample_n and history_cap; study.sample kind may be pilot); rerun the extraction at 5fe47bc or later';
 
 // The extraction's sample rows by wallet, when its study tables are
 // readable: { split, excluded, random, randomRecent, randomPeak, stratumRecent,
@@ -230,12 +230,12 @@ export async function studySamples(ctx) {
 // that gives each frame's history cap.
 export function samplesFromRows(rows, drawRows = [], runLevel = null) {
   const m = new Map();
-  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak, stratumRecent: r.stratum_recent, draw: {} });
+  for (const r of rows) m.set(Number(r.sa_id), { split: r.split, excluded: r.excluded, random: r.random, randomRecent: r.random_recent, randomPeak: r.random_peak, stratumRecent: r.stratum_recent, pilot: r.pilot === true, pilotRecent: r.pilot_recent === true, pilotPeak: r.pilot_peak === true, draw: {} });
   for (const r of drawRows) {
     const s = m.get(Number(r.sa_id));
     if (!s) continue;
     const cap = runLevel && runLevel[r.frame] ? runLevel[r.frame].historyCap : undefined;
-    s.draw[r.frame] = { sizeGroup: r.size_group, nWindowTx: Number(r.n_window_tx), capped: r.capped === true, historyHi: Number(r.history_hi), historyCap: cap };
+    s.draw[r.frame] = { kind: r.kind === 'pilot' ? 'pilot' : 'random', sizeGroup: r.size_group, nWindowTx: Number(r.n_window_tx), capped: r.capped === true, historyHi: Number(r.history_hi), historyCap: cap };
     for (const k of DRAW_FLAGS) s.draw[r.frame][k] = r[k] === true;
   }
   return m;
@@ -253,13 +253,25 @@ export function drawOf(samples, sa, frame) {
 // The draw's run-level record, from the `study_draw_groups` and
 // `study_draw_summary` rows: per frame, the quota scale s (decimal text), the
 // sample size, the history cap, and per size group the quota (null for B0),
-// D_k (nDrawn) and A_k (nTaken). The weight D_k / A_k is not computed here.
+// D_k (nDrawn) and A_k (nTaken), for the random sample; `pilot` beside them
+// holds the same four fields for the frame's pilot (sampleN is the pilot's
+// size). A row without kind is the sample's. The weight D_k / A_k is not
+// computed here.
 export function drawRunLevel(groupRows, summaryRows) {
   const out = {};
-  for (const r of summaryRows) out[r.frame] = { quotaScale: String(r.quota_scale), sampleN: Number(r.sample_n), historyCap: Number(r.history_cap), groups: {} };
+  const isPilot = (r) => r.kind === 'pilot';
+  const level = (r) => ({ quotaScale: String(r.quota_scale), sampleN: Number(r.sample_n), historyCap: Number(r.history_cap), groups: {} });
+  for (const r of summaryRows) if (!isPilot(r)) out[r.frame] = level(r);
+  for (const r of summaryRows) {
+    if (!isPilot(r)) continue;
+    if (!out[r.frame]) throw new Error(`study.draw_summary holds a pilot for the frame ${r.frame} and no sample`);
+    out[r.frame].pilot = level(r);
+  }
   for (const r of groupRows) {
-    if (!out[r.frame]) throw new Error(`study.draw_group names the frame ${r.frame}, which study.draw_summary does not`);
-    out[r.frame].groups[r.size_group] = { quota: r.quota === null || r.quota === undefined ? null : Number(r.quota), nDrawn: Number(r.n_drawn), nTaken: Number(r.n_taken) };
+    const top = out[r.frame];
+    const into = top && (isPilot(r) ? top.pilot : top);
+    if (!into) throw new Error(`study.draw_group names the ${isPilot(r) ? 'pilot' : 'sample'} of the frame ${r.frame}, which study.draw_summary does not`);
+    into.groups[r.size_group] = { quota: r.quota === null || r.quota === undefined ? null : Number(r.quota), nDrawn: Number(r.n_drawn), nTaken: Number(r.n_taken) };
   }
   return out;
 }
@@ -269,7 +281,14 @@ export function drawRunLevel(groupRows, summaryRows) {
 export function sampleMembership(samples, sa) {
   if (!samples || !samples.has(sa)) return null;
   const s = samples.get(sa);
-  return { recentRandom: !!s.randomRecent, peakRandom: !!s.randomPeak, recentStratum: !!s.stratumRecent };
+  return { recentRandom: !!s.randomRecent, peakRandom: !!s.randomPeak, recentStratum: !!s.stratumRecent, recentPilot: !!s.pilotRecent, peakPilot: !!s.pilotPeak };
+}
+
+// The wallets --from-study names: `random` the random samples' wallets (the
+// confirmation split), `all` every wallet of a study.sample row, the pilot's
+// (the exploration split) and the purposive strata's among them.
+export function fromStudyWallets(samples, mode) {
+  return [...samples].filter(([, s]) => mode === 'all' || s.random).map(([id]) => id);
 }
 
 // The wallets a history run reads, with the study tables' sample rows (null
@@ -285,7 +304,7 @@ export async function historyWallets(ctx, opts) {
   let wallets;
   if (opts.fromStudy) {
     if (!samples) throw new Error('--from-study: the study tables are not readable by this role');
-    wallets = [...samples].filter(([, s]) => opts.fromStudy === 'all' || s.random).map(([id]) => id);
+    wallets = fromStudyWallets(samples, opts.fromStudy);
     refuseOutside(allowed, wallets, ctx.scope);
   } else {
     wallets = await resolveWallets(ctx, opts, allowed);

@@ -48,7 +48,7 @@ const SUMMARY = [
 test('each size group, per wallet and frame, with the frame\'s cap', () => {
   const run = drawRunLevel(GROUPS, SUMMARY);
   const m = samplesFromRows(SAMPLE, DRAW, run);
-  const want = (g, n, c, hi) => ({ sizeGroup: g, nWindowTx: n, capped: c, historyHi: hi, historyCap: CAP, fragmented: false, franken_any: false, franken_no_cospend: false, unfrackit_user: false, evolution_tidied: false, prior_treated: false });
+  const want = (g, n, c, hi) => ({ kind: 'random', sizeGroup: g, nWindowTx: n, capped: c, historyHi: hi, historyCap: CAP, fragmented: false, franken_any: false, franken_no_cospend: false, unfrackit_user: false, evolution_tidied: false, prior_treated: false });
   assert.deepEqual(drawOf(m, 1, 'recent'), want('B0', 40, false, WINDOW_HI));
   assert.deepEqual(drawOf(m, 2, 'recent'), want('B1', 260, false, WINDOW_HI));
   assert.deepEqual(drawOf(m, 3, 'recent'), want('B2', 1000, false, WINDOW_HI));
@@ -120,5 +120,5 @@ test('studySamples reads the draw and refuses an extraction run without its colu
   assert.equal(drawOf(m, 4, 'recent').historyHi, 3998);
   assert.equal(m.drawRunLevel.recent.groups.B3.nTaken, 2);
   assert.equal(await studySamples(fakeCtx({ has_frame: false, has_draw: false })), null);
-  await assert.rejects(studySamples(fakeCtx({ has_draw: false })), (e) => e instanceof Refusal && e.message === DRAW_MISSING && /rerun the extraction at 93fb81e or later/.test(e.message));
+  await assert.rejects(studySamples(fakeCtx({ has_draw: false })), (e) => e instanceof Refusal && e.message === DRAW_MISSING && /rerun the extraction at 5fe47bc or later/.test(e.message));
 });

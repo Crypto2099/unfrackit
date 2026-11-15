@@ -32,7 +32,8 @@
 // transaction, `draw.historyHi`: the header's window range ends there, the
 // end state is the state after that transaction, the marks run to that
 // transaction's block time (`window.endTime`), and the end record says
-// `capped`. The header's `draw` carries the extraction's size group, window
+// `capped`. The header's `draw` carries the extraction's kind (random sample or
+// pilot), size group, window
 // transaction count, capped flag and history end for the wallet and frame
 // (null when the wallet is not in that frame's sample).
 //
@@ -304,7 +305,7 @@ export async function walletHistory(ctx, w, out) {
     frame: w.frame,
     split: w.split || null,
     sample: w.sample || null,
-    draw: draw ? { sizeGroup: draw.sizeGroup, nWindowTx: draw.nWindowTx, capped: draw.capped, historyHi: draw.historyHi, ...Object.fromEntries(DRAW_FLAGS.map((k) => [k, draw[k] === true])) } : null,
+    draw: draw ? { kind: draw.kind || 'random', sizeGroup: draw.sizeGroup, nWindowTx: draw.nWindowTx, capped: draw.capped, historyHi: draw.historyHi, ...Object.fromEntries(DRAW_FLAGS.map((k) => [k, draw[k] === true])) } : null,
     window: isSnapshot ? null : { first: w.window.first, last: w.window.last, lo, hi, tStart, endTime },
     snapshot: w.snapshot,
     params: ctx.params,

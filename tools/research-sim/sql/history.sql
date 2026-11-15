@@ -269,55 +269,61 @@ SELECT u.usage,
        CASE WHEN NOT u.usage THEN false
             WHEN to_regclass('study.frame') IS NULL OR to_regclass('study.sample') IS NULL THEN false
             ELSE has_table_privilege(current_user, 'study.sample', 'SELECT') END AS has_frame,
-       -- The draw's columns and tables (extraction tool 93fb81e or later):
+       -- The draw's columns and tables (extraction tool 5fe47bc or later):
        -- study.sample's size_group, n_window_tx, capped, history_hi and the
        -- per-wallet flags fragmented, franken_any, franken_no_cospend,
        -- unfrackit_user, evolution_tidied and prior_treated, and
-       -- study.draw_group and study.draw_summary with the columns read below.
-       -- Sixteen columns in all; the catalog needs no privilege on the tables.
+       -- study.draw_group and study.draw_summary with the columns read below,
+       -- the two tables' kind (random sample or pilot) among them.
+       -- Eighteen columns in all; the catalog needs no privilege on the tables.
        (SELECT count(*)
           FROM pg_attribute a
           JOIN pg_class c ON c.oid = a.attrelid
           JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'study' AND a.attnum > 0 AND NOT a.attisdropped
            AND ((c.relname = 'sample' AND a.attname IN ('size_group', 'n_window_tx', 'capped', 'history_hi', 'fragmented', 'franken_any', 'franken_no_cospend', 'unfrackit_user', 'evolution_tidied', 'prior_treated'))
-             OR (c.relname = 'draw_summary' AND a.attname IN ('quota_scale', 'sample_n', 'history_cap'))
-             OR (c.relname = 'draw_group' AND a.attname IN ('quota', 'n_drawn', 'n_taken')))) = 16 AS has_draw
+             OR (c.relname = 'draw_summary' AND a.attname IN ('kind', 'quota_scale', 'sample_n', 'history_cap'))
+             OR (c.relname = 'draw_group' AND a.attname IN ('kind', 'quota', 'n_drawn', 'n_taken')))) = 18 AS has_draw
   FROM u;
 
 -- The extraction's study tables (tools/research-corpus, sql/draw.sql,
 -- franken.sql, txo.sql), read when this role can read them: the
--- sampled wallets with their split and the reconstruction check's exclusion,
+-- sampled and pilot wallets with their split and the reconstruction check's exclusion,
 -- the franken flags, and the life table's UTxO set at T.
 -- @query study_samples
 SELECT s.sa_id, bool_or(s.kind = 'random') AS random,
        bool_or(s.kind = 'random' AND s.frame = 'recent') AS random_recent,
        bool_or(s.kind = 'random' AND s.frame = 'peak') AS random_peak,
        bool_or(s.kind = 'stratum' AND s.frame = 'recent') AS stratum_recent,
+       bool_or(s.kind = 'pilot') AS pilot,
+       bool_or(s.kind = 'pilot' AND s.frame = 'recent') AS pilot_recent,
+       bool_or(s.kind = 'pilot' AND s.frame = 'peak') AS pilot_peak,
        max(s.split) AS split, bool_or(coalesce(s.reconstruction_excluded, false)) AS excluded
   FROM study.sample s
  GROUP BY s.sa_id
  ORDER BY s.sa_id;
 
--- The draw fields of each sampled wallet and frame (study.sample).
+-- The draw fields of each sampled or pilot wallet and frame (study.sample);
+-- kind says which. A wallet is in one kind only.
 -- @query study_sample_draw
-SELECT s.sa_id, s.frame, s.size_group, s.n_window_tx, s.capped, s.history_hi,
+SELECT s.sa_id, s.frame, s.kind, s.size_group, s.n_window_tx, s.capped, s.history_hi,
        s.fragmented, s.franken_any, s.franken_no_cospend, s.unfrackit_user, s.evolution_tidied, s.prior_treated
   FROM study.sample s
- WHERE s.kind = 'random'
+ WHERE s.kind IN ('random', 'pilot')
  ORDER BY s.sa_id, s.frame;
 
--- D_k, A_k and the quota of each frame and size group, and each frame's
--- quota scale, sample size and history cap.
+-- D_k, A_k and the quota of each frame, kind and size group, and each frame
+-- and kind's quota scale, sample size (the pilot's size for the pilot) and
+-- history cap.
 -- @query study_draw_groups
-SELECT g.frame, g.size_group, g.quota, g.n_drawn, g.n_taken
+SELECT g.frame, g.kind, g.size_group, g.quota, g.n_drawn, g.n_taken
   FROM study.draw_group g
- ORDER BY g.frame, g.size_group;
+ ORDER BY g.frame, g.kind, g.size_group;
 
 -- @query study_draw_summary
-SELECT d.frame, d.quota_scale::text AS quota_scale, d.sample_n, d.history_cap
+SELECT d.frame, d.kind, d.quota_scale::text AS quota_scale, d.sample_n, d.history_cap
   FROM study.draw_summary d
- ORDER BY d.frame;
+ ORDER BY d.frame, d.kind;
 
 -- @query study_franken
 SELECT encode(f.payment_cred, 'hex') AS payment_cred FROM study.franken f WHERE f.sa_id = {{sa_id}} AND f.flagged;

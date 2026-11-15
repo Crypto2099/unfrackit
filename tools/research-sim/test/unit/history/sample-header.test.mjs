@@ -17,10 +17,10 @@ test('study_samples rows reach the header field per frame', () => {
     { sa_id: '4', random: false, random_recent: false, random_peak: false, stratum_recent: true, split: 'exploration', excluded: false }
   ];
   const m = samplesFromRows(rows);
-  assert.deepEqual(sampleMembership(m, 1), { recentRandom: true, peakRandom: false, recentStratum: false });
-  assert.deepEqual(sampleMembership(m, 2), { recentRandom: false, peakRandom: true, recentStratum: false });
-  assert.deepEqual(sampleMembership(m, 3), { recentRandom: false, peakRandom: false, recentStratum: false });
-  assert.deepEqual(sampleMembership(m, 4), { recentRandom: false, peakRandom: false, recentStratum: true });
+  assert.deepEqual(sampleMembership(m, 1), { recentRandom: true, peakRandom: false, recentStratum: false, recentPilot: false, peakPilot: false });
+  assert.deepEqual(sampleMembership(m, 2), { recentRandom: false, peakRandom: true, recentStratum: false, recentPilot: false, peakPilot: false });
+  assert.deepEqual(sampleMembership(m, 3), { recentRandom: false, peakRandom: false, recentStratum: false, recentPilot: false, peakPilot: false });
+  assert.deepEqual(sampleMembership(m, 4), { recentRandom: false, peakRandom: false, recentStratum: true, recentPilot: false, peakPilot: false });
   assert.equal(m.get(2).random, true);
   assert.equal(sampleMembership(m, 9), null);
   assert.equal(sampleMembership(null, 1), null);
