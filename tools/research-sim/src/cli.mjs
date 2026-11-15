@@ -13,6 +13,7 @@ import { cmdMergeStage } from './out/merge.mjs';
 import { cmdFidelity } from './fidelity/fidelity.mjs';
 import { cmdStudy } from './study/study.mjs';
 import { cmdLiveFire } from './study/live-fire.mjs';
+import { cmdAnalyze } from './analysis/command.mjs';
 
 const COMMANDS = {
   hash: async () => process.stdout.write(formatHashList()),
@@ -25,6 +26,7 @@ const COMMANDS = {
   'merge-stage': async (o) => report(await cmdMergeStage(o)),
   fidelity: async (o) => report(await cmdFidelity(o)),
   study: async (o) => report(await cmdStudy(o)),
+  analyze: async (o) => report(await cmdAnalyze(o)),
   'live-fire': async (o, argv) => report(await cmdLiveFire(o, { argv })),
   help: async () => process.stdout.write(HELP)
 };
@@ -41,6 +43,7 @@ const HELP = `research-sim <command> [options]
   merge-stage      the shards of one replay stage, written on several machines, joined into one stage
   fidelity         observed spends that run no script rebuilt by the ledger kit, their minimum fees against the observed ones
   study            the study's run: a plan's stages in order under one run id, resumable
+  analyze          a study's replay stages analyzed on one split: the verdicts, the items beside them, H-7 to H-11, the sizing and the timings
   live-fire        before the final freeze, the simulator's steps on an extraction live-fire run's picked wallets, logged in the check log
 
 See the README for the options of each.

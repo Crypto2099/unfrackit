@@ -221,6 +221,24 @@ test('size groups: a group under ten wallets merges with the next smaller, the p
   near(res.cells.find((c) => c.name === 'q1/fees/csl-lf/layout-vs-own/size/B2+B3').estimate, -0.1);
 });
 
+test('a size breakdown whose merge reaches B0 is marked absent, one cell per item, not left out', async () => {
+  // 3 B1, 3 B2 and 2 B3 wallets: B3 (2) joins B2 (5), and B1 (3) joins B2+B3 (8): the merge reaches B0.
+  const ws = [];
+  for (let i = 0; i < 3; i++) ws.push(wal(101 + i, 'B1', lf(mk(5, ok(100000)), mk(5, ok(90000)))));
+  for (let i = 0; i < 3; i++) ws.push(wal(201 + i, 'B2', lf(mk(5, ok(100000)), mk(5, ok(90000)))));
+  for (let i = 0; i < 2; i++) ws.push(wal(301 + i, 'B3', lf(mk(5, ok(100000)), mk(5, ok(90000)))));
+  const { res } = await run1(ws);
+  const absent = res.cells.filter((c) => c.absent && c.scope.kind === 'size');
+  assert.ok(absent.length > 0);
+  assert.ok(absent.every((c) => c.scope.label === null && c.estimate === null && c.n <= 8 && /merge reaches B0/.test(c.reason)));
+  assert.ok(absent.some((c) => c.name === 'q1/failures/csl-lf/layout-vs-own/size'));
+  assert.ok(!res.cells.some((c) => c.scope.kind === 'size' && !c.absent), 'no size cell is estimated');
+  // An absent cell's name is not another cell's.
+  const others = new Set(res.cells.filter((c) => !c.absent).map((c) => c.name));
+  assert.ok(absent.every((c) => !others.has(c.name)));
+  assert.equal(new Set(absent.map((c) => c.name)).size, absent.length);
+});
+
 test('the fragmentation flag: each value is a cell of its own, from the tables of that value', async () => {
   const { res } = await run1(big());
   const yes = res.cells.find((c) => c.name === 'q1/failures/csl-lf/layout-vs-own/frag/yes');

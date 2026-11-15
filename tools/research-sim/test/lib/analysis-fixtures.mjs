@@ -17,6 +17,8 @@
 //   wa (fields of the wallet-arm record), refused (a reason) }.
 // A spend is made with built(), failed() and the other makers below; the
 // record's key and the defaults the trunk's records carry are filled in.
+// desc.carried ({ collateral, nearCap } or true for defaults) writes the carried reports;
+// desc.machines ([{ label, invocations, log }]) the stage's machine files.
 // desc.mutate(records) may change the record list before it is written (and
 // hashed), for the refusals that need an odd record.
 // intents: [{ type, scriptFee, fixedBytes, deposits, certs, proposals, newPools }]
@@ -315,6 +317,12 @@ export function writeStudy(root, desc) {
     mkdirSync(join(studyDir, 'census'), { recursive: true });
     put(join(studyDir, 'census', 'census.jsonl'), jsonl(desc.census));
     put(join(studyDir, 'census', 'census-run.json'), JSON.stringify({ valueLimit: 5000 }) + '\n');
+  }
+  if (desc.carried) {
+    mkdirSync(join(studyDir, 'collateral'), { recursive: true });
+    mkdirSync(join(studyDir, 'near-cap'), { recursive: true });
+    put(join(studyDir, 'collateral', 'collateral.json'), JSON.stringify(desc.carried.collateral || { measured: 100, shareUnder20Ada: 0.25, seconds: 12.5 }, null, 2) + '\n');
+    put(join(studyDir, 'near-cap', 'near-cap.json'), JSON.stringify(desc.carried.nearCap || { wallets: 50, points: [{ epoch: 500, wallets: 50, n80: 2 }], seconds: 3.5 }, null, 2) + '\n');
   }
   return { studyDir, stageDir, historyDir, network, runId, window };
 }

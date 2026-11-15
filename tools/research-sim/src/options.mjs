@@ -108,6 +108,7 @@ export const COMMAND_OPTIONS = Object.freeze({
     values: unique(STUDY_PLAN_OPTIONS.synthetic, STUDY_PLAN_OPTIONS.preprod, STUDY_PLAN_OPTIONS.corpus).filter((k) => !['wallet', 'set'].includes(k)),
     repeat: ['wallet', 'set']
   },
+  analyze: { flags: [], values: ['network', 'study', 'split', 'analysisFreezeTx', 'drop', 'workers', 'out', 'resamples', 'sizingSamples', 'sizingResamples'], repeat: [] },
   'live-fire': {
     flags: ['keepForDebug', 'cleanup'],
     values: unique(LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS).filter((k) => !['keepForDebug', 'cleanup'].includes(k)),
@@ -122,10 +123,11 @@ const CLOSED = Object.freeze({
   fromStudy: { '*': FROM_STUDY },
   bytes: { '*': BYTES },
   plan: { replay: ['recent', 'peak'], 'plan-shards': ['recent', 'peak'], study: ['synthetic', 'preprod', 'corpus'] },
-  collateralRule: { '*': ['ledger', 'practice'] }
+  collateralRule: { '*': ['ledger', 'practice'] },
+  split: { '*': ['exploration', 'confirmation'] }
 });
 const WINDOW = /^(recent|peak|snapshot|blocks:\d+-\d+)$/;
-const WHOLE = ['workers', 'reps', 'days', 'batch'];
+const WHOLE = ['workers', 'reps', 'days', 'batch', 'resamples', 'sizingSamples', 'sizingResamples'];
 
 export const flagOf = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 const camelOf = (s) => s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());

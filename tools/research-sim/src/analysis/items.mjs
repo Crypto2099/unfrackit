@@ -34,7 +34,7 @@
 // Breakdowns (item 9) and the peak window (item 10). Every cell of the items
 // and of the four primary outcomes is also given by size group (B1 to B3,
 // merged from B3 down while a cell holds under ten wallets, per cell; a merge
-// that reaches B0 leaves no size cell), by spend type (each outcome on the
+// that reaches B0 leaves no size cell and the breakdown is marked absent), by spend type (each outcome on the
 // spends of that type, its own minimums applied to them; no end states), and
 // by the fragmentation flag of the draw (wallet-level). Cells of a spend type,
 // of a flag value and of the capped and uncapped populations under ten wallets
@@ -392,6 +392,7 @@ const cellOfResult = (spec, scope, name, res, suppress) => {
 export async function runItems(tables, { workers = 1, resamples, libraries = studyLibraries(tables), suffix = '', flag = 'fragmented' } = {}) {
   const opts = { workers, levels: [Number(LEVEL)], ...(resamples === undefined ? {} : { resamples }) };
   const planned = []; // { spec, scope, name, suppress }
+  const absent = [];
   const counts = {};
   const nm = (base, seg = '') => join(base, seg, suffix);
   const plan = (spec, scope, seg, suppress) => planned.push({ spec, scope, name: nm(spec.base, seg), suppress: suppress && spec.entries.length < MIN_CELL_WALLETS });
@@ -406,10 +407,13 @@ export async function runItems(tables, { workers = 1, resamples, libraries = stu
     if (!spec.sizeable) continue;
     const per = {};
     for (const e of spec.entries) per[e.group] = (per[e.group] || 0) + 1;
-    for (const cell of mergeSizeGroups(per).cells) {
+    const merged = mergeSizeGroups(per);
+    for (const cell of merged.cells) {
       const sub = { ...spec, entries: spec.entries.filter((e) => cell.groups.includes(e.group)) };
       plan(sub, { kind: 'size', label: cell.label }, `size/${cell.label}`, false);
     }
+    // A merge that reaches B0 leaves only the whole-sample cell; the breakdown is marked absent.
+    if (merged.wholeOnly && !absent.some((a) => a.name === nm(spec.base, 'size'))) absent.push({ name: nm(spec.base, 'size'), ...spec.meta, statistic: spec.statistic, scope: { kind: 'size', label: null }, n: spec.entries.length, absent: true, reason: 'the ten-wallet merge reaches B0, so only the whole-sample cell is reported', estimate: null, interval: null, resamples: 0, dropped: 0 });
   }
 
   // By spend type and by the flag: the same items on filtered tables, the
@@ -434,6 +438,7 @@ export async function runItems(tables, { workers = 1, resamples, libraries = stu
   for (const p of live) if (!byName.has(p.name)) byName.set(p.name, { name: p.name, statistic: p.spec.statistic, wallets: p.spec.entries.map(({ id, group, weight, v }) => ({ id, group, weight, v })) });
   const results = new Map((await bootstrap([...byName.values()], opts)).map((r) => [r.name, r]));
   const cells = planned.map((p) => cellOfResult(p.spec, p.scope, p.name, results.get(p.name), p.suppress));
+  cells.push(...absent);
 
   for (const { sc, seg } of questionCells) {
     const res = await runQuestions(sc.tables, { workers, ...(resamples === undefined ? {} : { resamples }), libraries, suffix: join(seg, suffix) });
