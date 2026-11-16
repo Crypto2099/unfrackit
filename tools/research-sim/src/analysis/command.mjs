@@ -142,7 +142,9 @@ async function readWindow(ctx, say) {
   const tables = [];
   for await (const t of walletTables(ctx)) tables.push(t);
   say(`read ${ctx.options.window}: ${ctx.flow.stage} wallets in the stage, ${tables.length} kept`);
-  return { tables, timings: ctx.timings.summary(), machines: readMachines(ctx.stageDir), flow: flowOf(ctx, tables, ctx.options.window) };
+  const summary = ctx.timings.summary();
+  ctx.timings = null;
+  return { tables, timings: summary, machines: readMachines(ctx.stageDir), flow: flowOf(ctx, tables, ctx.options.window) };
 }
 
 // The questions on a table set, and for the recent window the verdicts.
@@ -175,6 +177,57 @@ function counts(o) {
   return { resamples: pick('resamples', RESAMPLES), sizingSamples: pick('sizingSamples', SIZING_SAMPLES), sizingResamples: pick('sizingResamples', SIZING_RESAMPLES) };
 }
 
+// The recent window: read, questions, items, H-7/H-9/H-11, the sensitivity re-runs and
+// the sizing. Returns only results, flow, timings summary and stage inputs.
+async function analyzeRecent(ctxRecent, base, n, census, synthetic, say) {
+  let sizing = null;
+  let verdicts = null;
+  const w = await readWindow(ctxRecent, say);
+  const tables = w.tables;
+  const libraries = studyLibraries(tables);
+  say('questions 1 and 2');
+  const questions = await questionsOn(tables, { workers: base.workers, resamples: n.resamples });
+  verdicts = buildVerdicts(questions);
+  say('items beside the verdicts');
+  const items = await runItems(tables, { workers: base.workers, resamples: n.resamples });
+  say('H-7, H-9 and H-11');
+  const d = await runDescriptive(tables, null, { workers: base.workers, resamples: n.resamples, window: 'recent' });
+  const recent = { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 };
+  const censusResult = census ? runCensus(census.rows) : null;
+
+  say('sensitivity re-runs');
+  const sens = {};
+  const sensVerdicts = {};
+  for (const f of SENSITIVITY) {
+    const has = tables.some((t) => typeof t.flags[f.flag] === 'boolean');
+    if (!has) {
+      sens[f.label] = { filter: f.text, flag: f.flag, absent: true };
+      continue;
+    }
+    const kept = tables.filter((t) => f.keep(t.flags[f.flag]));
+    const q = await questionsOn(kept, { workers: base.workers, resamples: n.resamples }, `sens/${f.label}`);
+    sens[f.label] = { filter: f.text, flag: f.flag, wallets: kept.length, questions: q };
+    sensVerdicts[f.label] = { filter: f.text, ...buildVerdicts(q) };
+  }
+  verdicts = { ...verdicts, sensitivity: sensVerdicts };
+
+  if (synthetic || base.split === 'exploration') {
+    say('sizing');
+    sizing = await runSizing(tables, sampleCounts(ctxRecent, tables), { workers: base.workers, samples: n.sizingSamples, resamples: n.sizingResamples, libraries });
+  }
+  return { wallets: tables.length, libraries, flow: w.flow, timings: { timings: w.timings, machines: w.machines }, recent, census: censusResult, sensitivity: sens, verdicts, sizing, files: stageInputs(ctxRecent, 'recent') };
+}
+
+// The peak window: read, then questions 1 and 2, items and H-7/H-9/H-11 with the 'peak' suffix.
+async function analyzePeak(ctxPeak, base, n, say) {
+  const w = await readWindow(ctxPeak, say);
+  say('peak window: questions 1 and 2, items, H-7, H-9 and H-11');
+  const questions = await questionsOn(w.tables, { workers: base.workers, resamples: n.resamples }, 'peak');
+  const items = await runItems(w.tables, { workers: base.workers, resamples: n.resamples, suffix: 'peak' });
+  const d = await runDescriptive(w.tables, null, { workers: base.workers, resamples: n.resamples, window: 'peak' });
+  return { flow: w.flow, timings: { timings: w.timings, machines: w.machines }, peak: { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 }, files: stageInputs(ctxPeak, 'peak') };
+}
+
 // The command. `o` is the parsed command line (options.mjs) or an object with the same keys
 // (and `root`, `quiet` for tests). Returns { print } with counts only.
 export async function cmdAnalyze(o) {
@@ -195,65 +248,27 @@ export async function cmdAnalyze(o) {
 
   const results = { format: FORMAT, network: base.network, split: base.split, libraries: null, resamples: n.resamples, recent: null, peak: null, census: null, sensitivity: null, flow: {}, carried: carriedReports ? { collateral: carriedReports.collateral, nearCap: carriedReports.nearCap } : null };
   const files = {};
-  let sizing = null;
-  let verdicts = null;
   const timings = { format: FORMAT, windows: {} };
-  let walletsRecent = 0;
 
-  // ---- The recent window.
-  {
-    const w = await readWindow(ctxRecent, say);
-    const tables = w.tables;
-    walletsRecent = tables.length;
-    const libraries = studyLibraries(tables);
-    results.libraries = libraries;
-    results.flow.recent = w.flow;
-    timings.windows.recent = { timings: w.timings, machines: w.machines };
-    say('questions 1 and 2');
-    const questions = await questionsOn(tables, { workers: base.workers, resamples: n.resamples });
-    verdicts = buildVerdicts(questions);
-    say('items beside the verdicts');
-    const items = await runItems(tables, { workers: base.workers, resamples: n.resamples });
-    say('H-7, H-9 and H-11');
-    const d = await runDescriptive(tables, null, { workers: base.workers, resamples: n.resamples, window: 'recent' });
-    results.recent = { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 };
-    results.census = census ? runCensus(census.rows) : null;
+  // Each window's tables and timing rows live inside its own function, so they are
+  // unreachable once it returns and only one window is in memory at a time.
+  const recent = await analyzeRecent(ctxRecent, base, n, census, synthetic, say);
+  const { libraries, verdicts, sizing } = recent;
+  results.libraries = libraries;
+  results.flow.recent = recent.flow;
+  timings.windows.recent = recent.timings;
+  results.recent = recent.recent;
+  results.census = recent.census;
+  results.sensitivity = recent.sensitivity;
+  const walletsRecent = recent.wallets;
+  Object.assign(files, recent.files);
 
-    say('sensitivity re-runs');
-    const sens = {};
-    const sensVerdicts = {};
-    for (const f of SENSITIVITY) {
-      const has = tables.some((t) => typeof t.flags[f.flag] === 'boolean');
-      if (!has) {
-        sens[f.label] = { filter: f.text, flag: f.flag, absent: true };
-        continue;
-      }
-      const kept = tables.filter((t) => f.keep(t.flags[f.flag]));
-      const q = await questionsOn(kept, { workers: base.workers, resamples: n.resamples }, `sens/${f.label}`);
-      sens[f.label] = { filter: f.text, flag: f.flag, wallets: kept.length, questions: q };
-      sensVerdicts[f.label] = { filter: f.text, ...buildVerdicts(q) };
-    }
-    results.sensitivity = sens;
-    verdicts = { ...verdicts, sensitivity: sensVerdicts };
-
-    if (synthetic || base.split === 'exploration') {
-      say('sizing');
-      sizing = await runSizing(tables, sampleCounts(ctxRecent, tables), { workers: base.workers, samples: n.sizingSamples, resamples: n.sizingResamples, libraries });
-    }
-    Object.assign(files, stageInputs(ctxRecent, 'recent'));
-  }
-
-  // ---- The peak window.
   if (ctxPeak) {
-    const w = await readWindow(ctxPeak, say);
-    results.flow.peak = w.flow;
-    timings.windows.peak = { timings: w.timings, machines: w.machines };
-    say('peak window: questions 1 and 2, items, H-7, H-9 and H-11');
-    const questions = await questionsOn(w.tables, { workers: base.workers, resamples: n.resamples }, 'peak');
-    const items = await runItems(w.tables, { workers: base.workers, resamples: n.resamples, suffix: 'peak' });
-    const d = await runDescriptive(w.tables, null, { workers: base.workers, resamples: n.resamples, window: 'peak' });
-    results.peak = { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 };
-    Object.assign(files, stageInputs(ctxPeak, 'peak'));
+    const peak = await analyzePeak(ctxPeak, base, n, say);
+    results.flow.peak = peak.flow;
+    timings.windows.peak = peak.timings;
+    results.peak = peak.peak;
+    Object.assign(files, peak.files);
   }
 
   // ---- Outputs.
