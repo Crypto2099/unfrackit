@@ -28,28 +28,59 @@ const byKey = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
 
 // Times collected per library and arm, per method and spend type, and per
 // method and bin of the spendable UTxO count before the spend (section 6.4's
-// timing context).
+// timing context). Each time is held once, in one growing column, with the
+// index of its group under each of the three groupings; the groups' arrays are
+// built one grouping at a time when the summary is taken.
 export class TimingCollector {
   constructor() {
-    this.byArm = new Map();
-    this.byType = new Map();
-    this.bySpendable = new Map();
+    this.keys = [new Map(), new Map(), new Map()];
+    this.names = [[], [], []];
+    this.ms = new Float64Array(1024);
+    this.group = [new Uint16Array(1024), new Uint16Array(1024), new Uint16Array(1024)];
     this.rows = 0;
   }
+  grow() {
+    const n = this.ms.length * 2;
+    const ms = new Float64Array(n);
+    ms.set(this.ms);
+    this.ms = ms;
+    this.group = this.group.map((g) => {
+      const x = new Uint16Array(n);
+      x.set(g);
+      return x;
+    });
+  }
+  code(d, key) {
+    let c = this.keys[d].get(key);
+    if (c === undefined) {
+      c = this.names[d].length;
+      if (c > 0xffff) throw new Error('timings: more than 65,536 groups');
+      this.keys[d].set(key, c);
+      this.names[d].push(key);
+    }
+    return c;
+  }
   add({ method, kind, type, ms, spendable }) {
-    const push = (m, k) => {
-      let a = m.get(k);
-      if (!a) m.set(k, (a = []));
-      a.push(ms);
-    };
-    push(this.byArm, `${method}/${kind}`);
-    push(this.byType, `${method}/${type}`);
-    push(this.bySpendable, `${method}/${spendableBin(spendable)}`);
-    this.rows++;
+    if (this.rows === this.ms.length) this.grow();
+    const i = this.rows++;
+    this.ms[i] = ms;
+    this.group[0][i] = this.code(0, `${method}/${kind}`);
+    this.group[1][i] = this.code(1, `${method}/${type}`);
+    this.group[2][i] = this.code(2, `${method}/${spendableBin(spendable)}`);
   }
   summary() {
-    const g = (m) => Object.fromEntries([...m].sort(byKey).map(([k, xs]) => [k, distribution(xs)]));
-    return { rows: this.rows, byArm: g(this.byArm), byMethodAndType: g(this.byType), byMethodAndSpendable: g(this.bySpendable) };
+    const g = (d) => {
+      const names = this.names[d];
+      const counts = new Uint32Array(names.length);
+      const col = this.group[d];
+      for (let i = 0; i < this.rows; i++) counts[col[i]]++;
+      const arrays = names.map((_, c) => new Float64Array(counts[c]));
+      const at = new Uint32Array(names.length);
+      for (let i = 0; i < this.rows; i++) arrays[col[i]][at[col[i]]++] = this.ms[i];
+      const m = new Map(names.map((k, c) => [k, arrays[c]]));
+      return Object.fromEntries([...m].sort(byKey).map(([k, xs]) => [k, distribution(xs)]));
+    };
+    return { rows: this.rows, byArm: g(0), byMethodAndType: g(1), byMethodAndSpendable: g(2) };
   }
 }
 

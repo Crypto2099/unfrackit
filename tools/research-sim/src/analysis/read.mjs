@@ -47,6 +47,7 @@ import { withoutLeftovers } from '../kit/replay.mjs';
 import { normalizeParams, SYNTHETIC_PARAMS } from '../kit/params.mjs';
 import { depositParts } from './deposits.mjs';
 import { slopesOfPoints } from './slope.mjs';
+import { SpendTable } from './spends.mjs';
 
 export class AnalysisRefusal extends Error {
   constructor(message) {
@@ -375,7 +376,7 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
     n: { attempted: 0, built: 0, failed: 0, infeasible: 0, infeasibleCollateral: 0, notReplayable: 0, forfeit: 0, chains: 0 },
     byClass: {},
     unpricedFailures: 0,
-    spends: new Map(),
+    spends: new SpendTable(spends.length),
     h7: null,
     slopes: null,
     summary: null
@@ -441,7 +442,7 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
     } else if (r.outcome === 'infeasible') run.n.infeasible++;
     else if (r.outcome === 'infeasible-collateral') run.n.infeasibleCollateral++;
     else run.n.forfeit++;
-    run.spends.set(r.intent, s);
+    run.spends.add(s);
   }
   if (armRecord && armRecord.start) {
     const net = changeCount - consumed;

@@ -93,7 +93,7 @@ function countRun(spends) {
 
 // The run with only the spends `keep` accepts; its counts follow.
 export function restrictRun(run, keep) {
-  const spends = new Map([...run.spends].filter(([, s]) => keep(s)));
+  const spends = typeof run.spends.filter === 'function' ? run.spends.filter(keep) : new Map([...run.spends].filter(([, s]) => keep(s)));
   return { ...run, spends, ...countRun(spends) };
 }
 
