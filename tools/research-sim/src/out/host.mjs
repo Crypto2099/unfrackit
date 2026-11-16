@@ -36,8 +36,8 @@ export function hostFacts() {
 // workers: the replay workers; memoryBudgetBytes: the workers' memory budget
 // (replay/pool.mjs), when known, or null for the pool's default, chosen when
 // each pool starts.
-export function machineRecord({ workers, memoryBudgetBytes }) {
-  return { workers, ...(memoryBudgetBytes !== undefined ? { memoryBudgetBytes } : {}), ...hostFacts() };
+export function machineRecord({ workers, memoryBudgetBytes, maxJobs }) {
+  return { workers, ...(memoryBudgetBytes !== undefined ? { memoryBudgetBytes } : {}), ...(maxJobs !== undefined ? { maxJobs } : {}), ...hostFacts() };
 }
 
 // The physical cores /proc/cpuinfo lists: its distinct (physical id, core

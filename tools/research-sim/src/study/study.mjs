@@ -134,7 +134,7 @@ import { DEFAULT_PINS } from '../treatment/bridge.mjs';
 import { scrubText } from '../out/records.mjs';
 import { Refusal } from '../history/db.mjs';
 import { pickCollateralRule } from '../history/reports.mjs';
-import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel, shardOf, memoryBudgetOf } from '../options.mjs';
+import { STUDY_PLAN_OPTIONS, MACHINE_OPTIONS, machineLabel, shardOf, memoryBudgetOf, maxJobsOf } from '../options.mjs';
 import { workerCount } from '../replay/pool.mjs';
 import { machineRecord } from '../out/host.mjs';
 import { takeLock } from '../out/lock.mjs';
@@ -185,6 +185,7 @@ export function studyOptions(opts) {
   try {
     workerCount(o.workers, '--workers');
     memoryBudgetOf(o.memoryBudget);
+    maxJobsOf(o.maxJobs);
     machineLabel(o.machine);
     if (o.shard !== undefined) shardOf(o.shard);
   } catch (e) {
@@ -407,7 +408,7 @@ export function stageOptions(stage, o, network, { collateralRule = o.collateralR
   const db = pick(o, ['expectNetwork', 'snapshot', 'extractionRun', 'bytes', 'immutableDir', 'immutableHost']);
   const wallets = o.fromStudy !== undefined ? null : pick(o, ['wallets', 'wallet']);
   const runId = id(stage);
-  const replayOpts = { ...pick(o, ['reps', 'workers', 'memoryBudget', 'machine', 'shard', 'walletIndexes']), validity: true };
+  const replayOpts = { ...pick(o, ['reps', 'workers', 'memoryBudget', 'maxJobs', 'machine', 'shard', 'walletIndexes']), validity: true };
   const freeze = pick(o, ['analysisFreezeTx']);
   switch (stage) {
     case 'history-recent':
@@ -459,7 +460,7 @@ export async function runStudy(opts, { commands, manifest = formatHashList, say 
     if (!resuming) writeJson(headerPath, header);
     const done = ended(StudyLog.entries(logPath));
     const log = new StudyLog(logPath);
-    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), memoryBudgetBytes: memoryBudgetOf(o.memoryBudget) }) });
+    log.note({ event: resuming ? 'resume' : 'start', plan: o.plan, stages: header.stages, finished: [...done.keys()], manifestSha256: header.manifestSha256, machineLabel: machineLabel(o.machine), shard: o.shard ?? null, walletIndexes: o.walletIndexes ?? null, stopBefore: o.stopBefore ?? null, machine: machineRecord({ workers: workerCount(o.workers, '--workers'), memoryBudgetBytes: memoryBudgetOf(o.memoryBudget), maxJobs: maxJobsOf(o.maxJobs) ?? undefined }) });
     const result = { runId: o.runId, plan: o.plan, network: header.network, dir, stages: [] };
     let failed = false;
     for (const stage of header.stages) {

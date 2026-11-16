@@ -56,7 +56,7 @@ import { isHeavyName } from '../shapes/heavy.mjs';
 import { SIM_SETTINGS } from '../settings.mjs';
 import { formatHashList } from '../hash.mjs';
 import { loadSource } from './source.mjs';
-import { MACHINE_OPTIONS, LOCAL_OPTIONS, machineLabel, memoryBudgetOf } from '../options.mjs';
+import { MACHINE_OPTIONS, LOCAL_OPTIONS, machineLabel, memoryBudgetOf, maxJobsOf } from '../options.mjs';
 
 const list = (x) => (x === undefined ? [] : [].concat(x));
 
@@ -109,11 +109,12 @@ async function setup(opts, command) {
   if (!opts.treatment) throw new Error('--treatment <dir> names the treatment directory');
   const threads = workersOf(opts);
   const memoryBudget = memoryBudgetOf(opts.memoryBudget);
+  const maxJobs = maxJobsOf(opts.maxJobs);
   const pinsPath = pinsPathOf(opts);
   const T = await loadTreatment(opts.treatment, readFileSync(pinsPath, 'utf8'));
-  const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: threads.workers, memoryBudget });
+  const pool = new Pool({ treatmentDir: resolve(opts.treatment), pinsPath, size: threads.workers, memoryBudget, ...(maxJobs !== null ? { maxJobs } : {}) });
   const runId = opts.runId || `${command}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  return { T, pool, pinsPath, runId, threads: { ...threads, memoryBudgetBytes: pool.budget } };
+  return { T, pool, pinsPath, runId, threads: { ...threads, memoryBudgetBytes: pool.budget, maxJobs: pool.maxJobs } };
 }
 
 // The options a replay stage's run.json records: those that change a record,
@@ -179,7 +180,7 @@ export async function cmdReplay(opts) {
     const list = walletList(wallets);
     const selection = selectionOf(opts, { plan, wallets: list });
     out = await openStage(runDir(first.network, runId), { header: stageHeader(opts, T, { plan, entries }), wallets: list, machine, workers: threads.workers, selection });
-    out.machine({ memoryBudgetBytes: pool.budget, pool: pool.stats });
+    out.machine({ memoryBudgetBytes: pool.budget, maxJobs: pool.maxJobs, pool: pool.stats });
     out.note({ event: 'start', wallets: wallets.length, analysisFreezeTx: opts.analysisFreezeTx || null, selection: selection ? selection.record : null });
     const totals = await runReplays(T, pool, { wallets, plan: entries, roles, out, validity: !!opts.validity, collateralRules });
     out.note({ event: 'end', ended: out.ended, totals, records: out.counts, workers: pool.stats });

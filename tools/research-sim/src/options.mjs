@@ -20,7 +20,7 @@ const WALLET_VALUES = ['wallets'];
 
 // What the study takes by use (study/study.mjs studyOptions refuses, per plan,
 // an option the plan does not use). The lists are the union of the plans.
-export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'memoryBudget', 'reps', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
+export const STUDY_COMMON = Object.freeze(['plan', 'runId', 'treatment', 'treatmentPins', 'workers', 'memoryBudget', 'maxJobs', 'reps', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
 export const STUDY_DATABASE = Object.freeze(['expectNetwork', 'snapshot', 'extractionRun', 'wallets', 'wallet', 'fromStudy', 'analysisFreezeTx', 'bytes', 'immutableDir', 'immutableHost', 'set']);
 export const STUDY_PLAN_OPTIONS = Object.freeze({
   synthetic: Object.freeze([...STUDY_COMMON, 'shapes', 'collateralRule']),
@@ -35,11 +35,11 @@ export const LIVE_FIRE_CLEANUP_OPTIONS = Object.freeze(['cleanup', 'runId', 'net
 
 // The options that say how a run uses the machine or which part of the work
 // an invocation does, never what it computes: the worker counts, the memory
-// budget, the machine label, a replay's share of the wallets (--shard,
+// budget, the jobs a worker runs before it is replaced, the machine label, a replay's share of the wallets (--shard,
 // --wallet-indexes) and the stage a study stops before. They change no
 // record, so run.json keeps them apart from the options and a study or a
 // replay stage resumes with other values (study/study.mjs, out/stage.mjs).
-export const MACHINE_OPTIONS = Object.freeze(['workers', 'memoryBudget', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
+export const MACHINE_OPTIONS = Object.freeze(['workers', 'memoryBudget', 'maxJobs', 'machine', 'shard', 'walletIndexes', 'stopBefore']);
 
 // The options that say where a replay's inputs and output are on this
 // machine: the run ID, the treatment directory and pins file, the history
@@ -82,6 +82,17 @@ export function memoryBudgetOf(v) {
   return Math.round(n * 1024 ** 3);
 }
 
+// The jobs a worker runs before the pool replaces it (--max-jobs <n>), a
+// positive whole number; null when absent, the pool then taking its default.
+// 1 gives every job a fresh worker. It changes no record.
+export const MAX_JOBS_RULE = '--max-jobs takes a positive whole number';
+export function maxJobsOf(v) {
+  if (v === undefined || v === null) return null;
+  const n = typeof v === 'string' && /^[1-9]\d*$/.test(v) ? Number(v) : v;
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error(`${MAX_JOBS_RULE}, not ${JSON.stringify(v)}`);
+  return n;
+}
+
 // Options an earlier version took, refused by name wherever they appear.
 export const LIMIT_MS_GONE = 'refusing: --limit-ms is gone: no time limit decides a result; every replay runs to completion, and a watchdog only makes one that hangs run again';
 export const ANSWER_LIMIT_MS_GONE = 'refusing: --answer-limit-ms is gone: no time limit decides a result; every method answer runs to completion, and a watchdog only makes one that hangs run again';
@@ -99,7 +110,7 @@ export const COMMAND_OPTIONS = Object.freeze({
   census: { flags: ['fromStudy', 'allWallets', 'explain'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   'near-cap': { flags: ['fromStudy', 'allWallets'], values: [...CONTEXT_VALUES, 'runId', ...WALLET_VALUES], repeat: ['set', 'wallet'] },
   collateral: { flags: ['explain'], values: [...CONTEXT_VALUES, 'runId', 'days', 'batch'], repeat: ['set'] },
-  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'memoryBudget', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'reps', 'collateralRule', 'machine', 'shard', 'walletIndexes'], repeat: ['history'] },
+  replay: { flags: ['validity'], values: ['treatment', 'treatmentPins', 'workers', 'memoryBudget', 'maxJobs', 'runId', 'plan', 'shapes', 'analysisFreezeTx', 'reps', 'collateralRule', 'machine', 'shard', 'walletIndexes'], repeat: ['history'] },
   'plan-shards': { flags: [], values: ['treatment', 'treatmentPins', 'plan', 'shapes', 'reps', 'collateralRule', 'machines', 'out'], repeat: ['history'] },
   'merge-stage': { flags: [], values: ['into', 'machine'], repeat: [], positional: true },
   fidelity: { flags: [], values: ['treatment', 'treatmentPins', 'analysisFreezeTx', 'runId'], repeat: ['history'] },
@@ -127,7 +138,7 @@ const CLOSED = Object.freeze({
   split: { '*': ['exploration', 'confirmation'] }
 });
 const WINDOW = /^(recent|peak|snapshot|blocks:\d+-\d+)$/;
-const WHOLE = ['workers', 'reps', 'days', 'batch', 'resamples', 'sizingSamples', 'sizingResamples'];
+const WHOLE = ['workers', 'maxJobs', 'reps', 'days', 'batch', 'resamples', 'sizingSamples', 'sizingResamples'];
 
 export const flagOf = (k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 const camelOf = (s) => s.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());

@@ -79,31 +79,37 @@
 
 import { COLLATERAL_RULES } from '../replay/collateral.mjs';
 
-// One row per study library: { role, method, random }.
+// One row per study library: { role, method, random, seeded }. seeded is the
+// method's own flag (a repetition's seed fixes its picks): false for the two
+// libraries whose random selection draws from a generator no caller can seed,
+// csl-ri and cml-ri, whose records can differ between runs of the same inputs.
+// It sits here so that code that loads no library can tell them apart
+// (scripts/compare-records.mjs); a treatment test checks it against each
+// method.
 export const LIBRARY_TABLE = Object.freeze([
-  { role: 'lf', method: 'csl-lf', random: false },
-  { role: 'ri', method: 'csl-ri', random: true },
-  { role: 'rrri', method: 'cjs-rrri', random: true },
-  { role: 'evo', method: 'evo-lf', random: false },
-  { role: 'blaze-wd', method: 'blaze-wd', random: false },
-  { role: 'lucid-lf', method: 'lucid-lf', random: false },
-  { role: 'mesh-rrri', method: 'mesh-rrri', random: true },
-  { role: 'typhon-lp', method: 'typhon-lp', random: false },
-  { role: 'helios-sf', method: 'helios-sf', random: false },
-  { role: 'cml-lf', method: 'cml-lf', random: false },
-  { role: 'cml-ri', method: 'cml-ri', random: true },
-  { role: 'cometa-lf', method: 'cometa-lf', random: false },
-  { role: 'lace-rrri', method: 'lace-rrri', random: true },
-  { role: 'adalite-lp', method: 'adalite-lp', random: false },
-  { role: 'yoroi-lf', method: 'yoroi-lf', random: false },
-  { role: 'apollo-macs', method: 'apollo-macs', random: false },
-  { role: 'scalus-pool', method: 'scalus-pool', random: false },
-  { role: 'ccl-pw', method: 'ccl-pw', random: false },
-  { role: 'pycardano-lf', method: 'pycardano-lf', random: true },
-  { role: 'tx3-vd', method: 'tx3-vd', random: false },
-  { role: 'ctl-rrri', method: 'ctl-rrri', random: true },
-  { role: 'kuber-prune', method: 'kuber-prune', random: false },
-  { role: 'cwallet-rrri', method: 'cwallet-rrri', random: true }
+  { role: 'lf', method: 'csl-lf', random: false, seeded: true },
+  { role: 'ri', method: 'csl-ri', random: true, seeded: false },
+  { role: 'rrri', method: 'cjs-rrri', random: true, seeded: true },
+  { role: 'evo', method: 'evo-lf', random: false, seeded: true },
+  { role: 'blaze-wd', method: 'blaze-wd', random: false, seeded: true },
+  { role: 'lucid-lf', method: 'lucid-lf', random: false, seeded: true },
+  { role: 'mesh-rrri', method: 'mesh-rrri', random: true, seeded: true },
+  { role: 'typhon-lp', method: 'typhon-lp', random: false, seeded: true },
+  { role: 'helios-sf', method: 'helios-sf', random: false, seeded: true },
+  { role: 'cml-lf', method: 'cml-lf', random: false, seeded: true },
+  { role: 'cml-ri', method: 'cml-ri', random: true, seeded: false },
+  { role: 'cometa-lf', method: 'cometa-lf', random: false, seeded: true },
+  { role: 'lace-rrri', method: 'lace-rrri', random: true, seeded: true },
+  { role: 'adalite-lp', method: 'adalite-lp', random: false, seeded: true },
+  { role: 'yoroi-lf', method: 'yoroi-lf', random: false, seeded: true },
+  { role: 'apollo-macs', method: 'apollo-macs', random: false, seeded: true },
+  { role: 'scalus-pool', method: 'scalus-pool', random: false, seeded: true },
+  { role: 'ccl-pw', method: 'ccl-pw', random: false, seeded: true },
+  { role: 'pycardano-lf', method: 'pycardano-lf', random: true, seeded: true },
+  { role: 'tx3-vd', method: 'tx3-vd', random: false, seeded: true },
+  { role: 'ctl-rrri', method: 'ctl-rrri', random: true, seeded: true },
+  { role: 'kuber-prune', method: 'kuber-prune', random: false, seeded: true },
+  { role: 'cwallet-rrri', method: 'cwallet-rrri', random: true, seeded: true }
 ].map((r) => Object.freeze(r)));
 const RULE = Object.freeze({ role: 'h12', method: 'unfrackit-h12' });
 

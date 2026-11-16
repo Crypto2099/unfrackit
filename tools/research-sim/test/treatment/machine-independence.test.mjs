@@ -9,7 +9,7 @@
 // on a wallet's first intent), and any other job that runs past it, and has
 // it run again to completion.
 // The three write the same records, byte for byte once the unseeded
-// selector's (csl-ri) are set aside; theirs are compared by key and count,
+// selectors' (csl-ri and cml-ri, the library table's seeded column) are set aside; theirs are compared by key and count,
 // where those are fixed (the jobs, and one spend record per intent). The
 // replay plan is the study's recent plan under the ledger collateral rule.
 // Needs RESEARCH_SIM_TREATMENT_DIR.
@@ -26,12 +26,12 @@ import { RunOutput } from '../../src/out/records.mjs';
 import { testStage, stageText, stageLog } from '../lib/stage.mjs';
 import { loadSource } from '../../src/replay/source.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
-import { windowPlan, STUDY_ROLES } from '../../src/arms/plan.mjs';
+import { windowPlan, STUDY_ROLES, LIBRARY_TABLE } from '../../src/arms/plan.mjs';
 
 const T = await treatment();
 const pins = process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS;
 const SHAPES = ['S1', 'S8', 'M1'];
-const UNSEEDED = new Set(['csl-ri']);
+const UNSEEDED = new Set(LIBRARY_TABLE.filter((r) => !r.seeded).map((r) => r.method));
 const STALL_MS = 1500;
 const WATCHDOG_MS = 1000;
 // One worker running every job; three, each job in a fresh worker; the same

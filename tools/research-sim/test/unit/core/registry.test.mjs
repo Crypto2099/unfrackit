@@ -29,7 +29,7 @@ const pycardanoBuild = helperBuild('pycardano');
 const tx3Build = helperBuild('tx3');
 const kuberBuild = helperBuild('kuber');
 const cwalletBuild = helperBuild('cwallet');
-import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES } from '../../../src/arms/plan.mjs';
+import { windowPlan, expandJobs, STUDY_ROLES, TEST_ROLES, LIBRARY_TABLE } from '../../../src/arms/plan.mjs';
 import { HELIOS_PATCH_PROBLEM } from '../../../src/methods/helios.mjs';
 import { treatment, skip } from '../../lib/treatment.mjs';
 
@@ -159,4 +159,31 @@ test('every method a study plan names resolves, and the test roles name only the
   const testJobs = expandJobs(windowPlan('recent'), { roles: TEST_ROLES, needsCollateral: true });
   assert.deepEqual([...new Set(testJobs.map((j) => j.method))], ['test-largest-first']);
   assert.deepEqual([...TEST_METHODS], ['test-largest-first', 'test-stall']);
+});
+
+test('the library table\'s seeded column names csl-ri and cml-ri only', () => {
+  assert.deepEqual(LIBRARY_TABLE.filter((r) => typeof r.seeded !== 'boolean'), []);
+  assert.deepEqual(LIBRARY_TABLE.filter((r) => !r.seeded).map((r) => r.method), ['csl-ri', 'cml-ri']);
+  // A library that does not pick at random is seeded.
+  assert.deepEqual(LIBRARY_TABLE.filter((r) => !r.random && !r.seeded), []);
+  assert.deepEqual(LIBRARY_TABLE.map((r) => r.method), [...BASELINE_METHODS]);
+});
+
+test('the library table\'s seeded column agrees with every baseline\'s own seeded flag', { skip }, () => {
+  let checked = 0;
+  for (const row of LIBRARY_TABLE) {
+    let m;
+    try {
+      m = makeMethod(T, row.method);
+    } catch (e) {
+      // A baseline whose build is absent names its build script (the test
+      // above); the others must make.
+      if (/scripts\/build-/.test(e.message)) continue;
+      throw e;
+    }
+    assert.equal(m.seeded, row.seeded, row.method);
+    assert.equal(m.deterministic, !row.random, `${row.method} deterministic against random`);
+    checked++;
+  }
+  assert.ok(checked > 0);
 });

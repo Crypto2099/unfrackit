@@ -11,7 +11,7 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COMMAND_OPTIONS, STUDY_PLAN_OPTIONS, LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS, MACHINE_OPTIONS, flagOf, memoryBudgetOf } from '../../../src/options.mjs';
+import { COMMAND_OPTIONS, STUDY_PLAN_OPTIONS, LIVE_FIRE_RUN_OPTIONS, LIVE_FIRE_CLEANUP_OPTIONS, MACHINE_OPTIONS, flagOf, memoryBudgetOf, maxJobsOf } from '../../../src/options.mjs';
 import { parseArgs as fromHistory } from '../../../src/history/commands.mjs';
 import { parseArgs } from '../../../src/options.mjs';
 
@@ -25,7 +25,7 @@ function sample(key, command) {
   if (key === 'fromStudy') return 'random';
   if (key === 'bytes') return 'tx_cbor';
   if (key === 'window') return 'blocks:10-20';
-  if (['workers', 'reps', 'days', 'batch', 'resamples', 'sizingSamples', 'sizingResamples'].includes(key)) return '3';
+  if (['workers', 'maxJobs', 'reps', 'days', 'batch', 'resamples', 'sizingSamples', 'sizingResamples'].includes(key)) return '3';
   if (key === 'split') return 'exploration';
   if (key === 'collateralRule') return 'ledger';
   if (key === 'shard') return '1/3';
@@ -174,6 +174,17 @@ test('--memory-budget: a positive number of GiB, for replay and study, and a mac
   for (const command of COMMANDS.filter((c) => !['replay', 'study'].includes(c))) refused(['--memory-budget', '4'], command, /unknown option --memory-budget/);
   assert.ok(MACHINE_OPTIONS.includes('memoryBudget'));
   assert.deepEqual([memoryBudgetOf(undefined), memoryBudgetOf('2'), memoryBudgetOf('0.5'), memoryBudgetOf(1.5)], [null, 2 * 1024 ** 3, 512 * 1024 ** 2, 1.5 * 1024 ** 3]);
+});
+
+test('--max-jobs: a positive whole number, for replay and study, and a machine option', () => {
+  for (const command of ['replay', 'study']) {
+    for (const v of ['1', '40']) assert.equal(parseArgs(['--max-jobs', v], command).maxJobs, v);
+    for (const bad of ['0', '-1', '1.5', 'x', '', '01']) refused(['--max-jobs', bad], command, new RegExp(`--max-jobs takes a positive whole number, not ${JSON.stringify(bad)} for ${command}`));
+  }
+  for (const command of COMMANDS.filter((c) => !['replay', 'study'].includes(c))) refused(['--max-jobs', '1'], command, /unknown option --max-jobs/);
+  assert.ok(MACHINE_OPTIONS.includes('maxJobs'));
+  assert.deepEqual([maxJobsOf(undefined), maxJobsOf('1'), maxJobsOf(7)], [null, 1, 7]);
+  assert.throws(() => maxJobsOf('0'), /--max-jobs takes a positive whole number/);
 });
 
 test('a value never begins with --', () => {
