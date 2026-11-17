@@ -50,23 +50,50 @@ test('a filtered view holds the kept rows in order and filters again', () => {
   assert.equal(t.filter((s) => s.outcome === 'failed').get(4).class, 'balance');
 });
 
-test('timings collected into columns give the same distributions as plain arrays', () => {
+test('timings collected into columns give, per machine, the same distributions as plain arrays', () => {
   const rows = [];
-  for (let i = 0; i < 3000; i++) rows.push({ method: i % 3 ? 'a' : 'b', kind: i % 2 ? 'own' : 'layout', type: i % 5 ? 'payment' : 'mint', ms: ((i * 7919) % 1000) / 7, spendable: i % 9 === 0 ? undefined : i % 40 });
+  for (let i = 0; i < 3000; i++) rows.push({ method: i % 3 ? 'a' : 'b', kind: i % 2 ? 'own' : 'layout', type: i % 5 ? 'payment' : 'mint', ms: ((i * 7919) % 1000) / 7, spendable: i % 9 === 0 ? undefined : i % 40, machine: i % 4 === 0 ? undefined : i % 4 === 1 ? 'x' : 'y' });
   const c = new TimingCollector();
   for (const r of rows) c.add(r);
   const s = c.summary();
   assert.equal(s.rows, 3000);
-  const ref = (key) => {
+  assert.deepEqual(Object.keys(s.byMachine), ['x', 'y', 'unattributed']);
+  const ref = (label, key) => {
     const m = new Map();
-    for (const r of rows) {
+    for (const r of rows.filter((r) => (r.machine || 'unattributed') === label)) {
       const k = key(r);
       if (!m.has(k)) m.set(k, []);
       m.get(k).push(r.ms);
     }
     return Object.fromEntries([...m].sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map(([k, xs]) => [k, distribution(xs)]));
   };
-  assert.deepEqual(s.byArm, ref((r) => `${r.method}/${r.kind}`));
-  assert.deepEqual(s.byMethodAndType, ref((r) => `${r.method}/${r.type}`));
-  assert.deepEqual(Object.keys(s.byMethodAndSpendable).length > 3, true);
+  for (const label of ['x', 'y', 'unattributed']) {
+    const e = s.byMachine[label];
+    assert.equal(e.rows, rows.filter((r) => (r.machine || 'unattributed') === label).length);
+    assert.deepEqual(e.byArm, ref(label, (r) => `${r.method}/${r.kind}`));
+    assert.deepEqual(e.byMethodAndType, ref(label, (r) => `${r.method}/${r.type}`));
+    assert.deepEqual(Object.keys(e.byMethodAndSpendable).length > 3, true);
+  }
+  assert.equal(s.byMachine.unattributed.machine, null);
+  assert.equal(Object.values(s.byMachine).reduce((n, e) => n + e.rows, 0), 3000);
+});
+
+test('outliers: a library with one far-out build counts it under its spendable bin and type', () => {
+  // 19 builds of 10 ms (spendable 5, type T1, 2 inputs) and one of 10,000 ms (spendable 40, type T2, 9 inputs): on ln(ms)
+  // Q1 = Q3 = ln 10, the IQR is 0, the limit is ln 10, and only the 10,000 ms build is above it. The other library has no outlier.
+  const c = new TimingCollector();
+  for (let i = 0; i < 19; i++) c.add({ method: 'a', kind: 'own', type: 'T1', ms: 10, spendable: 5, machine: 'x', inputs: 2, outcome: 'built' });
+  c.add({ method: 'a', kind: 'own', type: 'T2', ms: 10000, spendable: 40, machine: 'x', inputs: 9, outcome: 'built' });
+  for (let i = 0; i < 5; i++) c.add({ method: 'b', kind: 'own', type: 'T1', ms: 10 * (i + 1), spendable: 5, machine: 'x', inputs: 2, outcome: 'built' });
+  const o = c.summary().byMachine.x.outliers;
+  assert.deepEqual(Object.keys(o), ['a', 'b']);
+  assert.equal(o.a.count, 1);
+  assert.equal(o.a.rows, 20);
+  assert.ok(Math.abs(o.a.thresholdMs - 10) < 1e-9);
+  assert.deepEqual(o.a.bySpendable, { '4-7': { outliers: 0, all: 19 }, '32-63': { outliers: 1, all: 1 } });
+  assert.deepEqual(o.a.byType, { T1: { outliers: 0, all: 19 }, T2: { outliers: 1, all: 1 } });
+  assert.deepEqual(o.a.byInputs, { '2-3': { outliers: 0, all: 19 }, '8-15': { outliers: 1, all: 1 } });
+  assert.equal(o.b.count, 0);
+  assert.equal(o.b.rows, 5);
+  assert.ok(o.a.rule.includes('3 x IQR'));
 });

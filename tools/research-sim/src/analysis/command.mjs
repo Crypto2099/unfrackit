@@ -22,7 +22,8 @@
 //                  their answers and defaults, and the same for each
 //                  sensitivity re-run
 //   sizing.json    the sizing by simulation (an exploration or synthetic run)
-//   timings.json   the build times and the machines that ran the stages, the
+//   timings.json   the build times per machine, each from the wallets that
+//                  machine completed, and the machines that ran the stages, the
 //                  only output that carries a host fact or a time
 //   inputs.json    each input file by role with its SHA-256, the code
 //                  manifest's SHA-256, Node's version and the options that
@@ -41,7 +42,7 @@ import { buildVerdicts, renderVerdicts } from './verdicts.mjs';
 import { runItems } from './items.mjs';
 import { runDescriptive, runCensus } from './descriptive.mjs';
 import { runSizing, renderSizing } from './sizing.mjs';
-import { TimingCollector, readMachines } from './timings.mjs';
+import { TimingCollector, readMachines, readAttribution } from './timings.mjs';
 import { RESAMPLES } from './stats.mjs';
 import { SAMPLES as SIZING_SAMPLES, RESAMPLES as SIZING_RESAMPLES } from './sizing.mjs';
 
@@ -139,11 +140,14 @@ function flowOf(ctx, tables, window) {
 // A window's tables read, the timings collected, the stream ended.
 async function readWindow(ctx, say) {
   ctx.timings = new TimingCollector();
+  const attribution = readAttribution(ctx.stageDir);
+  ctx.machineOf = attribution.labelOf;
   const tables = [];
   for await (const t of walletTables(ctx)) tables.push(t);
   say(`read ${ctx.options.window}: ${ctx.flow.stage} wallets in the stage, ${tables.length} kept`);
-  const summary = ctx.timings.summary();
+  const summary = ctx.timings.summary(attribution.machines);
   ctx.timings = null;
+  ctx.machineOf = null;
   return { tables, timings: summary, machines: readMachines(ctx.stageDir), flow: flowOf(ctx, tables, ctx.options.window) };
 }
 
@@ -215,7 +219,7 @@ async function analyzeRecent(ctxRecent, base, n, census, synthetic, say) {
     say('sizing');
     sizing = await runSizing(tables, sampleCounts(ctxRecent, tables), { workers: base.workers, samples: n.sizingSamples, resamples: n.sizingResamples, libraries });
   }
-  return { wallets: tables.length, libraries, flow: w.flow, timings: { timings: w.timings, machines: w.machines }, recent, census: censusResult, sensitivity: sens, verdicts, sizing, files: stageInputs(ctxRecent, 'recent') };
+  return { wallets: tables.length, libraries, flow: w.flow, timings: { ...w.timings, machines: w.machines }, recent, census: censusResult, sensitivity: sens, verdicts, sizing, files: stageInputs(ctxRecent, 'recent') };
 }
 
 // The peak window: read, then questions 1 and 2, items and H-7/H-9/H-11 with the 'peak' suffix.
@@ -225,7 +229,7 @@ async function analyzePeak(ctxPeak, base, n, say) {
   const questions = await questionsOn(w.tables, { workers: base.workers, resamples: n.resamples }, 'peak');
   const items = await runItems(w.tables, { workers: base.workers, resamples: n.resamples, suffix: 'peak' });
   const d = await runDescriptive(w.tables, null, { workers: base.workers, resamples: n.resamples, window: 'peak' });
-  return { flow: w.flow, timings: { timings: w.timings, machines: w.machines }, peak: { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 }, files: stageInputs(ctxPeak, 'peak') };
+  return { flow: w.flow, timings: { ...w.timings, machines: w.machines }, peak: { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 }, files: stageInputs(ctxPeak, 'peak') };
 }
 
 // The command. `o` is the parsed command line (options.mjs) or an object with the same keys

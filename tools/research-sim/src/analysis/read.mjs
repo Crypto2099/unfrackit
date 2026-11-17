@@ -627,7 +627,8 @@ export function reduceWallet(ctx, index, records) {
 // the stream ends. The stream's end checks the decompressed records against
 // done.json, so a caller treats nothing as read until the loop has ended.
 // With ctx.timings (a TimingCollector) the spend records' times of the kept
-// wallets are matched by wallet index and record number and added to it.
+// wallets are matched by wallet index and record number and added to it, with
+// the label ctx.machineOf(index) gives (the machine that completed the wallet).
 export async function* walletTables(ctx) {
   const flow = { stage: 0, dropped: 0, otherSplit: 0, kept: 0 };
   ctx.flow = flow;
@@ -651,7 +652,7 @@ export async function* walletTables(ctx) {
         if (!rec || rec.kind !== 'spend' || row.kind !== 'spend') continue;
         if (typeof row.times.ms !== 'number') continue;
         const arm = armOf(rec);
-        ctx.timings.add({ method: arm.method, kind: arm.kind, type: rec.type, ms: row.times.ms, spendable: rec.spendableUtxos });
+        ctx.timings.add({ method: arm.method, kind: arm.kind, type: rec.type, ms: row.times.ms, spendable: rec.spendableUtxos, machine: ctx.machineOf ? ctx.machineOf(index) : null, inputs: rec.inputs, outcome: rec.outcome });
       }
     }
     return t;

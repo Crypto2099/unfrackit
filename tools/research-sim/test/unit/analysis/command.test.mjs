@@ -25,6 +25,7 @@ const tmp = () => {
 };
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const refusal = (re) => (e) => e instanceof AnalysisRefusal && re.test(e.message);
+const own = (e) => e.byArm['csl-lf/own'];
 const SMALL = { resamples: 60, sizingSamples: 4, sizingResamples: 20, quiet: true };
 const read = (dir, f) => readFileSync(join(dir, f), 'utf8');
 
@@ -121,10 +122,101 @@ test('no output but timings.json carries a host fact or a time, and none carries
   assert.equal(t.windows.recent.machines[0].watchdogStops, 1);
   assert.equal(t.windows.recent.machines[0].invocations[0].cpuModel, 'Test CPU');
   assert.equal(t.windows.recent.machines[0].invocations[0].start, undefined);
-  // 12 wallets x 48 arms-and-repetitions of 8 spends, a time on each built spend.
-  assert.ok(t.windows.recent.timings.rows > 1000);
-  assert.ok(t.windows.recent.timings.byArm['csl-lf/own'].n > 0);
+  // 12 wallets x 48 arms-and-repetitions of 8 spends, a time on each built spend; rig-a completed wallets 0 to 2, the other nine are in no record.
+  assert.ok(t.windows.recent.rows > 1000);
+  const { 'rig-a': a, unattributed: u } = t.windows.recent.byMachine;
+  assert.deepEqual(Object.keys(t.windows.recent.byMachine), ['rig-a', 'unattributed']);
+  assert.equal(a.rows + u.rows, t.windows.recent.rows);
+  assert.ok(a.rows > 0 && u.rows === 3 * a.rows);
+  assert.deepEqual(a.machine, { label: 'rig-a', workers: [4], invocations: [{ cpuModel: 'Test CPU', logicalCores: 8, totalMemoryBytes: 1000, workers: 4, wallets: 3 }] });
+  assert.equal(u.machine, null);
+  assert.ok(a.byArm['csl-lf/own'].n > 0);
+  assert.ok(a.outliers['csl-lf'].rows > 0);
   assert.ok(!('workers' in JSON.parse(read(o.out, 'inputs.json')).options));
+});
+
+// Twelve pilot wallets whose built spends take wallet-dependent times: 10 ms for wallets 0 to 5, 500 ms for the rest.
+const timed = (i) => (m, arm, rep) => {
+  const out = [];
+  for (let k = 0; k < 8; k++) {
+    if (k === 7 && arm === 'own') out.push(failed(k, 'change-minimum', 'kit: change-minimum: low'));
+    else out.push(built(k, { fee: 200000 + rep, ms: i < 6 ? 10 : 500, spendable: 3 + k, type: k % 2 ? 'T1' : 'T2' }));
+  }
+  return out;
+};
+const timedStudy = (machines) => {
+  const root = tmp();
+  const ws = Array.from({ length: 12 }, (_, i) => ({ id: 7000100 + i, split: 'exploration', group: 'B1', intents: Array.from({ length: 8 }, () => ({})), jobs: fullJobs(timed(i), { reps: 1 }) }));
+  for (const window of ['recent', 'peak']) writeStudy(root, { window, wallets: ws, census: window === 'recent' ? census : undefined, carried: window === 'recent' ? true : undefined, machines });
+  return root;
+};
+
+test('timings.json holds each machine\'s times from the wallets it completed, and the rows of a wallet no label completed apart', async () => {
+  const root = timedStudy([
+    // rig-a: wallets 0 to 3 at 2 workers, then a resumed invocation at 4 workers that redid wallet 3 and did 4 and 5.
+    { label: 'rig-a', invocations: [{ workers: 2, cpuModel: 'A', completed: [0, 1, 2, 3] }, { workers: 4, cpuModel: 'A', completed: [3, 4, 5] }] },
+    // rig-b: wallets 6 to 10; wallet 11 is in no record.
+    { label: 'rig-b', invocations: [{ workers: 8, cpuModel: 'B', completed: [6, 7, 8, 9, 10] }, { command: 'merge-stage', workers: null, completed: [], merged: [0, 1], cpuModel: 'M' }] }
+  ]);
+  const o = opts(root);
+  await cmdAnalyze(o);
+  const t = JSON.parse(read(o.out, 'timings.json')).windows.recent;
+  assert.deepEqual(Object.keys(t.byMachine), ['rig-a', 'rig-b', 'unattributed']);
+  // Per wallet the own arm builds 7 spends (intent 7 fails and has no time) and the layout arm 8.
+  assert.deepEqual(own(t.byMachine['rig-a']), { n: 6 * 7, q1: 10, median: 10, q3: 10, max: 10, total: 6 * 7 * 10 });
+  assert.deepEqual(own(t.byMachine['rig-b']), { n: 5 * 7, q1: 500, median: 500, q3: 500, max: 500, total: 5 * 7 * 500 });
+  assert.deepEqual(own(t.byMachine.unattributed), { n: 7, q1: 500, median: 500, q3: 500, max: 500, total: 7 * 500 });
+  assert.equal(t.byMachine['rig-a'].byArm['csl-lf/layout'].n, 6 * 8);
+  assert.equal(t.byMachine.unattributed.machine, null);
+  // The worker counts are those of the invocations that completed wallets: wallet 3 belongs to the later one, so the first completed 0 to 2.
+  assert.deepEqual(t.byMachine['rig-a'].machine.workers, [2, 4]);
+  assert.deepEqual(t.byMachine['rig-a'].machine.invocations.map((x) => [x.workers, x.wallets]), [[2, 3], [4, 3]]);
+  assert.deepEqual(t.byMachine['rig-b'].machine.workers, [8]);
+  assert.deepEqual(t.byMachine['rig-b'].machine.invocations.map((x) => [x.workers, x.wallets]), [[8, 5]]);
+  assert.equal(JSON.stringify(t.byMachine).includes('"merged"'), false);
+  // Nothing is pooled and the machine list and total are kept.
+  assert.equal(t.rows, t.byMachine['rig-a'].rows + t.byMachine['rig-b'].rows + t.byMachine.unattributed.rows);
+  assert.deepEqual(t.machines.map((m) => m.label), ['rig-a', 'rig-b']);
+  for (const k of ['byArm', 'byMethodAndType', 'byMethodAndSpendable', 'outliers']) assert.equal(k in t, false, `${k} is pooled`);
+});
+
+test('the machine that completed a wallet is the one whose segment the merged stage holds when two records list it', async () => {
+  const root = timedStudy([
+    { label: 'rig-a', invocations: [{ workers: 2, completed: [0, 1, 2, 3, 4, 5, 6] }] },
+    { label: 'rig-b', invocations: [{ workers: 3, completed: [6, 7, 8, 9, 10, 11] }] }
+  ]);
+  // Wallet 6 is in both records; its segment's done file names rig-b.
+  const seg = join(root, 'preprod', 'st', 'replay-recent', 'segments');
+  mkdirSync(seg, { recursive: true });
+  writeFileSync(join(seg, '6.done.json'), JSON.stringify({ index: 6, machine: 'rig-b' }));
+  const o = opts(root);
+  await cmdAnalyze(o);
+  const t = JSON.parse(read(o.out, 'timings.json')).windows.recent;
+  assert.deepEqual(Object.keys(t.byMachine), ['rig-a', 'rig-b']);
+  assert.equal(own(t.byMachine['rig-a']).n, 6 * 7);
+  assert.equal(own(t.byMachine['rig-b']).n, 6 * 7);
+  assert.deepEqual(t.byMachine['rig-a'].machine.invocations.map((x) => x.wallets), [6]);
+  assert.deepEqual(t.byMachine['rig-b'].machine.invocations.map((x) => x.wallets), [6]);
+  // Without that done file the two records cannot settle wallet 6 and its rows are unattributed.
+  const root2 = timedStudy([
+    { label: 'rig-a', invocations: [{ workers: 2, completed: [0, 1, 2, 3, 4, 5, 6] }] },
+    { label: 'rig-b', invocations: [{ workers: 3, completed: [6, 7, 8, 9, 10, 11] }] }
+  ]);
+  const o2 = opts(root2);
+  await cmdAnalyze(o2);
+  const t2 = JSON.parse(read(o2.out, 'timings.json')).windows.recent;
+  assert.equal(own(t2.byMachine.unattributed).n, 7);
+  assert.equal(own(t2.byMachine['rig-a']).n, 6 * 7);
+  assert.equal(own(t2.byMachine['rig-b']).n, 5 * 7);
+});
+
+test('the other outputs do not change with the machine records', async () => {
+  const a = opts(timedStudy(undefined));
+  await cmdAnalyze(a);
+  const b = opts(timedStudy([{ label: 'rig-a', invocations: [{ workers: 2, completed: [0, 1, 2, 3, 4, 5] }] }, { label: 'rig-b', invocations: [{ workers: 8, completed: [6, 7, 8, 9, 10, 11] }] }]));
+  await cmdAnalyze(b);
+  for (const f of ['results.json', 'verdicts.json', 'verdicts.md', 'sizing.json']) assert.ok(bytes(a.out)[f].equals(bytes(b.out)[f]), `${f} differs`);
+  assert.deepEqual(Object.keys(JSON.parse(read(a.out, 'timings.json')).windows.recent.byMachine), ['unattributed']);
 });
 
 test('the confirmation run reads the sampled wallets only and computes no sizing', async () => {

@@ -56,7 +56,7 @@
 // the main cell's name, so it has the main cell's numbers by construction.
 
 import { bootstrap, mergeSizeGroups, MIN_CELL_WALLETS } from './stats.mjs';
-import { TimingCollector } from './timings.mjs';
+import { TimingCollector, UNATTRIBUTED } from './timings.mjs';
 import { failureValue, feeValue, pairedRuns, runQuestions, studyLibraries, cellName } from './questions.mjs';
 import { armIds, RULE_METHOD } from './read.mjs';
 import { isDepositSubset } from './deposits.mjs';
@@ -454,10 +454,10 @@ export async function runItems(tables, { workers = 1, resamples, libraries = stu
 // ---- Item 8's distribution: the times of rows { method, kind, type, ms }.
 
 // Per library and arm (`<method>/<kind>`) and per method and spend type, the
-// distribution of the spend records' times in ms.
+// distribution of the spend records' times in ms (rows given no machine).
 export function timingSummary(rows) {
   const c = new TimingCollector();
   for (const r of rows) c.add(r);
-  const { byArm, byMethodAndType } = c.summary();
+  const { byArm, byMethodAndType } = c.summary().byMachine[UNATTRIBUTED];
   return { byArm, byMethodAndType };
 }
