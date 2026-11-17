@@ -369,6 +369,12 @@ const NO_NAMES = Object.freeze([]);
 //   h7 (E1 at 0.5, 0.8, 0.9, E2, E3, worse), slopes (the three drift
 //     slopes), summary ({ capped, end { utxos, largestValueBytes,
 //     lockedAdaPerToken }, conformity }).
+// A job the replay stopped at its time limit (its wallet-arm record carries
+// `stopped`, and no summary) has summary, h7 and slopes null, `stopped` (that
+// field as the record has it) and `partial`, the figures its kept spend
+// records give: counts by outcome, failures per 100 attempted spends and the
+// fees of the built spends. reduceWallet takes such a job's pair out of the
+// wallet's arms.
 // Nothing else of a record is kept: the tables of every wallet are held at once.
 function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
   const run = {
@@ -381,7 +387,9 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
     slopes: null,
     summary: null
   };
-  if (armRecord) {
+  const stopped = armRecord && armRecord.stopped ? armRecord.stopped : null;
+  if (stopped && (typeof stopped !== 'object' || stopped.reason !== 'excessive time')) refuse(`a stopped record whose reason is ${JSON.stringify(stopped && stopped.reason)}, not "excessive time"`);
+  if (armRecord && !stopped) {
     const a = armRecord;
     const big = (x) => (x === null || x === undefined ? null : BigInt(x));
     run.summary = {
@@ -396,7 +404,7 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
   let changeMin = 0n;
   let consumedMin = 0n;
   let builtN = 0;
-  const pts = armRecord && armRecord.start ? { t: [Number(armRecord.start.t || 0)], utxos: [armRecord.start.utxos], largestValueBytes: [armRecord.start.largestValueBytes], lockedAdaPerToken: [armRecord.start.lockedAdaPerToken === null || armRecord.start.lockedAdaPerToken === undefined ? null : BigInt(armRecord.start.lockedAdaPerToken)] } : null;
+  const pts = armRecord && !stopped && armRecord.start ? { t: [Number(armRecord.start.t || 0)], utxos: [armRecord.start.utxos], largestValueBytes: [armRecord.start.largestValueBytes], lockedAdaPerToken: [armRecord.start.lockedAdaPerToken === null || armRecord.start.lockedAdaPerToken === undefined ? null : BigInt(armRecord.start.lockedAdaPerToken)] } : null;
   let last = -1;
   for (const r of spends) {
     if (!OUTCOMES.includes(r.outcome)) refuse(`a spend record with the unknown outcome ${JSON.stringify(r.outcome)}`);
@@ -444,7 +452,24 @@ function reduceRun({ spends, armRecord, refusedReason, maxValSize, feeFor }) {
     else run.n.forfeit++;
     run.spends.add(s);
   }
-  if (armRecord && armRecord.start) {
+  if (stopped) {
+    if (stopped.spends !== spends.length) refuse(`a stopped record that names ${stopped.spends} kept spends beside ${spends.length} spend records`);
+    let fee = 0n;
+    let walletFee = 0n;
+    for (const s of run.spends.values()) {
+      if (s.outcome !== 'built') continue;
+      fee += s.fee;
+      walletFee += s.walletFee;
+    }
+    run.stopped = { ...stopped, last: stopped.last ? { ...stopped.last } : null };
+    run.partial = {
+      counts: { ...run.n },
+      byClass: { ...run.byClass },
+      failuresPer100: run.n.attempted > 0 ? (100 * run.n.failed) / run.n.attempted : null,
+      fee,
+      walletFee
+    };
+  } else if (armRecord && armRecord.start) {
     const net = changeCount - consumed;
     const minNet = changeMin - consumedMin;
     run.h7 = {
@@ -604,6 +629,23 @@ export function reduceWallet(ctx, index, records) {
   for (const j of [...jobs.values()].sort((x, y) => x.repetition - y.repetition)) {
     arms.get(j.arm.id).runs.set(j.repetition, reduceRun({ spends: j.spends, armRecord: j.armRecord, refusedReason: j.refused, maxValSize, feeFor }));
   }
+  // A (wallet, method) pair any of whose jobs the replay stopped for time does
+  // not cover the year: all of the method's arms leave the wallet's table, as
+  // an arm the wallet lacks does, and the stopped jobs are listed beside it
+  // (pre-registration decisions, "Run logistics after the cost probes").
+  const stopped = [];
+  const stoppedMethods = new Set();
+  for (const id of armIds()) {
+    const arm = arms.get(id);
+    if (!arm) continue;
+    for (const [repetition, run] of arm.runs) {
+      if (!run.stopped) continue;
+      stoppedMethods.add(arm.method);
+      const s = run.stopped;
+      stopped.push({ window: stageWindow, walletIndex: index, library: arm.method, arm: arm.kind, repetition, machine: s.machine === undefined ? null : s.machine, spends: s.spends, planned: s.planned, last: s.last, elapsedMs: s.elapsedMs, limitMs: s.limitMs, attempt: s.attempt, at: s.at, partial: run.partial });
+    }
+  }
+  for (const id of [...arms.keys()]) if (stoppedMethods.has(arms.get(id).method)) arms.delete(id);
   return {
     index,
     wallet: id,
@@ -617,7 +659,8 @@ export function reduceWallet(ctx, index, records) {
     minFeeA: params.minFeeA,
     maxValSize,
     intents: hist ? hist.intents : null,
-    arms
+    arms,
+    stopped
   };
 }
 

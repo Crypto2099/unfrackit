@@ -17,7 +17,11 @@
 //
 // Outputs (directory 0700, files 0600):
 //   results.json   every figure, as canonical JSON; no wallet id, path, time of
-//                  day, host fact or wall-clock value
+//                  day, host fact or wall-clock value, except that `stopped`
+//                  names each stopped job's machine label and times. It lists the
+//                  replay jobs stopped at the 24-hour limit, which stand beside
+//                  the comparisons: a pair with a stopped job is in none of them
+//                  (`stoppedByLibrary` counts the pairs when there are any)
 //   verdicts.json, verdicts.md   questions 1 and 2 on the recent window with
 //                  their answers and defaults, and the same for each
 //                  sensitivity re-run
@@ -148,7 +152,34 @@ async function readWindow(ctx, say) {
   const summary = ctx.timings.summary(attribution.machines);
   ctx.timings = null;
   ctx.machineOf = null;
-  return { tables, timings: summary, machines: readMachines(ctx.stageDir), flow: flowOf(ctx, tables, ctx.options.window) };
+  const stopped = tables.flatMap((t) => t.stopped);
+  return { tables, timings: summary, machines: readMachines(ctx.stageDir), flow: flowOf(ctx, tables, ctx.options.window), stopped };
+}
+
+// The stopped pairs of a window by library: the (wallet, library) pairs with a
+// stopped job, each counted once.
+function stoppedPairs(list) {
+  const pairs = new Map();
+  for (const e of list) pairs.set(`${e.walletIndex}/${e.library}`, e.library);
+  const byLibrary = {};
+  for (const lib of pairs.values()) byLibrary[lib] = (byLibrary[lib] || 0) + 1;
+  return Object.fromEntries(Object.keys(byLibrary).sort().map((k) => [k, byLibrary[k]]));
+}
+
+// The verdicts file's section for the stopped pairs.
+export function renderStopped(stopped, byLibrary) {
+  let md = '\n# Stopped pairs\n\n';
+  if (stopped.length === 0) return md + 'No replay job was stopped for excessive time, so every pair is in the comparisons.\n';
+  md += 'These replay jobs reached the time limit and were stopped. Each one\'s (wallet, library) pair does not cover the year and is in none of the comparisons above or in the other results; the figures below are over the spends it kept.\n\n';
+  for (const e of stopped) {
+    const last = e.last ? `intent ${e.last.intent} at time ${e.last.t}` : 'none';
+    const p = e.partial;
+    const rate = p.failuresPer100 === null ? 'no attempted spend' : `${p.failuresPer100} failures per 100 attempted`;
+    md += `- ${e.window}, wallet ${e.walletIndex}, ${e.library}/${e.arm} repetition ${e.repetition}: ${e.spends} of ${e.planned} spends kept (last: ${last}), stopped at ${e.at}, attempt ${e.attempt}, ${e.elapsedMs} ms of ${e.limitMs} ms, machine ${e.machine === null ? 'not named' : e.machine}; ${p.counts.built} built, ${p.counts.failed} failed, ${rate}\n`;
+  }
+  md += '\nStopped pairs per library, left out of that library\'s comparisons:\n\n';
+  for (const w of Object.keys(byLibrary)) for (const [lib, n] of Object.entries(byLibrary[w])) md += `- ${w}, ${lib}: ${n}\n`;
+  return md;
 }
 
 // The questions on a table set, and for the recent window the verdicts.
@@ -219,7 +250,7 @@ async function analyzeRecent(ctxRecent, base, n, census, synthetic, say) {
     say('sizing');
     sizing = await runSizing(tables, sampleCounts(ctxRecent, tables), { workers: base.workers, samples: n.sizingSamples, resamples: n.sizingResamples, libraries });
   }
-  return { wallets: tables.length, libraries, flow: w.flow, timings: { ...w.timings, machines: w.machines }, recent, census: censusResult, sensitivity: sens, verdicts, sizing, files: stageInputs(ctxRecent, 'recent') };
+  return { wallets: tables.length, libraries, stopped: w.stopped, flow: w.flow, timings: { ...w.timings, machines: w.machines }, recent, census: censusResult, sensitivity: sens, verdicts, sizing, files: stageInputs(ctxRecent, 'recent') };
 }
 
 // The peak window: read, then questions 1 and 2, items and H-7/H-9/H-11 with the 'peak' suffix.
@@ -229,7 +260,7 @@ async function analyzePeak(ctxPeak, base, n, say) {
   const questions = await questionsOn(w.tables, { workers: base.workers, resamples: n.resamples }, 'peak');
   const items = await runItems(w.tables, { workers: base.workers, resamples: n.resamples, suffix: 'peak' });
   const d = await runDescriptive(w.tables, null, { workers: base.workers, resamples: n.resamples, window: 'peak' });
-  return { flow: w.flow, timings: { ...w.timings, machines: w.machines }, peak: { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 }, files: stageInputs(ctxPeak, 'peak') };
+  return { flow: w.flow, stopped: w.stopped, timings: { ...w.timings, machines: w.machines }, peak: { questions, items, h7: d.h7, h9: d.h9, h11: d.h11 }, files: stageInputs(ctxPeak, 'peak') };
 }
 
 // The command. `o` is the parsed command line (options.mjs) or an object with the same keys
@@ -250,7 +281,8 @@ export async function cmdAnalyze(o) {
   const carriedReports = synthetic ? null : { collateral: carried(join(ctxRecent.studyDir, 'collateral', 'collateral.json'), 'collateral.json'), nearCap: carried(join(ctxRecent.studyDir, 'near-cap', 'near-cap.json'), 'near-cap.json') };
   const census = synthetic ? null : readCensus(ctxRecent);
 
-  const results = { format: FORMAT, network: base.network, split: base.split, libraries: null, resamples: n.resamples, recent: null, peak: null, census: null, sensitivity: null, flow: {}, carried: carriedReports ? { collateral: carriedReports.collateral, nearCap: carriedReports.nearCap } : null };
+  const results = { format: FORMAT, network: base.network, split: base.split, libraries: null, resamples: n.resamples, recent: null, peak: null, census: null, sensitivity: null, flow: {}, carried: carriedReports ? { collateral: carriedReports.collateral, nearCap: carriedReports.nearCap } : null, stopped: [] };
+  const stoppedByWindow = {};
   const files = {};
   const timings = { format: FORMAT, windows: {} };
 
@@ -264,6 +296,8 @@ export async function cmdAnalyze(o) {
   results.recent = recent.recent;
   results.census = recent.census;
   results.sensitivity = recent.sensitivity;
+  results.stopped.push(...recent.stopped);
+  if (recent.stopped.length) stoppedByWindow.recent = stoppedPairs(recent.stopped);
   const walletsRecent = recent.wallets;
   Object.assign(files, recent.files);
 
@@ -272,10 +306,13 @@ export async function cmdAnalyze(o) {
     results.flow.peak = peak.flow;
     timings.windows.peak = peak.timings;
     results.peak = peak.peak;
+    results.stopped.push(...peak.stopped);
+    if (peak.stopped.length) stoppedByWindow.peak = stoppedPairs(peak.stopped);
     Object.assign(files, peak.files);
   }
 
   // ---- Outputs.
+  if (results.stopped.length) results.stoppedByLibrary = stoppedByWindow;
   if (census) {
     files['census/census.jsonl'] = fileSha(join(ctxRecent.studyDir, 'census', 'census.jsonl'));
     files['census/census-run.json'] = fileSha(join(ctxRecent.studyDir, 'census', 'census-run.json'));
@@ -298,6 +335,7 @@ export async function cmdAnalyze(o) {
   md = md.replace('# Verdicts\n', `# Verdicts\n\n${header}\n`);
   for (const v of Object.values(verdicts.sensitivity)) md += `\n# Sensitivity: ${v.filter}\n\n` + renderVerdicts(v).replace('# Verdicts\n\n', '');
   for (const s of Object.values(results.sensitivity)) if (s.absent) md += `\n# Sensitivity: ${s.filter}\n\nThe draw holds no ${s.flag} flag for these wallets, so the re-run is not computed.\n`;
+  md += renderStopped(results.stopped, stoppedByWindow);
   ensureDir(outDir);
   writePrivate(join(outDir, 'results.json'), canonicalJson(results));
   writePrivate(join(outDir, 'verdicts.json'), canonicalJson(verdicts));

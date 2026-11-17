@@ -14,7 +14,10 @@
 // A synthetic study (network 'synthetic') has no history stage and no draw;
 // its wallets are shapes named by id.
 // A job: { method, arm: 'own' | 'layout' | 'on' | 'off', rep = 1, spends (a list, or a function giving it),
-//   wa (fields of the wallet-arm record), refused (a reason) }.
+//   wa (fields of the wallet-arm record), refused (a reason), stopped (fields of
+//   `stopped`, over the defaults: the job's spends are its kept spends, and its
+//   wallet-arm record is the one the replay writes for a job stopped at its time
+//   limit, with no counts, end state or conformity) }.
 // A spend is made with built(), failed() and the other makers below; the
 // record's key and the defaults the trunk's records carry are filled in.
 // desc.carried ({ collateral, nearCap } or true for defaults) writes the carried reports;
@@ -111,6 +114,21 @@ function keyOf(wallet, window, collateral, job) {
     change: !rule && job.arm === 'layout' ? 'layout' : 'default',
     collateral,
     repetition: job.rep || 1
+  };
+}
+
+function stoppedArm(key, w, job) {
+  const spends = job.spends || [];
+  const last = spends.length ? spends[spends.length - 1] : null;
+  return {
+    kind: 'wallet-arm',
+    ...key,
+    hypotheses: ['Q1'],
+    methodVersion: 'test',
+    ...(job.method === RULE ? { absorb: job.arm === 'on' } : {}),
+    capped: !!w.capped,
+    stopped: { reason: 'excessive time', attempt: 1, limitMs: 86400000, elapsedMs: 86400123, at: 'spend boundary', spends: spends.length, planned: Math.max(8, spends.length + 1), last: last ? { intent: last.intent, t: last.t } : null, machine: 'rig-a', ...job.stopped },
+    ms: 0
   };
 }
 
@@ -284,7 +302,7 @@ export function writeStudy(root, desc) {
       }
       const spends = typeof job.spends === 'function' ? job.spends() : job.spends || [];
       for (const s of spends) recs.push({ ...s, ...key });
-      recs.push(walletArm(key, w, { ...job, spends }));
+      recs.push(job.stopped ? stoppedArm(key, w, { ...job, spends }) : walletArm(key, w, { ...job, spends }));
     }
     if (all) all.push(...recs);
     else writeWalletRecords(walletIndex, recs);
