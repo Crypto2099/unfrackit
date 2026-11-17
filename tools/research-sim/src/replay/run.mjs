@@ -29,13 +29,13 @@
 // the wallets not done. When every wallet is done the stage joins the
 // segments in wallet order.
 //
-import { rmSync } from 'node:fs';
-import { record } from '../out/records.mjs';
+import { rmSync, openSync, writeSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
+import { record, recordKey } from '../out/records.mjs';
 import { spoolPaths, SpoolStream, repairSpool, Frontier } from '../out/spool.mjs';
 import { loadSource } from './source.mjs';
 import { replay } from './engine.mjs';
 import { expandJobs } from '../arms/plan.mjs';
-import { sumValidity } from '../kit/validity.mjs';
+import { sumValidity, newValidity, mergeValidity, summarize } from '../kit/validity.mjs';
 import { walletMemory } from './pool.mjs';
 
 // The records of one replay job's result x, in the order a run writes them:
@@ -116,37 +116,85 @@ export function spoolJob(x, job, { stream = null, stop = null } = {}) {
 }
 
 // The job's whole run in a worker: its spends written to its spool as they
-// are made; stopAt (Date.now()): the time the job stops at a spend boundary,
-// absent for none; attempt, limitMs: which attempt this is and the limit,
-// which the stopped record names; onBuild: told when a build starts and ends.
-// Returns spoolJob's answer.
-export async function runJob(T, source, job, method, { stopAt, attempt = 1, limitMs = null, onBuild }) {
-  const started = performance.now();
+// are made, and with validity on, each spend's checks to the spool's validity
+// file; stopAt (performance.now()): the time the job stops at a spend
+// boundary, absent for none; received: when the worker received the job, the
+// one starting point of the limit and of the stopped record's elapsedMs
+// (performance.now(); the call's start when absent); attempt, limitMs: which
+// attempt this is and the limit, which the stopped record names; onBuild: told
+// when a build starts and ends. Returns spoolJob's answer.
+export async function runJob(T, source, job, method, { stopAt, received, attempt = 1, limitMs = null, onBuild, replayFn = replay }) {
+  const started = received ?? performance.now();
   const stream = new SpoolStream(job.spool, { hold: (rec) => rec.kind === 'wallet-arm', eager: true });
+  const vfd = job.validity ? openSync(job.spool.validity, 'w', 0o600) : null;
   try {
-    const x = await replay(T, source.params, source, { ...job, method, ...(stopAt !== undefined ? { stopAt } : {}), onBuild, onSpend: (s) => stream.add(record('spend', job.key, s)) });
+    const onSpend = (spend, checks) => {
+      if (vfd !== null) writeSync(vfd, `${JSON.stringify(checks)}\n`);
+      stream.add(record('spend', job.key, spend));
+    };
+    const x = await replayFn(T, source.params, source, { ...job, method, ...(stopAt !== undefined ? { stopAt } : {}), onBuild, onSpend });
     x.method = { name: method.name, version: method.version, deterministic: method.deterministic };
     return spoolJob(x, job, { stream, stop: { at: STOPPED_AT.boundary, elapsedMs: performance.now() - started, attempt, limitMs } });
   } finally {
     stream.close();
+    // The validity file is the parent's to remove, after it has taken the
+    // job's result (a killed job's is read from it).
+    if (vfd !== null) closeSync(vfd);
   }
+}
+
+// The validity summary of the first n spends in a spool's validity file (one
+// line per spend, null for a spend with no checks), or null when the file
+// holds none: their counts added, their failures kept up to the usual number.
+export function keptValidity(path, n) {
+  let text = '';
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  const acc = newValidity(null);
+  let any = false;
+  for (const line of text.slice(0, text.lastIndexOf('\n') + 1).split('\n').slice(0, n)) {
+    if (!line) continue;
+    const v = JSON.parse(line);
+    if (!v) continue;
+    any = true;
+    mergeValidity(acc, { ...v, details: v.failures || [] });
+  }
+  return any ? summarize(acc) : null;
 }
 
 // A job the pool killed at its time limit, finished in the parent: its spool
 // is made whole (repairSpool) and closed with the wallet-arm record of
 // stoppedArm. killed: { at, attempt, limitMs, info: { methodVersion } }, ms:
-// the attempt's time. Returns what spoolJob does for a stopped job.
+// the attempt's time. Returns what spoolJob does for a stopped job. A spool
+// that already ends with the worker's own wallet-arm (or refusal) record is
+// the job's result as the worker wrote it: the job had ended, or had stopped
+// at a spend boundary, before the kill, and nothing is added to it. The
+// validity file is read, not removed (ended() removes it).
 export function spoolKilled(job, killed, ms) {
   const kept = repairSpool(job.spool);
-  const s = new SpoolStream(job.spool, { hold: (rec) => rec.kind === 'wallet-arm', resume: kept });
-  const at = killed.at === 'build' ? STOPPED_AT.build : STOPPED_AT.unresponsive;
-  const rec = stoppedArm(job, { methodVersion: killed.info && killed.info.methodVersion, spends: kept.spends, last: kept.last, at, elapsedMs: ms, attempt: killed.attempt, limitMs: killed.limitMs });
-  try {
-    s.add(rec);
-  } finally {
-    s.close();
+  {
+    const last = kept.lastRecord;
+    if (last && (last.kind === 'wallet-arm' || last.kind === 'refused')) {
+      const base = { records: job.spool.records, timings: job.spool.timings, count: kept.count, counts: kept.counts };
+      if (last.kind === 'refused') return { refused: true, spooled: { ...base, held: null } };
+      // The row of the wallet-arm's time was held in the worker; the run sets it.
+      const spooled = { ...base, held: { n: kept.count, kind: 'wallet-arm', key: recordKey(last), times: { ms } } };
+      if (last.stopped) return { refused: false, validity: job.validity ? keptValidity(job.spool.validity, last.stopped.spends) : null, spooled, stopped: last.stopped };
+      return { refused: false, validity: last.validity || null, spooled };
+    }
+    const s = new SpoolStream(job.spool, { hold: (rec) => rec.kind === 'wallet-arm', resume: kept });
+    const at = killed.at === 'build' ? STOPPED_AT.build : STOPPED_AT.unresponsive;
+    const rec = stoppedArm(job, { methodVersion: killed.info && killed.info.methodVersion, spends: kept.spends, last: kept.last, at, elapsedMs: ms, attempt: killed.attempt, limitMs: killed.limitMs });
+    try {
+      s.add(rec);
+    } finally {
+      s.close();
+    }
+    return { refused: false, validity: job.validity ? keptValidity(job.spool.validity, kept.spends) : null, spooled: s.close(), stopped: rec.stopped };
   }
-  return { refused: false, validity: null, spooled: s.close(), stopped: rec.stopped };
 }
 
 // The options a replay job gives its method (checked by the engine): the seed
@@ -264,6 +312,7 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
       dropped: false
     };
     open.add(st);
+    const found = [];
     for (const [i, j] of jobs.entries()) {
       const key = { wallet: source.wallet, window: source.window, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
       const job = {
@@ -284,7 +333,18 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
         machine: out.label ?? null
       };
       const at = { wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
-      queue.push({ st, i, j, key, job, at });
+      const q = { st, i, j, key, job, at };
+      // A job this wallet stopped in an earlier invocation is not run again.
+      const kept = out.keptStopped(wi, i, key);
+      if (kept) found.push([q, kept]);
+      else queue.push(q);
+    }
+    for (const [q, kept] of found) {
+      writeFileSync(q.job.spool.records, kept.records, { mode: 0o600 });
+      writeFileSync(q.job.spool.timings, kept.timings, { mode: 0o600 });
+      const spooled = { records: q.job.spool.records, timings: q.job.spool.timings, count: kept.count, counts: kept.counts, held: kept.held };
+      out.note({ event: 'stopped job kept', wallet: st.wallet, ...q.at });
+      settle(q, { refused: false, validity: kept.validity, spooled, stopped: kept.stopped }, false);
     }
     if (!jobs.length) close(st);
   };
@@ -292,26 +352,40 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
   // A job's end: its result kept, its spool committed in job order, and the
   // wallet closed after its last job.
   const ended = (q, r) => {
-    const { st, i, j, key } = q;
+    const { st, j } = q;
     if (st.dropped) return;
-    st.totals.jobs++;
     if (!r.ok) {
+      st.totals.jobs++;
       out.note({ event: 'replay error', wallet: st.wallet, arm: j.arm, variant: j.variant, method: j.method, repetition: j.repetition, error: r.error, stop: r.stop });
       if (r.stop) throw new Error(`stop point: ${r.error}`);
       throw new Error(`replay failed: ${r.error}`);
     }
     // A job the pool killed at its time limit has no result: its spool is
-    // finished here.
+    // finished here (a pool given finishKilled has done so).
     const x = r.killed ? spoolKilled(q.job, r.killed, r.ms) : r.result;
+    // The result is taken: the spool's validity file has served.
+    rmSync(q.job.spool.validity, { force: true });
+    if (x.spooled.held) x.spooled.held.times.ms = r.ms;
+    // A stopped job is never run again, so its records are kept apart until
+    // its wallet is done: a run that ends before then (a kill, another job's
+    // failure) finds them on resume (out/stage.mjs keepStopped).
+    if (x.stopped) out.keepStopped(st.index, q.i, { key: q.key, validity: x.validity || null, stopped: x.stopped, count: x.spooled.count, counts: x.spooled.counts, held: x.spooled.held, records: readFileSync(x.spooled.records, 'utf8'), timings: readFileSync(x.spooled.timings, 'utf8') });
+    settle(q, x, true);
+  };
+
+  // A job's result taken into its wallet: counted, its validity summed, its
+  // spool committed in job order. fresh: the job ran in this invocation, not
+  // a stopped one found on resume (whose failures were logged by the run
+  // that stopped it).
+  const settle = (q, x, fresh) => {
+    const { st, i, key } = q;
+    st.totals.jobs++;
     if (x.stopped) st.totals.stopped = (st.totals.stopped || 0) + 1;
     if (x.refused) st.totals.refused++;
-    else {
-      if (x.validity) {
-        st.validities.push(x.validity);
-        noteValidity(out, key, x.validity);
-      }
+    else if (x.validity) {
+      st.validities.push(x.validity);
+      if (fresh) noteValidity(out, key, x.validity);
     }
-    if (x.spooled.held) x.spooled.held.times.ms = r.ms;
     st.frontier.done(i, x.spooled);
     if (--st.left === 0) close(st);
   };
@@ -320,7 +394,7 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
     while (!failure && running < inPool && queue.length) {
       const q = queue.shift();
       running++;
-      pool.replay(q.job, { watchdogMs, note: (e) => out.note({ ...e, ...q.at }) }).then((r) => {
+      pool.replay(q.job, { watchdogMs, note: (e) => out.note({ ...e, ...q.at }), finishKilled: (killed, ms) => spoolKilled(q.job, killed, ms) }).then((r) => {
         running--;
         try {
           ended(q, r);

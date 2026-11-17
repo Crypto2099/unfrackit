@@ -551,8 +551,9 @@ export class Pool {
   }
 
   // One attempt of a job on worker w. arm: the time limit of the attempt
-  // (milliseconds), or null; the worker is told the time it ends (stopAt) and
-  // stops by itself at its next spend boundary after it. grace: how long a
+  // (milliseconds), or null; the worker is told the limit (stopAfterMs), takes
+  // its deadline from its own monotonic clock when the job arrives, and stops
+  // by itself at its next spend boundary after it. grace: how long a
   // worker between builds has, once the limit falls, to stop by itself.
   // Resolves, with ms, the attempt's time:
   //   { kind: 'done', result, memory }
@@ -586,11 +587,18 @@ export class Pool {
       const watchdog = (ms) => {
         clearTimeout(timer);
         if (ms === null) return;
+        // The decision waits one turn of the loop, so that the messages
+        // already queued from the worker (its end, its last building flag)
+        // are read first when this thread was busy past the limit.
         timer = setTimeout(() => {
-          if (building) return end({ kind: 'watchdog', at: 'build', info });
-          late = true;
-          timer = setTimeout(() => end({ kind: 'watchdog', at: 'grace', info }), grace);
-          return undefined;
+          setImmediate(() => {
+            if (over) return;
+            if (building) return end({ kind: 'watchdog', at: 'build', info });
+            late = true;
+            // Deferred as the decision above is, for the same reason.
+            timer = setTimeout(() => setImmediate(() => end({ kind: 'watchdog', at: 'grace', info })), grace);
+            return undefined;
+          });
         }, ms);
       };
       const onMessage = (m) => {
@@ -606,21 +614,22 @@ export class Pool {
       w.proc.on('message', onMessage);
       w.ended.then((exit) => end({ kind: 'died', error: w.fatal || exitText(exit), exit }));
       if (arm !== null) watchdog(arm);
-      w.send({ id, task, job, ...extra, ...(arm !== null ? { stopAt: Date.now() + arm } : {}) });
+      w.send({ id, task, job, ...extra, ...(arm !== null ? { stopAfterMs: arm } : {}) });
     });
   }
 
   // One replay job. Resolves { ok: true, result, ms }, { ok: true, killed,
   // ms } or { ok: false, error, stop, ms }, ms being the time of the attempt
-  // that ended it. killed: the job reached its time limit with a build
-  // running and the worker was killed ({ at, attempt, limitMs, info }); the
-  // job's spool holds the spends it had written, and nothing else is known of
-  // it. A job that stopped by itself at a spend boundary is a result that has
+  // that ended it. finishKilled(killed, ms): given, finishes a job whose worker
+  // was killed and returns its result as a worker would answer it. killed: the
+  // job reached its time limit and the worker was killed, with a build running (at 'build') or after the grace between
+  // builds (at 'grace') ({ at, attempt, limitMs, info }); the job's spool holds
+  // what it had written, and nothing else is known of it. A job that stopped by itself at a spend boundary is a result that has
   // `stopped`. A job is stopped at its limit and not run again: the limit
   // applies to each attempt, and an attempt after a machine error replays the
   // job from its start. note(entry) is told of each stop ('watchdog stop'),
   // machine rerun and run alone.
-  async replay(job, { watchdogMs = REPLAY_WATCHDOG_MS, stopGraceMs = STOP_GRACE_MS, note = () => {} } = {}) {
+  async replay(job, { watchdogMs = REPLAY_WATCHDOG_MS, stopGraceMs = STOP_GRACE_MS, note = () => {}, finishKilled = null } = {}) {
     let record = false;
     let deaths = 0;
     let attempts = 0;
@@ -661,10 +670,23 @@ export class Pool {
         this.running.delete(slot);
         await this.stop(slot.worker);
         this.pump();
+        const killed = { at: r.at, attempt: attempts, limitMs: watchdogMs, info: r.info };
+        // The caller finishes the job from what the worker left, which may be
+        // the worker's own ending (a job that had ended or stopped by itself
+        // before the kill was decided): the stop is counted and logged as the
+        // records show it, and a job that had finished is no stop.
+        if (finishKilled) {
+          const result = finishKilled(killed, r.ms);
+          if (result.stopped) {
+            this.stats.watchdogStops++;
+            note({ event: 'watchdog stop', watchdogMs, ms: r.ms, ...stopNote(result.stopped) });
+          }
+          return { ok: true, result, ms: r.ms };
+        }
         this.stats.watchdogStops++;
         const at = r.at === 'build' ? 'running build' : 'killed between spends';
         note({ event: 'watchdog stop', watchdogMs, ms: r.ms, at, attempt: attempts });
-        return { ok: true, killed: { at: r.at, attempt: attempts, limitMs: watchdogMs, info: r.info }, ms: r.ms };
+        return { ok: true, killed, ms: r.ms };
       }
       this.stats.machineReruns++;
       note({ event: 'machine rerun', cause: 'machine error', error: r.error });

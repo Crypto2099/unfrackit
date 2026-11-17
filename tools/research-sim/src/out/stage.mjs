@@ -393,6 +393,7 @@ export class ReplayStage {
     this.progress = null;
     this.segments = join(dir, 'segments');
     this.spool = join(dir, 'spool');
+    this.stoppedDir = join(dir, 'stopped');
     const walletsText = jsonText(wallets);
     const run = { ...header, walletsSha256: sha256(walletsText) };
     const runText = jsonText(run);
@@ -404,7 +405,7 @@ export class ReplayStage {
       if (!existsSync(join(dir, 'wallets.json')) || sha256(readFileSync(join(dir, 'wallets.json'))) !== run.walletsSha256) writeAtomic(join(dir, 'wallets.json'), walletsText);
     } else {
       // A stage that never wrote run.json starts empty.
-      for (const f of ['segments', 'spool', 'done.json', 'records.jsonl.gz', 'timings.jsonl.gz', 'records.jsonl.gz.tmp', 'timings.jsonl.gz.tmp']) rmSync(join(dir, f), { recursive: true, force: true });
+      for (const f of ['segments', 'spool', 'stopped', 'done.json', 'records.jsonl.gz', 'timings.jsonl.gz', 'records.jsonl.gz.tmp', 'timings.jsonl.gz.tmp']) rmSync(join(dir, f), { recursive: true, force: true });
       writeAtomic(join(dir, 'wallets.json'), walletsText);
       writeAtomic(runPath, runText);
     }
@@ -512,6 +513,28 @@ export class ReplayStage {
     return new Segment(join(this.spool, String(i)), i);
   }
 
+  // A job stopped at the replay time limit is never run again, so its
+  // records are kept in stopped/<wallet index>.<job index>.json from the
+  // moment it ends until its wallet is done (complete), and a resume that
+  // finds the wallet not done reuses them. data: what replay/run.mjs reads
+  // back; its key says which job it is.
+  keepStopped(i, job, data) {
+    ensureDir(this.stoppedDir);
+    writeAtomic(join(this.stoppedDir, `${i}.${job}.json`), jsonText(data));
+  }
+
+  // What keepStopped kept for job `job` of wallet i, when it is for the job
+  // with this key; else null.
+  keptStopped(i, job, key) {
+    let d;
+    try {
+      d = JSON.parse(readFileSync(join(this.stoppedDir, `${i}.${job}.json`), 'utf8'));
+    } catch {
+      return null;
+    }
+    return d && JSON.stringify(d.key) === JSON.stringify(key) ? d : null;
+  }
+
   // The machine record written without blocking the thread; such writes
   // follow one another, each with the record as it stood when it was asked
   // for.
@@ -538,6 +561,7 @@ export class ReplayStage {
     const done = { index: i, wallet, runSha256: this.runSha256, records: out.records, timings: out.timings, counts: seg.counts, totals, machine: this.label, start: start instanceof Date ? start.toISOString() : start, end: new Date().toISOString() };
     await writeAtomicAsync(this.path(i, 'done'), jsonText(done));
     await rm(seg.dir, { recursive: true, force: true });
+    if (existsSync(this.stoppedDir)) for (const f of readdirSync(this.stoppedDir)) if (f.startsWith(`${i}.`)) await rm(join(this.stoppedDir, f), { force: true });
     this.done[i] = done;
     this.invocation.completed.push(i);
     await this.saveMachineAsync();

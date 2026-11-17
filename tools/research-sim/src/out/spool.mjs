@@ -13,13 +13,18 @@
 // again (a machine rerun) rewrites its spool from the start. A replay job's
 // worker may write its spool as the job goes (SpoolStream, flushed after each
 // record), so that a job the watchdog kills keeps the records it had written;
-// resumeSpool reopens such a spool after the kill.
+// repairSpool makes such a spool whole after the kill, and a SpoolStream given
+// its `resume` option goes on writing it. With validity checks on, a third
+// file, <job>.validity.jsonl, holds one line per spend with the validity
+// summary of the checks made for that spend (null when none), written before
+// the spend's record, so that the parent can count the checks of the spends a
+// killed job kept.
 
 import { join } from 'node:path';
 import { openSync, writeSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
 import { prepare, timingLine, recordKey } from './records.mjs';
 
-export const spoolPaths = (dir, job) => ({ records: join(dir, `${job}.records.jsonl`), timings: join(dir, `${job}.timings.jsonl`) });
+export const spoolPaths = (dir, job) => ({ records: join(dir, `${job}.records.jsonl`), timings: join(dir, `${job}.timings.jsonl`), validity: join(dir, `${job}.validity.jsonl`) });
 
 // Lines written a mebibyte at a time, to a file created 0600.
 class Spooler {
@@ -120,9 +125,9 @@ export function spoolRecords(paths, recs, { hold = () => false } = {}) {
 // What a killed job's spool holds, made whole: a spool written by a
 // SpoolStream, cut after its last complete record line, its timing rows cut
 // to those of the records kept. A spool that does not exist is empty.
-// Returns { count, counts, spends, last }: the records by kind, the spend
-// records' number and the last spend's intent and time ({ intent, t }), or
-// null when it has none.
+// Returns { count, counts, spends, last, lastKind }: the records by kind, the
+// spend records' number, the last spend's intent and time ({ intent, t }), or
+// null when it has none, and the last record, parsed, and its kind (null when none).
 export function repairSpool(paths) {
   const text = (path) => {
     try {
@@ -138,11 +143,15 @@ export function repairSpool(paths) {
   let count = 0;
   let spends = 0;
   let last = null;
+  let lastKind = null;
+  let lastRecord = null;
   const counts = {};
   for (const line of keptRecs.split('\n')) {
     if (!line) continue;
     const r = JSON.parse(line);
     count++;
+    lastKind = r.kind;
+    lastRecord = r;
     counts[r.kind] = (counts[r.kind] || 0) + 1;
     if (r.kind === 'spend') {
       spends++;
@@ -158,7 +167,7 @@ export function repairSpool(paths) {
     });
   writeFileSync(paths.records, keptRecs, { mode: 0o600 });
   writeFileSync(paths.timings, rows.map((l) => `${l}\n`).join(''), { mode: 0o600 });
-  return { count, counts, spends, last };
+  return { count, counts, spends, last, lastKind, lastRecord };
 }
 
 // Commits jobs in job order as they complete. done(i, value) keeps value

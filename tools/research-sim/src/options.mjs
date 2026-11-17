@@ -94,8 +94,8 @@ export function maxJobsOf(v) {
 }
 
 // Options an earlier version took, refused by name wherever they appear.
-export const LIMIT_MS_GONE = 'refusing: --limit-ms is gone: no time limit decides a result; every replay runs to completion, and a watchdog only makes one that hangs run again';
-export const ANSWER_LIMIT_MS_GONE = 'refusing: --answer-limit-ms is gone: no time limit decides a result; every method answer runs to completion, and a watchdog only makes one that hangs run again';
+export const LIMIT_MS_GONE = 'refusing: --limit-ms is gone: no option sets a time limit; a replay runs to completion unless it reaches the fixed 24-hour limit, which stops it and records its pair as stopped';
+export const ANSWER_LIMIT_MS_GONE = 'refusing: --answer-limit-ms is gone: no option sets a time limit; every method answer runs to completion';
 const RETIRED = Object.freeze({ limitMs: LIMIT_MS_GONE, answerLimitMs: ANSWER_LIMIT_MS_GONE });
 
 const unique = (...lists) => [...new Set(lists.flat())];

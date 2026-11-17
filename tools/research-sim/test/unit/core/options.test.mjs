@@ -192,10 +192,10 @@ test('a value never begins with --', () => {
 });
 
 test('an option an earlier version took is refused with the reason, wherever it appears', () => {
-  // The time limits: no time limit decides a result.
+  // The time limits: no option sets one.
   for (const c of ['replay', 'study', 'live-fire']) {
-    refused(['--limit-ms', '300000'], c, /--limit-ms is gone: no time limit decides a result/);
-    refused(['--answer-limit-ms', '60000'], c, /--answer-limit-ms is gone: no time limit decides a result/);
+    refused(['--limit-ms', '300000'], c, /--limit-ms is gone: no option sets a time limit/);
+    refused(['--answer-limit-ms', '60000'], c, /--answer-limit-ms is gone: no option sets a time limit/);
   }
 });
 

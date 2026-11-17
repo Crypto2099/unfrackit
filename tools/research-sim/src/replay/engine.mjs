@@ -101,7 +101,7 @@
 import { makeState, spendable, addUtxos, removeHeld, withChangeAddress, changeAddressGap, heldOutputRefs, heldInputsFromState } from '../state/state.mjs';
 import { utxoFromOutput } from '../state/utxo.mjs';
 import { checkAndApply } from '../kit/apply.mjs';
-import { newValidity, summarize } from '../kit/validity.mjs';
+import { newValidity, summarize, mergeValidity } from '../kit/validity.mjs';
 import { inspectTx } from '../kit/inspect.mjs';
 import { CLASSES } from '../kit/check.mjs';
 import { walletControlledFee, minFee } from '../kit/fee.mjs';
@@ -244,12 +244,14 @@ export function jobOptions(opts) {
 // opts.seed is the repetition; validity (true) adds the validity checks of
 // kit/validity.mjs on every transaction the kit passes, and the summary's
 // validity field. Three optional fields serve a worker under a time limit
-// (pre-registration, "Run logistics after the cost probes"): onSpend(rec),
-// told each spend record as it is made; onBuild(on), told when a method's
-// build starts (true) and ends (false); stopAt, a time (Date.now()) at or
-// after which the replay stops before its next intent: it returns what it
-// has, with `stopped` set to { spends, last } (the spend records made and the
-// last one's intent and t, or null) and no summary. A build already running
+// (pre-registration, "Run logistics after the cost probes"): onSpend(rec,
+// checks), told each spend record as it is made, with the validity summary of
+// the checks made for that spend (null with validity off or when none was
+// built); onBuild(on), told when a method's build starts (true) and ends
+// (false); stopAt, a time on performance.now() at or after which the replay
+// stops before its next intent: it returns what it has, with `stopped` set to
+// { spends, last } (the spend records made and the last one's intent and t, or
+// null), no summary, and `validity` the summary of the kept spends' checks. A build already running
 // at stopAt is not interrupted: only killing the process ends it.
 export async function replay(T, params, source, job) {
   const t0 = performance.now();
@@ -260,9 +262,10 @@ export async function replay(T, params, source, job) {
   const out = { spends: [], bursts: [], summary: null };
   // A spend's record: kept, and handed to job.onSpend as it is made, so that a
   // caller can write it before the job ends.
-  const spend = (rec) => {
+  // checks: the validity summary of the checks made for this spend, or null.
+  const spend = (rec, checks = null) => {
     out.spends.push(rec);
-    if (job.onSpend) job.onSpend(rec);
+    if (job.onSpend) job.onSpend(rec, checks);
   };
   const gap = changeAddressGap(source);
   if (gap) {
@@ -290,7 +293,10 @@ export async function replay(T, params, source, job) {
 
   // The validity mode (job.validity): one accumulator for the replay.
   const validity = job.validity ? newValidity(T.CSL) : null;
-  const vcheck = (at) => (validity ? { acc: validity, at } : null);
+  // The checks of the spends alone, which a stopped job reports (the burst
+  // passes' are in `validity` only, and no burst record is written for a
+  // stopped job).
+  const spendValidity = validity ? newValidity(T.CSL) : null;
   const start = stateMeasures(state, params);
   trajectory.push(start.largestValueBytes);
   // The five state measures a record carries after it, under the same names
@@ -344,10 +350,10 @@ export async function replay(T, params, source, job) {
       counts.marks++;
       continue;
     }
-    if (job.stopAt !== undefined && Date.now() >= job.stopAt) {
+    if (job.stopAt !== undefined && performance.now() >= job.stopAt) {
       const l = out.spends[out.spends.length - 1];
       out.stopped = { spends: out.spends.length, last: l ? { intent: l.intent, t: l.t } : null };
-      out.validity = validity ? summarize(validity) : null;
+      out.validity = spendValidity ? summarize(spendValidity) : null;
       return out;
     }
     // An intent, its held fixed inputs as the arm holds them.
@@ -397,14 +403,22 @@ export async function replay(T, params, source, job) {
       continue;
     }
 
-    const r = await buildOne(T, params, state, intent, method, opts, aside, vcheck(`spend ${n}`), job.onBuild);
+    // This spend's checks in an accumulator of their own, then added to the
+    // run's and to the spends'.
+    const sv = validity ? newValidity(T.CSL) : null;
+    const r = await buildOne(T, params, state, intent, method, opts, aside, sv ? { acc: sv, at: `spend ${n}` } : null, job.onBuild);
+    if (sv) {
+      mergeValidity(validity, sv);
+      mergeValidity(spendValidity, sv);
+    }
+    const checks = sv ? summarize(sv) : null;
     if (!r.ok) {
       if (r.class === NOT_REPLAYABLE) counts.notReplayable++;
       else {
         counts.failed++;
         counts.byClass[r.class] = (counts.byClass[r.class] || 0) + 1;
       }
-      spend({ ...rec, outcome: r.class === NOT_REPLAYABLE ? 'not-replayable' : 'failed', class: r.class, detail: r.detail, ms: r.ms });
+      spend({ ...rec, outcome: r.class === NOT_REPLAYABLE ? 'not-replayable' : 'failed', class: r.class, detail: r.detail, ms: r.ms }, checks);
     } else {
       const before = state;
       state = r.state;
@@ -433,7 +447,7 @@ export async function replay(T, params, source, job) {
         ...after(st),
         // Tests only: the transactions and the state they were built from.
         ...(job.keepTx ? { built: { txs: r.txs, before } } : {})
-      });
+      }, checks);
     }
     if (job.settleEvery && ++sinceSettle >= job.settleEvery) {
       sinceSettle = 0;

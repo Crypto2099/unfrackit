@@ -16,10 +16,11 @@
 // out/spool.mjs), the spends as they are made; its answer is what
 // replay/run.mjs's spoolJob returns: the spool's counts, the refusal and the
 // validity summary, never the records themselves. Messages:
-//   in   { id, task: 'replay', job, recordMachineErrors, stopAt, attempt,
-//          limitMs }  stopAt: the time (Date.now()) the job stops at its next
-//          spend boundary, absent for none; attempt, limitMs: for the record
-//          of a job that stops
+//   in   { id, task: 'replay', job, recordMachineErrors, stopAfterMs, attempt,
+//          limitMs }  stopAfterMs: the time limit; the worker takes its
+//          deadline, on its own monotonic clock, from the moment the job
+//          arrives, and stops at its next spend boundary after it (absent for
+//          none); attempt, limitMs: for the record of a job that stops
 //   out  { event: 'ready' }  the treatment is loaded
 //        { id, event: 'info', info: { methodVersion } }  the job's method
 //        { id, event: 'building', on }  a build starts (true) or ends (false)
@@ -58,7 +59,9 @@ const pins = workerData.pinsPath ? readFileSync(workerData.pinsPath, 'utf8') : u
 const T = await loadTreatment(workerData.treatmentDir, pins);
 const csl = cslMemory(T);
 
-process.on('message', async ({ id, task, job, recordMachineErrors: record = false, stopAt, attempt, limitMs }) => {
+process.on('message', async ({ id, task, job, recordMachineErrors: record = false, stopAfterMs, attempt, limitMs }) => {
+  // The one starting point of the limit and of the stopped record's time.
+  const received = performance.now();
   try {
     recordMachineErrors(record);
     const source = loadSource(T, job.source);
@@ -67,7 +70,7 @@ process.on('message', async ({ id, task, job, recordMachineErrors: record = fals
       const method = makeMethod(T, job.method.name, job.method.options || {});
       send({ id, event: 'info', info: { methodVersion: method.version } });
       send({ id, event: 'building', on: false });
-      const result = await runJob(T, source, job, method, { stopAt, attempt, limitMs, onBuild: (on) => send({ id, event: 'building', on }) });
+      const result = await runJob(T, source, job, method, { stopAt: stopAfterMs === undefined ? undefined : received + stopAfterMs, received, attempt, limitMs, onBuild: (on) => send({ id, event: 'building', on }) });
       send({ id, event: 'done', result, memory: memoryReport(csl) });
     } else {
       throw new Error(`unknown task ${task}`);

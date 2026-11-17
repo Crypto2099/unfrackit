@@ -25,9 +25,9 @@
 // response to the waiting request, or whose input closes, is a run error
 // (contract.mjs RunError): the job stops with the helper's stderr tail, never
 // with a spend outcome. No time limit is set on a request: a helper that stops
-// answering holds its job until the pool's watchdog stops the worker
-// (replay/pool.mjs), which reruns the job and records nothing of the stopped
-// attempt.
+// answering holds its job until the replay time limit
+// (replay/pool.mjs) kills the worker; the job is then recorded as stopped, with
+// the spends it had completed, and is not run again.
 //
 // Schema 1. Every value the ledger encodes is CBOR as lowercase hex; every
 // integer the ledger holds is a decimal string; a rational is a pair of
