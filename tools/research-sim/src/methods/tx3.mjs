@@ -28,8 +28,9 @@
 //
 // The selection is Tx3's (tx3-resolver inputs/): every UTxO the store answers
 // for the wallet's address is a candidate (narrow.rs:212-219; for a target
-// naming a token, the holders of each requested token and then others in
-// reference order up to 50, :135-158, :170); candidates are ranked by the
+// naming a token, the UTxOs that hold every requested token at once, then
+// others in reference order up to 50, :135-158, :170; the holders of different
+// tokens do not intersect, so with more than 50 UTxOs they can be left out); candidates are ranked by the
 // log-scale vector distance of their assets to the target, ties by reference
 // (approximate/rank/vector.rs:139-152); pick_many takes, in rank order, every
 // candidate that holds some of what is still pending until nothing is, then
