@@ -243,7 +243,14 @@ export function jobOptions(opts) {
 // job: { key, arm, variant, repetition, method, opts, settleEvery };
 // opts.seed is the repetition; validity (true) adds the validity checks of
 // kit/validity.mjs on every transaction the kit passes, and the summary's
-// validity field.
+// validity field. Three optional fields serve a worker under a time limit
+// (pre-registration, "Run logistics after the cost probes"): onSpend(rec),
+// told each spend record as it is made; onBuild(on), told when a method's
+// build starts (true) and ends (false); stopAt, a time (Date.now()) at or
+// after which the replay stops before its next intent: it returns what it
+// has, with `stopped` set to { spends, last } (the spend records made and the
+// last one's intent and t, or null) and no summary. A build already running
+// at stopAt is not interrupted: only killing the process ends it.
 export async function replay(T, params, source, job) {
   const t0 = performance.now();
   const { arm, variant, repetition, method } = job;
@@ -251,6 +258,12 @@ export async function replay(T, params, source, job) {
   checkRule(job.opts.collateralRule);
   const opts = jobOptions(job.opts);
   const out = { spends: [], bursts: [], summary: null };
+  // A spend's record: kept, and handed to job.onSpend as it is made, so that a
+  // caller can write it before the job ends.
+  const spend = (rec) => {
+    out.spends.push(rec);
+    if (job.onSpend) job.onSpend(rec);
+  };
   const gap = changeAddressGap(source);
   if (gap) {
     out.refused = gap;
@@ -331,6 +344,12 @@ export async function replay(T, params, source, job) {
       counts.marks++;
       continue;
     }
+    if (job.stopAt !== undefined && Date.now() >= job.stopAt) {
+      const l = out.spends[out.spends.length - 1];
+      out.stopped = { spends: out.spends.length, last: l ? { intent: l.intent, t: l.t } : null };
+      out.validity = validity ? summarize(validity) : null;
+      return out;
+    }
     // An intent, its held fixed inputs as the arm holds them.
     const intent = heldInputsFromState(state, e.intent);
     advance(intent.time.blockTime);
@@ -341,7 +360,7 @@ export async function replay(T, params, source, job) {
 
     if (intent.burst && intent.burst.parallel && !passed.has(intent.burst.id)) {
       passed.add(intent.burst.id);
-      out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts, validity ? { acc: validity, at: `burst ${intent.burst.id}` } : null)) });
+      out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts, validity ? { acc: validity, at: `burst ${intent.burst.id}` } : null, job.onBuild)) });
     }
 
     if (intent.invalid) {
@@ -349,14 +368,14 @@ export async function replay(T, params, source, job) {
       const f = forfeit(params, state, intent, opts.collateralRule);
       if (!f.ok) {
         counts.infeasibleCollateral++;
-        out.spends.push({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: 'none-eligible', detail: f.detail });
+        spend({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: 'none-eligible', detail: f.detail });
       } else {
         state = f.state;
         counts.forfeits++;
         fees.forfeits += f.forfeit;
         const st = stateMeasures(state, params);
         trajectory.push(st.largestValueBytes);
-        out.spends.push({ ...rec, outcome: 'forfeit', forfeit: f.forfeit, collateralUsed: { coin: f.coin, returned: f.returned }, ...after(st) });
+        spend({ ...rec, outcome: 'forfeit', forfeit: f.forfeit, collateralUsed: { coin: f.coin, returned: f.returned }, ...after(st) });
         continue;
       }
       trajectory.push(stateMeasures(state, params).largestValueBytes);
@@ -367,25 +386,25 @@ export async function replay(T, params, source, job) {
     if (intent.collateral.required) rec.collateralAvailable = spendCollateralAvailability(T, params, state, intent, feas.suffices);
     if (!feas.suffices) {
       counts.infeasible++;
-      out.spends.push({ ...rec, outcome: 'infeasible', reason: !feas.assets ? 'assets' : !feas.coin ? 'coin' : 'one-transaction' });
+      spend({ ...rec, outcome: 'infeasible', reason: !feas.assets ? 'assets' : !feas.coin ? 'coin' : 'one-transaction' });
       continue;
     }
 
     const aside = collateralFor(T, params, state, intent, opts.collateralRule, method);
     if (!aside.ok) {
       counts.infeasibleCollateral++;
-      out.spends.push({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: aside.reason });
+      spend({ ...rec, outcome: INFEASIBLE_COLLATERAL, reason: aside.reason });
       continue;
     }
 
-    const r = await buildOne(T, params, state, intent, method, opts, aside, vcheck(`spend ${n}`));
+    const r = await buildOne(T, params, state, intent, method, opts, aside, vcheck(`spend ${n}`), job.onBuild);
     if (!r.ok) {
       if (r.class === NOT_REPLAYABLE) counts.notReplayable++;
       else {
         counts.failed++;
         counts.byClass[r.class] = (counts.byClass[r.class] || 0) + 1;
       }
-      out.spends.push({ ...rec, outcome: r.class === NOT_REPLAYABLE ? 'not-replayable' : 'failed', class: r.class, detail: r.detail, ms: r.ms });
+      spend({ ...rec, outcome: r.class === NOT_REPLAYABLE ? 'not-replayable' : 'failed', class: r.class, detail: r.detail, ms: r.ms });
     } else {
       const before = state;
       state = r.state;
@@ -401,7 +420,7 @@ export async function replay(T, params, source, job) {
       const m = view ? spendMeasures(before, intent, r.inspected, view.walletInputs, params, r.requested, view.change) : spendMeasures(before, intent, r.inspected, last.walletInputs, params, r.requested);
       const st = stateMeasures(state, params);
       trajectory.push(st.largestValueBytes);
-      out.spends.push({
+      spend({
         ...rec,
         outcome: 'built',
         txs: r.txs.length,
@@ -478,15 +497,18 @@ const unpricedText = (r, dropped) => {
 // One intent by the method from the pool the set-aside leaves (setAside, or
 // the whole pool for a library that chooses its own collateral), checked by
 // the kit against the whole state and applied.
-async function buildOne(T, params, state, intent, method, opts, aside, validity = null) {
+async function buildOne(T, params, state, intent, method, opts, aside, validity = null, onBuild = null) {
   const t0 = performance.now();
   let r;
+  if (onBuild) onBuild(true);
   try {
     r = checkResult(method, await method.build(aside.pool, intent, params, aside.collateral ? { ...opts, collateral: aside.collateral } : opts));
   } catch (e) {
     if (e instanceof StopPoint || e instanceof RunError) throw e;
     passMachineErrors(e);
     r = { ok: false, class: CLASSES.other, detail: String(e && (e.message || e)) };
+  } finally {
+    if (onBuild) onBuild(false);
   }
   const ms = performance.now() - t0;
   if (!r.ok) return { ok: false, class: r.class, detail: r.detail, ms };
@@ -528,7 +550,7 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
 // state at the burst's start, each later one without the outputs of the
 // earlier ones (their wallet inputs are gone, their outputs never arrive),
 // each at the change address the source names at it.
-async function burstPass(T, params, start, events, method, opts, validity = null) {
+async function burstPass(T, params, start, events, method, opts, validity = null, onBuild = null) {
   let s = start;
   let built = 0;
   for (const { intent: given, changeAddress } of events) {
@@ -544,7 +566,7 @@ async function burstPass(T, params, start, events, method, opts, validity = null
     if (!replaySuffices(T, s, params, intent).suffices) break;
     const aside = collateralFor(T, params, s, intent, opts.collateralRule, method);
     if (!aside.ok) break;
-    const r = await buildOne(T, params, s, intent, method, opts, aside, validity && { ...validity, at: `${validity.at} step ${built}` });
+    const r = await buildOne(T, params, s, intent, method, opts, aside, validity && { ...validity, at: `${validity.at} step ${built}` }, onBuild);
     if (!r.ok) break;
     const heldIns = fixedInputValues(intent).filter((x) => x.held && s.utxos.has(x.ref)).map((x) => x.ref);
     s = removeSpent(s, [...r.txs.flatMap((t) => t.walletInputs), ...heldIns]);

@@ -96,7 +96,7 @@ const children = () => {
   return n;
 };
 
-test('never more worker processes than workers, while jobs wait and workers are replaced after maxJobs, by a watchdog, after a machine error and after a death', { skip: !existsSync(`/proc/${process.pid}/task`) }, () => withPool(async (pool) => {
+test('never more worker processes than workers, while jobs wait and workers are replaced after maxJobs, when the time limit kills one, after a machine error and after a death', { skip: !existsSync(`/proc/${process.pid}/task`) }, () => withPool(async (pool) => {
   let most = 0;
   const timer = setInterval(() => {
     most = Math.max(most, children());

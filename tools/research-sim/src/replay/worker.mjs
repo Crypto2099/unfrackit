@@ -4,18 +4,25 @@
 // The worker process every replay runs in, forked by
 // replay/pool.mjs with an IPC channel; its argument is the JSON of
 // { treatmentDir, pinsPath }. CSL's calls are synchronous, so work that hangs
-// can only be stopped by killing its process; the parent does that when a
-// watchdog falls, and runs the work again in a fresh worker.
+// can only be stopped by killing its process; the parent does that when the
+// time limit falls on a build, and keeps the spends the job had written.
+// Between spends the worker stops by itself once the limit has passed
+// (message field stopAt).
 //
 // The worker loads the treatment itself (digest-checked, one CSL instance per
 // process), makes each job's method from the registry, reads its wallet (a
 // history file or a synthetic shape), and answers with plain data. A replay
 // job's records are built here and written to the job's spool (job.spool,
-// out/spool.mjs); its answer is what replay/run.mjs's spoolJob returns: the
-// spool's counts, the refusal and the validity summary, never
-// the records themselves. Messages:
-//   in   { id, task: 'replay', job, recordMachineErrors }
+// out/spool.mjs), the spends as they are made; its answer is what
+// replay/run.mjs's spoolJob returns: the spool's counts, the refusal and the
+// validity summary, never the records themselves. Messages:
+//   in   { id, task: 'replay', job, recordMachineErrors, stopAt, attempt,
+//          limitMs }  stopAt: the time (Date.now()) the job stops at its next
+//          spend boundary, absent for none; attempt, limitMs: for the record
+//          of a job that stops
 //   out  { event: 'ready' }  the treatment is loaded
+//        { id, event: 'info', info: { methodVersion } }  the job's method
+//        { id, event: 'building', on }  a build starts (true) or ends (false)
 //        { id, event: 'done', result, memory }
 //        { id, event: 'error', error, stop, machine, memory }
 //        { event: 'fatal', error }  an uncaught exception; the worker exits
@@ -29,9 +36,8 @@
 import { readFileSync } from 'node:fs';
 import { loadTreatment } from '../treatment/bridge.mjs';
 import { makeMethod } from '../methods/registry.mjs';
-import { replay } from './engine.mjs';
 import { loadSource } from './source.mjs';
-import { spoolJob } from './run.mjs';
+import { runJob } from './run.mjs';
 import { StopPoint } from '../treatment/run.mjs';
 import { recordMachineErrors, isMachineError } from '../kit/machine.mjs';
 import { cslMemory, memoryReport } from '../kit/heap.mjs';
@@ -52,16 +58,17 @@ const pins = workerData.pinsPath ? readFileSync(workerData.pinsPath, 'utf8') : u
 const T = await loadTreatment(workerData.treatmentDir, pins);
 const csl = cslMemory(T);
 
-process.on('message', async ({ id, task, job, recordMachineErrors: record = false }) => {
+process.on('message', async ({ id, task, job, recordMachineErrors: record = false, stopAt, attempt, limitMs }) => {
   try {
     recordMachineErrors(record);
     const source = loadSource(T, job.source);
     if (task === 'replay') {
       if (!job.spool) throw new Error('a replay job names its spool files');
       const method = makeMethod(T, job.method.name, job.method.options || {});
-      const result = await replay(T, source.params, source, { ...job, method });
-      result.method = { name: method.name, version: method.version, deterministic: method.deterministic };
-      send({ id, event: 'done', result: spoolJob(result, job), memory: memoryReport(csl) });
+      send({ id, event: 'info', info: { methodVersion: method.version } });
+      send({ id, event: 'building', on: false });
+      const result = await runJob(T, source, job, method, { stopAt, attempt, limitMs, onBuild: (on) => send({ id, event: 'building', on }) });
+      send({ id, event: 'done', result, memory: memoryReport(csl) });
     } else {
       throw new Error(`unknown task ${task}`);
     }

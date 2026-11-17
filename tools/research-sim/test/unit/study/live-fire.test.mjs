@@ -169,7 +169,7 @@ test('a clean run: its stages in order on the pick, a start and an end entry in 
   assert.equal(r.failed, false);
 });
 
-test('the three checks: a validity failure, work a watchdog set aside, a history check failing, another failure', async () => {
+test('the three checks: a validity failure, a replay stopped for time, a history check failing, another failure', async () => {
   seedPick('mainnet', 'checks-1');
   const v = await run(opts('sim-validity', 'checks-1'), { validityFailed: { 'replay-recent': 2 }, stops: { 'replay-peak': 1 } });
   const e1 = v.entry;

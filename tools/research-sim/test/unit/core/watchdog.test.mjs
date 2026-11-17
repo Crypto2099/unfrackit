@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The worker pool's watchdogs and machine reruns (src/replay/pool.mjs), over
+// The worker pool's time limit and machine reruns (src/replay/pool.mjs), over
 // a stand-in worker process (test/lib/stub-pool-worker.mjs), with no
-// treatment: a watchdog stop is never a result, and the work runs again with
-// its watchdog doubled until it completes; a machine error makes the job run
+// treatment: a job whose build is running at the limit is killed and not run
+// again, one between builds has the grace to stop by itself, and the limit
+// applies to each attempt; a machine error makes the job run
 // again once in a fresh worker that records machine errors, and only what
 // happens there stands; a dead worker makes it run again in a fresh worker
 // that records them, then alone, and a third death fails it; any other error
@@ -66,14 +67,48 @@ test('passMachineErrors throws a machine error on unless the job records them', 
   }
 });
 
-test('replay: a watchdog stop sets the attempt aside, and the job runs again with the watchdog doubled until it completes', () => withPool(async (pool) => {
+test('replay: a job whose build is running at the limit is killed, not run again; its attempt, limit and the worker\'s info are reported', () => withPool(async (pool) => {
   const notes = [];
-  const r = await pool.replay({ counter: counter(), attempts: ['stall:300'] }, { watchdogMs: 100, note: (e) => notes.push(e) });
+  const r = await pool.replay({ counter: counter(), attempts: ['stall:600'] }, { watchdogMs: 100, note: (e) => notes.push(e) });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.result, { attempt: 3, record: false });
-  assert.deepEqual(notes.map((e) => [e.event, e.watchdogMs]), [['watchdog stop', 100], ['watchdog stop', 200]]);
-  assert.ok(r.ms >= 300, `${r.ms} ms: the completing attempt's time`);
-  assert.deepEqual([pool.stats.watchdogStops, pool.stats.machineReruns, pool.stats.started], [2, 0, 3]);
+  assert.equal(r.result, undefined);
+  assert.deepEqual(r.killed, { at: 'build', attempt: 1, limitMs: 100, info: null });
+  assert.ok(r.ms >= 100 && r.ms < 500, `${r.ms} ms: the limit, not the stall`);
+  assert.deepEqual(notes.map((e) => [e.event, e.watchdogMs, e.at, e.attempt]), [['watchdog stop', 100, 'running build', 1]]);
+  assert.deepEqual([pool.stats.watchdogStops, pool.stats.machineReruns, pool.stats.started], [1, 0, 1]);
+  // The worker has exited and its place is free.
+  assert.deepEqual([pool.live.size, pool.stopping.size, pool.running.size], [0, 0, 0]);
+}));
+
+test('replay: a worker that reports a build running is killed at the limit, and one that reports none is given the grace to stop by itself', () => withPool(async (pool) => {
+  const killed = await pool.replay({ counter: counter(), attempts: ['building:600'] }, { watchdogMs: 100 });
+  assert.equal(killed.killed.at, 'build');
+  // Between builds at the limit, and at its next spend boundary 100 ms later: the job's own answer stands, the worker stays.
+  const notes = [];
+  const own = await pool.replay({ counter: counter(), attempts: ['idle+selfstop:200'] }, { watchdogMs: 100, stopGraceMs: 5000, note: (e) => notes.push(e) });
+  assert.equal(own.ok, true);
+  assert.equal(own.killed, undefined);
+  assert.deepEqual(own.result.stopped, { reason: 'excessive time', at: 'spend boundary', attempt: 1, spends: 3 });
+  assert.deepEqual(notes.map((e) => [e.event, e.at, e.attempt, e.spends]), [['watchdog stop', 'spend boundary', 1, 3]]);
+  assert.equal(pool.idle.length, 1, 'the worker that stopped by itself is reused');
+  // Between builds and silent past the grace: killed, and said so.
+  const late = await pool.replay({ counter: counter(), attempts: ['idle+sleep:3000'] }, { watchdogMs: 100, stopGraceMs: 150 });
+  assert.deepEqual([late.killed.at, late.killed.attempt], ['grace', 1]);
+  assert.ok(late.ms >= 250 && late.ms < 2000, `${late.ms} ms`);
+  // Between builds, a worker that starts one after the limit is killed at once.
+  const again = await pool.replay({ counter: counter(), attempts: ['idle+sleep:120+building:2000'] }, { watchdogMs: 100, stopGraceMs: 5000 });
+  assert.equal(again.killed.at, 'build');
+  assert.ok(again.ms < 1000, `${again.ms} ms`);
+  assert.equal(pool.stats.watchdogStops, 4);
+  assert.equal(pool.stats.machineReruns, 0);
+}));
+
+test('replay: the limit applies to each attempt: a job rerun after a machine error has its full limit again, is not doubled, and names its attempt', () => withPool(async (pool) => {
+  const notes = [];
+  const r = await pool.replay({ counter: counter(), attempts: ['stall:60+machine', 'stall:600'] }, { watchdogMs: 100, note: (e) => notes.push(e) });
+  assert.deepEqual(r.killed, { at: 'build', attempt: 2, limitMs: 100, info: null });
+  assert.deepEqual(notes.map((e) => [e.event, e.watchdogMs, e.attempt]), [['machine rerun', undefined, undefined], ['watchdog stop', 100, 2]]);
+  assert.deepEqual([pool.stats.watchdogStops, pool.stats.machineReruns, pool.stats.started], [1, 1, 2]);
 }));
 
 test('replay: a machine error runs the job again once in a fresh worker that records them; what happens there stands', () => withPool(async (pool) => {
@@ -107,10 +142,10 @@ test('replay: an error that is not the machine\'s fails the job at once, and the
   assert.deepEqual([pool.stats.machineReruns, pool.stats.watchdogStops, pool.stats.started, pool.idle.length], [0, 0, 1, 1]);
 }));
 
-test('replay: jobs in parallel each run to completion, one stopped among them', () => withPool(async (pool) => {
+test('replay: jobs in parallel, one killed at the limit and one rerun after a machine error, the others complete', () => withPool(async (pool) => {
   const jobs = [['done'], ['stall:250', 'done'], ['done'], ['machine', 'done'], ['done']];
   const rs = await Promise.all(jobs.map((attempts) => pool.replay({ counter: counter(), attempts }, { watchdogMs: 100 })));
-  assert.deepEqual(rs.map((r) => [r.ok, r.result.attempt]), [[true, 1], [true, 2], [true, 1], [true, 2], [true, 1]]);
+  assert.deepEqual(rs.map((r) => [r.ok, r.killed ? 'killed' : r.result.attempt]), [[true, 1], [true, 'killed'], [true, 1], [true, 2], [true, 1]]);
   assert.deepEqual([pool.stats.watchdogStops, pool.stats.machineReruns], [1, 1]);
   assert.ok(pool.live.size <= 2);
 }, { size: 2 }));

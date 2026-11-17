@@ -30,9 +30,10 @@
 // same run ID resumes it at the wallets not done, and refuses when what
 // decides the records differs. --shard or --wallet-indexes runs one
 // machine's share of the wallets (replay/shards.mjs), which plan-shards
-// plans and merge-stage (out/merge.mjs) joins. No time limit
-// decides a result: every replay and answer runs to completion, under a
-// watchdog that only makes hung work run again (pool.mjs). The worker count
+// plans and merge-stage (out/merge.mjs) joins. A replay job that
+// reaches the time limit (24 hours) is stopped, the spends it completed are
+// kept and its pair is recorded as stopped, never run again (pool.mjs);
+// otherwise no time limit decides a result. The worker count
 // and the workers' memory budget (--memory-budget, by default 80% of the
 // memory available at the start; pool.mjs) change no record; a replay
 // stage's machines/<label>.json records them with the label --machine gives

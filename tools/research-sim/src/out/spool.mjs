@@ -10,18 +10,21 @@
 //   <job>.timings.jsonl  their timing rows, numbered within the job from 1
 // The commit appends the record lines, renumbers the timing rows to follow
 // the records written before them, and removes both files. A job that runs
-// again (a watchdog stop, a machine rerun) rewrites its spool from the start.
+// again (a machine rerun) rewrites its spool from the start. A replay job's
+// worker may write its spool as the job goes (SpoolStream, flushed after each
+// record), so that a job the watchdog kills keeps the records it had written;
+// resumeSpool reopens such a spool after the kill.
 
 import { join } from 'node:path';
-import { openSync, writeSync, closeSync } from 'node:fs';
+import { openSync, writeSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
 import { prepare, timingLine, recordKey } from './records.mjs';
 
 export const spoolPaths = (dir, job) => ({ records: join(dir, `${job}.records.jsonl`), timings: join(dir, `${job}.timings.jsonl`) });
 
 // Lines written a mebibyte at a time, to a file created 0600.
 class Spooler {
-  constructor(path) {
-    this.fd = openSync(path, 'w', 0o600);
+  constructor(path, flags = 'w') {
+    this.fd = openSync(path, flags, 0o600);
     this.parts = [];
     this.size = 0;
   }
@@ -46,35 +49,116 @@ class Spooler {
   }
 }
 
-// Writes a job's records (an iterable, in order) to its spool. hold(rec):
-// whether a record's timing row is returned instead of written, for the run
-// to complete (the run sets the wallet-arm's time to the attempt's); only a
-// job's last record may be held, so its row still comes last. Returns what
-// the commit reads: the paths, the record count, the counts by kind, and the
+// A job's records written to its spool one at a time. hold(rec): whether a
+// record's timing row is returned instead of written, for the run to
+// complete (the run sets the wallet-arm's time to the attempt's); only a
+// job's last record may be held, so its row still comes last. eager: each
+// record reaches the file when it is added (its timing row first, so that a
+// row never lacks its record's predecessor and a kill leaves at most one
+// timing row beyond the records), where otherwise the files are written a
+// mebibyte at a time; the bytes are the same. close() returns what the
+// commit reads: the paths, the record count, the counts by kind, and the
 // held row ({ n, kind, key, times }) or null.
-export function spoolRecords(paths, recs, { hold = () => false } = {}) {
-  const r = new Spooler(paths.records);
-  let t = null;
-  const counts = {};
-  let count = 0;
-  let held = null;
-  try {
-    t = new Spooler(paths.timings);
-    for (const rec of recs) {
-      if (held) throw new Error('only the last record of a job may hold its timing row');
-      const { line, times } = prepare(rec);
-      const n = ++count;
-      r.add(line);
-      counts[rec.kind] = (counts[rec.kind] || 0) + 1;
-      if (!Object.keys(times).length) continue;
-      if (hold(rec)) held = { n, kind: rec.kind, key: recordKey(rec), times };
-      else t.add(timingLine(n, rec, times));
+export class SpoolStream {
+  constructor(paths, { hold = () => false, eager = false, resume = null } = {}) {
+    this.paths = paths;
+    this.hold = hold;
+    this.eager = eager;
+    const flags = resume ? 'a' : 'w';
+    this.r = new Spooler(paths.records, flags);
+    try {
+      this.t = new Spooler(paths.timings, flags);
+    } catch (e) {
+      this.r.close();
+      throw e;
     }
-  } finally {
-    r.close();
-    if (t) t.close();
+    this.counts = resume ? { ...resume.counts } : {};
+    this.count = resume ? resume.count : 0;
+    this.held = null;
+    this.closed = false;
   }
-  return { records: paths.records, timings: paths.timings, count, counts, held };
+  add(rec) {
+    if (this.held) throw new Error('only the last record of a job may hold its timing row');
+    const { line, times } = prepare(rec);
+    const n = ++this.count;
+    this.counts[rec.kind] = (this.counts[rec.kind] || 0) + 1;
+    const timed = Object.keys(times).length > 0;
+    if (timed) {
+      if (this.hold(rec)) this.held = { n, kind: rec.kind, key: recordKey(rec), times };
+      else this.t.add(timingLine(n, rec, times));
+    }
+    if (this.eager) {
+      this.t.flush();
+      this.r.add(line);
+      this.r.flush();
+    } else this.r.add(line);
+  }
+  close() {
+    if (!this.closed) {
+      this.closed = true;
+      try {
+        this.r.close();
+      } finally {
+        this.t.close();
+      }
+    }
+    return { records: this.paths.records, timings: this.paths.timings, count: this.count, counts: this.counts, held: this.held };
+  }
+}
+
+// Writes a job's records (an iterable, in order) to its spool; see SpoolStream.
+export function spoolRecords(paths, recs, { hold = () => false } = {}) {
+  const s = new SpoolStream(paths, { hold });
+  try {
+    for (const rec of recs) s.add(rec);
+  } finally {
+    s.close();
+  }
+  return s.close();
+}
+
+// What a killed job's spool holds, made whole: a spool written by a
+// SpoolStream, cut after its last complete record line, its timing rows cut
+// to those of the records kept. A spool that does not exist is empty.
+// Returns { count, counts, spends, last }: the records by kind, the spend
+// records' number and the last spend's intent and time ({ intent, t }), or
+// null when it has none.
+export function repairSpool(paths) {
+  const text = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch (e) {
+      if (e.code === 'ENOENT') return '';
+      throw e;
+    }
+  };
+  const whole = (t) => t.slice(0, t.lastIndexOf('\n') + 1);
+  const recs = text(paths.records);
+  const keptRecs = whole(recs);
+  let count = 0;
+  let spends = 0;
+  let last = null;
+  const counts = {};
+  for (const line of keptRecs.split('\n')) {
+    if (!line) continue;
+    const r = JSON.parse(line);
+    count++;
+    counts[r.kind] = (counts[r.kind] || 0) + 1;
+    if (r.kind === 'spend') {
+      spends++;
+      last = { intent: r.intent, t: r.t };
+    }
+  }
+  const rows = whole(text(paths.timings))
+    .split('\n')
+    .filter((l) => {
+      if (!l) return false;
+      const m = /^\{"n":([1-9]\d*),/.exec(l);
+      return m && Number(m[1]) <= count;
+    });
+  writeFileSync(paths.records, keptRecs, { mode: 0o600 });
+  writeFileSync(paths.timings, rows.map((l) => `${l}\n`).join(''), { mode: 0o600 });
+  return { count, counts, spends, last };
 }
 
 // Commits jobs in job order as they complete. done(i, value) keeps value

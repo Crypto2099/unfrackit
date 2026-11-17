@@ -36,8 +36,8 @@
 //    redacted, the run time, each step's outcome, error class and time, and
 //    three checks, each true, false or null (not reached), over the whole run:
 //    every intent parsed, every built transaction passed the ledger checks,
-//    and a watchdog set work aside (a replay stopped and run again to
-//    completion). Then what became of the
+//    and a replay job was stopped at the time limit (its pair recorded as
+//    stopped). Then what became of the
 //    wallet-level output: the run directory (history files, records, logs) is
 //    deleted whether the run succeeded or failed, unless --keep-for-debug is
 //    given and a step failed; a kept run is deleted later by --cleanup, which
@@ -47,7 +47,7 @@
 //
 // Nothing counted reaches the log, the progress lines or what the command
 // prints: the stages' totals are read in memory for the three checks only.
-// The repetitions are one of each (LIVE_FIRE_REPS) and the watchdog is the
+// The repetitions are one of each (LIVE_FIRE_REPS) and the time limit is the
 // study's; both are recorded in the start entry.
 
 import { existsSync, rmSync } from 'node:fs';
@@ -182,8 +182,10 @@ export function errorClass(e) {
 // finish. intents: every spend of every history stage read into its event,
 // and each history file completed (a history check failing makes it false).
 // transactions: every transaction the replays built passed the validity
-// checks (no validity failure). setAside: a watchdog stopped a replay, which
-// then ran again to completion (the pool's count in the replay printouts).
+// checks (no validity failure). setAside (the check's name in the log, which
+// the extraction tool shares): a replay job reached the time limit and was
+// stopped, its pair recorded as stopped (the pool's count in the replay
+// printouts).
 export function checksOf(results, failure) {
   const history = ['history-recent', 'history-peak'];
   const built = ['replay-recent', 'replay-peak'];

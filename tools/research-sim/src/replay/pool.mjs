@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Adam K. Dean
 
-// The worker processes, their memory and the watchdogs. No time limit
-// decides any result: every replay and every method answer runs to
-// completion, and its time is kept as timing context (out/records.mjs).
-// CSL's calls are synchronous, so work that hangs can be stopped only by
-// killing the process it runs in. A watchdog far above any expected time does
-// that: the work is set aside, nothing of it is recorded, and it runs again
-// at once in a fresh worker with its watchdog doubled, as often as it takes
-// to complete, so a stop changes when the work ends and never what it
-// records.
+// The worker processes, their memory and the time limit. A replay runs to
+// completion, and its time is kept as timing context (out/records.mjs),
+// except under one rule, the only wall-clock rule that shapes a record
+// (pre-registration, "Run logistics after the cost probes"): a replay job
+// that reaches its time limit is stopped, the spends it completed are kept,
+// and its wallet-arm record says it was stopped for time (replay/run.mjs,
+// stoppedArm). It is never run again. The worker writes each spend to the
+// job's spool as the spend is made, and stops by itself at the next spend
+// boundary once the limit has passed (replay/engine.mjs, stopAt). CSL's
+// calls are synchronous, so a build running at the limit cannot be
+// interrupted from inside; it can be ended only by killing the process it
+// runs in, which the pool does, and that spend is not done. The worker tells
+// the pool when a build starts and ends, so that a worker between spends is
+// given `stopGraceMs` to reach its boundary before it too is killed.
 //
-//   replay   24 hours per (wallet, arm, selector, repetition) replay; the
-//            replay runs again from its start
+//   replay   24 hours per (wallet, arm, selector, repetition) replay, each
+//            attempt of it (a rerun after a machine error starts its clock
+//            again)
 //
 // Workers are child processes (child_process.fork, with an IPC channel and
 // the V8 serializer, so messages carry what structured clone carries),
@@ -58,11 +64,12 @@
 // same point of the job fails it, naming the job, and the run stops with it.
 // An error that is not the machine's fails the job at once.
 //
-// Nothing here changes a record: admission, recycling and reruns change only
-// when and in which worker a job runs. The worker count and the budget are
-// recorded with the machine (out/host.mjs, out/stage.mjs). `stats` counts
-// what happened, for the run's log, printout and machine record only:
-// workers started, recycled after maxJobs jobs and by size, watchdog stops,
+// Nothing here changes a record but the time limit: admission, recycling and
+// reruns change only when and in which worker a job runs. The worker count
+// and the budget are recorded with the machine (out/host.mjs, out/stage.mjs).
+// `stats` counts what happened, for the run's log, printout and machine
+// record only: workers started, recycled after maxJobs jobs and by size,
+// jobs stopped at the time limit (watchdogStops),
 // machine reruns (out-of-memory reruns among them), jobs that waited for
 // memory, jobs started ahead of one held for memory, jobs that ran alone,
 // and estimates raised.
@@ -74,6 +81,10 @@ import { performance } from 'node:perf_hooks';
 import os from 'node:os';
 
 export const REPLAY_WATCHDOG_MS = 24 * 3600 * 1000;
+
+// How long a worker that is between spends when the limit falls has to reach
+// its spend boundary and stop by itself, before it is killed.
+export const STOP_GRACE_MS = 60 * 1000;
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
@@ -539,22 +550,32 @@ export class Pool {
     return slot;
   }
 
-  // One attempt of a job on worker w. arm: the watchdog armed at the start
-  // (milliseconds), or null.
+  // One attempt of a job on worker w. arm: the time limit of the attempt
+  // (milliseconds), or null; the worker is told the time it ends (stopAt) and
+  // stops by itself at its next spend boundary after it. grace: how long a
+  // worker between builds has, once the limit falls, to stop by itself.
   // Resolves, with ms, the attempt's time:
   //   { kind: 'done', result, memory }
   //   { kind: 'error', error, stop, machine, memory }  the job threw
   //   { kind: 'died', error, exit }   the worker exited or was killed
-  //   { kind: 'watchdog' }            the watchdog stopped it
+  //   { kind: 'watchdog', at, info }  the limit fell with a build running
+  //                                   (at 'build'), or the worker did not
+  //                                   stop in time between builds ('grace')
   // memory: the worker's report (cslBytes, cslCeilingBytes, rss and V8's
-  // heap). The caller finishes, releases or renews the slot.
-  attempt(w, task, job, extra, { arm = null } = {}) {
+  // heap). info: what the worker told of the job before (the method's
+  // version). A worker is taken to be in a build until it says it is not, so
+  // one that says nothing is killed when the limit falls. The caller
+  // finishes, releases or renews the slot.
+  attempt(w, task, job, extra, { arm = null, grace = STOP_GRACE_MS } = {}) {
     const id = ++this.seq;
     const t0 = performance.now();
     resetPeak(w.pid);
     return new Promise((resolve) => {
       let over = false;
       let timer = null;
+      let building = true;
+      let late = false;
+      let info = null;
       const end = (r) => {
         if (over) return;
         over = true;
@@ -564,33 +585,56 @@ export class Pool {
       };
       const watchdog = (ms) => {
         clearTimeout(timer);
-        timer = ms === null ? null : setTimeout(() => end({ kind: 'watchdog' }), ms);
+        if (ms === null) return;
+        timer = setTimeout(() => {
+          if (building) return end({ kind: 'watchdog', at: 'build', info });
+          late = true;
+          timer = setTimeout(() => end({ kind: 'watchdog', at: 'grace', info }), grace);
+          return undefined;
+        }, ms);
       };
       const onMessage = (m) => {
         if (!m || m.id !== id) return;
         if (m.event === 'done') end({ kind: 'done', result: m.result, memory: m.memory || null });
         else if (m.event === 'error') end({ kind: 'error', error: m.error, stop: !!m.stop, machine: !!m.machine, memory: m.memory || null });
+        else if (m.event === 'info') info = m.info || null;
+        else if (m.event === 'building') {
+          building = !!m.on;
+          if (building && late) end({ kind: 'watchdog', at: 'build', info });
+        }
       };
       w.proc.on('message', onMessage);
       w.ended.then((exit) => end({ kind: 'died', error: w.fatal || exitText(exit), exit }));
       if (arm !== null) watchdog(arm);
-      w.send({ id, task, job, ...extra });
+      w.send({ id, task, job, ...extra, ...(arm !== null ? { stopAt: Date.now() + arm } : {}) });
     });
   }
 
-  // One replay job. Resolves { ok: true, result, ms } or { ok: false, error,
-  // stop, ms }, ms being the time of the attempt that ended it. note(entry) is
-  // told of each watchdog stop and machine rerun, and of a run alone.
-  async replay(job, { watchdogMs = REPLAY_WATCHDOG_MS, note = () => {} } = {}) {
-    let watchdog = watchdogMs;
+  // One replay job. Resolves { ok: true, result, ms }, { ok: true, killed,
+  // ms } or { ok: false, error, stop, ms }, ms being the time of the attempt
+  // that ended it. killed: the job reached its time limit with a build
+  // running and the worker was killed ({ at, attempt, limitMs, info }); the
+  // job's spool holds the spends it had written, and nothing else is known of
+  // it. A job that stopped by itself at a spend boundary is a result that has
+  // `stopped`. A job is stopped at its limit and not run again: the limit
+  // applies to each attempt, and an attempt after a machine error replays the
+  // job from its start. note(entry) is told of each stop ('watchdog stop'),
+  // machine rerun and run alone.
+  async replay(job, { watchdogMs = REPLAY_WATCHDOG_MS, stopGraceMs = STOP_GRACE_MS, note = () => {} } = {}) {
     let record = false;
     let deaths = 0;
+    let attempts = 0;
     let estimate = this.estimateOf(job);
     let slot = await this.admit({ estimate, note });
     for (;;) {
-      const r = await this.attempt(slot.worker, 'replay', job, { recordMachineErrors: record }, { arm: watchdog });
+      attempts++;
+      const r = await this.attempt(slot.worker, 'replay', job, { recordMachineErrors: record, attempt: attempts, limitMs: watchdogMs }, { arm: watchdogMs, grace: stopGraceMs });
       if (r.kind === 'done' || (r.kind === 'error' && (!r.machine || record))) {
         this.finish(slot, r, job, { retire: record });
+        if (r.kind === 'done' && r.result && r.result.stopped) {
+          this.stats.watchdogStops++;
+          note({ event: 'watchdog stop', watchdogMs, ms: r.ms, ...stopNote(r.result.stopped) });
+        }
         return r.kind === 'done' ? { ok: true, result: r.result, ms: r.ms } : { ok: false, error: r.error, stop: r.stop, ms: r.ms };
       }
       if (this.closed) {
@@ -613,14 +657,18 @@ export class Pool {
         continue;
       }
       if (r.kind === 'watchdog') {
+        // The worker is killed and has exited before the spool is read.
+        this.running.delete(slot);
+        await this.stop(slot.worker);
+        this.pump();
         this.stats.watchdogStops++;
-        note({ event: 'watchdog stop', watchdogMs: watchdog, ms: r.ms });
-        watchdog *= 2;
-      } else {
-        this.stats.machineReruns++;
-        note({ event: 'machine rerun', cause: 'machine error', error: r.error });
-        record = true;
+        const at = r.at === 'build' ? 'running build' : 'killed between spends';
+        note({ event: 'watchdog stop', watchdogMs, ms: r.ms, at, attempt: attempts });
+        return { ok: true, killed: { at: r.at, attempt: attempts, limitMs: watchdogMs, info: r.info }, ms: r.ms };
       }
+      this.stats.machineReruns++;
+      note({ event: 'machine rerun', cause: 'machine error', error: r.error });
+      record = true;
       slot = await this.renew(slot);
     }
   }
@@ -634,6 +682,10 @@ export class Pool {
     this.idle = [];
   }
 }
+
+// What the log says of a job that stopped by itself: where, which attempt, the
+// spends it kept.
+const stopNote = (st) => ({ at: st.at, attempt: st.attempt, spends: st.spends });
 
 // The key a raised estimate is kept under: the job's wallet (its source).
 const walletKey = (job) => JSON.stringify((job && job.source) ?? null);

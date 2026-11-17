@@ -14,7 +14,12 @@
 //            ceiling, then is done), 'machine' (an error that is the
 //            machine's), 'error' (one that is not), 'die' (the process
 //            exits with code 3), 'kill' (it is killed by SIGKILL, as the
-//            out-of-memory killer does), 'throw' (an uncaught exception)
+//            out-of-memory killer does), 'throw' (an uncaught exception),
+//            'building:<ms>' (tells the pool a build starts, blocks the
+//            process, tells it the build ended, as the real worker does),
+//            'idle' (tells the pool no build is running), 'selfstop:<ms>'
+//            (waits without blocking, then answers a job stopped by itself
+//            at a spend boundary: a result with `stopped`)
 // A replay result names the attempt that made it and whether it recorded
 // machine errors, and, when job.trace is set, the process and when the
 // attempt started and ended (Date.now()).
@@ -52,6 +57,16 @@ process.on('message', async ({ id, task, job, recordMachineErrors = false }) => 
       const [kind, arg] = step.split(':');
       if (kind === 'stall') block(Number(arg));
       if (kind === 'sleep') await new Promise((r) => setTimeout(r, Number(arg)));
+      if (kind === 'building') {
+        process.send({ id, event: 'building', on: true });
+        block(Number(arg));
+        process.send({ id, event: 'building', on: false });
+      }
+      if (kind === 'idle') process.send({ id, event: 'building', on: false });
+      if (kind === 'selfstop') {
+        await new Promise((r) => setTimeout(r, Number(arg)));
+        return process.send({ id, event: 'done', result: { attempt: n, record: recordMachineErrors, stopped: { reason: 'excessive time', at: 'spend boundary', attempt: n, spends: 3 } }, memory: report(csl) });
+      }
       if (kind === 'hold') held.push(Buffer.alloc(Number(arg) * 1024 * 1024, 1));
       if (kind === 'csl') csl = Number(arg) * 1024 * 1024;
       if (kind === 'machine') return fail(true);

@@ -17,10 +17,12 @@
 // in, and the parent holds no wallet's records: of a job it keeps only
 // whether it was refused and its validity summary. Several wallets are open at once (runReplays),
 // so a wallet's slowest job does not leave the other workers idle, and
-// wallets are done in any order. Every job runs to completion: a job the
-// pool's watchdog stops, or one a machine error ends, runs again
+// wallets are done in any order. A job a machine error ends runs again
 // (replay/pool.mjs), rewriting its spool, and only the attempt that completes
-// is recorded. An engine refusal (a wallet the rules do not settle, such as
+// is recorded. A job that reaches the pool's time limit is stopped, never run
+// again: the spends it completed stay in its spool, which the worker writes as
+// the job goes, and a wallet-arm record closes it with the `stopped` field
+// (stoppedArm); the wallet is done like any other. An engine refusal (a wallet the rules do not settle, such as
 // one with no change address) is recorded as refused; a stop point or a
 // failed job stops the run and drops the segments of the wallets with a job
 // not ended, so only whole wallets are marked done, and the run resumes at
@@ -29,8 +31,9 @@
 //
 import { rmSync } from 'node:fs';
 import { record } from '../out/records.mjs';
-import { spoolPaths, spoolRecords, Frontier } from '../out/spool.mjs';
+import { spoolPaths, SpoolStream, repairSpool, Frontier } from '../out/spool.mjs';
 import { loadSource } from './source.mjs';
+import { replay } from './engine.mjs';
 import { expandJobs } from '../arms/plan.mjs';
 import { sumValidity } from '../kit/validity.mjs';
 import { walletMemory } from './pool.mjs';
@@ -39,26 +42,111 @@ import { walletMemory } from './pool.mjs';
 // its refusal, or its spends, bursts and wallet-arm record. The
 // wallet-arm's ms is the attempt's time, which the parent measures: it is
 // written here as 0, in the position the time takes, and the parent sets it
-// in the timing row (spoolJob holds that row back).
-export function* jobRecords(x, { key, hypotheses, opts = {} }) {
+// in the timing row (spoolJob holds that row back). skipSpends: the spends
+// are already written (a worker writes them as the job goes). A job stopped
+// for time (x.stopped) has its spends and the wallet-arm record of
+// stoppedArm; its bursts are not written, so that a stopped job's records do
+// not depend on whether it was stopped at a spend boundary or killed.
+export function* jobRecords(x, job, { skipSpends = false, stop = null } = {}) {
+  const { key, hypotheses, opts = {} } = job;
   const { absorb } = opts;
   if (x.refused) {
     yield record('refused', key, { reason: x.refused });
     return;
   }
-  for (const s of x.spends) yield record('spend', key, s);
+  if (!skipSpends) for (const s of x.spends) yield record('spend', key, s);
+  if (x.stopped) {
+    yield stoppedArm(job, { methodVersion: x.method.version, ...x.stopped, ...stop });
+    return;
+  }
   for (const b of x.bursts) yield record('burst', key, b);
   yield record('wallet-arm', key, { hypotheses, methodVersion: x.method.version, ...(absorb !== undefined ? { absorb } : {}), ...x.summary, ms: 0 });
+}
+
+// The `stopped` field's values for `at`: the job stopped before an intent
+// (the spend boundary), was killed with a method's build running, or was
+// killed between spends when it did not stop in time.
+export const STOPPED_AT = Object.freeze({ boundary: 'spend boundary', build: 'running build', unresponsive: 'killed between spends' });
+
+// The wallet-arm record of a job stopped at the replay's time limit. Beside
+// the key's fields it holds what a finished job's holds of the job (its
+// hypotheses, the method's version, absorb, capped) and no summary; `stopped`
+// says what became of the job: reason ('excessive time'); attempt (which run
+// of the job, from 1, a rerun after a machine error replaying the job from its
+// first spend); limitMs, the limit in force; elapsedMs, the attempt's wall
+// time when it stopped; at (STOPPED_AT); spends, the spend records kept, of
+// planned, the window's intents (job.planned); last, the last kept spend's
+// intent and t (null when none); machine, the stage's label (job.machine).
+// The spends are the records already in the job's spool.
+export function stoppedArm(job, { methodVersion, spends, last, at, elapsedMs, attempt, limitMs }) {
+  const { absorb } = job.opts || {};
+  return record('wallet-arm', job.key, {
+    hypotheses: job.hypotheses,
+    methodVersion: methodVersion ?? null,
+    ...(absorb !== undefined ? { absorb } : {}),
+    capped: !!job.capped,
+    stopped: { reason: 'excessive time', attempt, limitMs, elapsedMs: Math.round(elapsedMs), at, spends, planned: job.planned, last: last ?? null, machine: job.machine ?? null },
+    ms: 0
+  });
 }
 
 // What a worker answers for a replay job (replay/worker.mjs): the job's
 // records written to its spool (job.spool), with the wallet-arm's timing row
 // held back, and what the parent reads besides: whether the job was refused,
-// its validity summary.
-export function spoolJob(x, job) {
-  const spooled = spoolRecords(job.spool, jobRecords(x, job), { hold: (rec) => rec.kind === 'wallet-arm' });
+// its validity summary, and for a job stopped for time, its `stopped` field.
+// stream: the job's spool when the worker has been writing it as the job goes
+// (its spends written), in which case it is closed here; stop: the values the
+// worker adds to a stopped job's record (attempt, limitMs, elapsedMs, at).
+export function spoolJob(x, job, { stream = null, stop = null } = {}) {
+  const hold = (rec) => rec.kind === 'wallet-arm';
+  const s = stream || new SpoolStream(job.spool, { hold });
+  let stopped = null;
+  try {
+    for (const rec of jobRecords(x, job, { skipSpends: !!stream, stop })) {
+      if (rec.kind === 'wallet-arm' && rec.stopped) stopped = rec.stopped;
+      s.add(rec);
+    }
+  } finally {
+    s.close();
+  }
+  const spooled = s.close();
   if (x.refused) return { refused: true, spooled };
+  if (stopped) return { refused: false, validity: x.validity || null, spooled, stopped };
   return { refused: false, validity: x.summary.validity || null, spooled };
+}
+
+// The job's whole run in a worker: its spends written to its spool as they
+// are made; stopAt (Date.now()): the time the job stops at a spend boundary,
+// absent for none; attempt, limitMs: which attempt this is and the limit,
+// which the stopped record names; onBuild: told when a build starts and ends.
+// Returns spoolJob's answer.
+export async function runJob(T, source, job, method, { stopAt, attempt = 1, limitMs = null, onBuild }) {
+  const started = performance.now();
+  const stream = new SpoolStream(job.spool, { hold: (rec) => rec.kind === 'wallet-arm', eager: true });
+  try {
+    const x = await replay(T, source.params, source, { ...job, method, ...(stopAt !== undefined ? { stopAt } : {}), onBuild, onSpend: (s) => stream.add(record('spend', job.key, s)) });
+    x.method = { name: method.name, version: method.version, deterministic: method.deterministic };
+    return spoolJob(x, job, { stream, stop: { at: STOPPED_AT.boundary, elapsedMs: performance.now() - started, attempt, limitMs } });
+  } finally {
+    stream.close();
+  }
+}
+
+// A job the pool killed at its time limit, finished in the parent: its spool
+// is made whole (repairSpool) and closed with the wallet-arm record of
+// stoppedArm. killed: { at, attempt, limitMs, info: { methodVersion } }, ms:
+// the attempt's time. Returns what spoolJob does for a stopped job.
+export function spoolKilled(job, killed, ms) {
+  const kept = repairSpool(job.spool);
+  const s = new SpoolStream(job.spool, { hold: (rec) => rec.kind === 'wallet-arm', resume: kept });
+  const at = killed.at === 'build' ? STOPPED_AT.build : STOPPED_AT.unresponsive;
+  const rec = stoppedArm(job, { methodVersion: killed.info && killed.info.methodVersion, spends: kept.spends, last: kept.last, at, elapsedMs: ms, attempt: killed.attempt, limitMs: killed.limitMs });
+  try {
+    s.add(rec);
+  } finally {
+    s.close();
+  }
+  return { refused: false, validity: null, spooled: s.close(), stopped: rec.stopped };
 }
 
 // The options a replay job gives its method (checked by the engine): the seed
@@ -87,13 +175,14 @@ export const poolJobCap = (workers) => 2 * workers;
 // wallets: [{ spec }], in the stage's wallet order; plan: the window's
 // entries; roles: role -> method name (a test plan's entries name role
 // 'test'); out: the stage (out/stage.mjs openStage) over the same wallets;
-// watchdogMs: the replay watchdog (the pool's default when absent); maxOpen:
+// watchdogMs: the replay's time limit (the pool's default when absent); maxOpen:
 // the most wallets open at once (openWalletCap of the pool's size when
 // absent). A wallet the stage has done is skipped, and so is one outside the
 // invocation's share of the wallets (out/stage.mjs runs). The jobs' spools
 // are under out.dir/spool/<wallet index>/, removed when the run ends.
 // Returns the stage's totals, every done wallet's summed: { wallets, jobs,
-// refused } and, with validity, their validity counts.
+// refused } and, with validity, their validity counts; and `stopped`, the jobs
+// stopped for time, only when a job was (a wallet's totals name it only then).
 //
 // Several wallets run at once. The run keeps one queue of the jobs not yet
 // handed to the pool, in (wallet index, job index) order, and hands the pool
@@ -158,6 +247,8 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
     const jobs = expandJobs(plan, { roles, needsCollateral: needsCollateral(source), ...(collateralRules ? { collateralRules } : {}) });
     // What the pool's memory estimate reads of the wallet (pool.mjs).
     const memory = walletMemory(source);
+    // What a stopped job's record says of the wallet's window: its intents.
+    const planned = source.events.filter((e) => e.kind === 'intent').length;
     const seg = out.segment(wi);
     const dir = seg.dir;
     const st = {
@@ -187,7 +278,10 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
         validity,
         key,
         hypotheses: j.hypotheses,
-        spool: spoolPaths(dir, i)
+        spool: spoolPaths(dir, i),
+        planned,
+        capped: !!source.capped,
+        machine: out.label ?? null
       };
       const at = { wallet: source.wallet, arm: j.arm, variant: j.variant, method: j.method, change: j.change, collateral: j.collateral, repetition: j.repetition };
       queue.push({ st, i, j, key, job, at });
@@ -206,7 +300,10 @@ export async function runReplays(T, pool, { wallets, plan, roles, out, watchdogM
       if (r.stop) throw new Error(`stop point: ${r.error}`);
       throw new Error(`replay failed: ${r.error}`);
     }
-    const x = r.result;
+    // A job the pool killed at its time limit has no result: its spool is
+    // finished here.
+    const x = r.killed ? spoolKilled(q.job, r.killed, r.ms) : r.result;
+    if (x.stopped) st.totals.stopped = (st.totals.stopped || 0) + 1;
     if (x.refused) st.totals.refused++;
     else {
       if (x.validity) {

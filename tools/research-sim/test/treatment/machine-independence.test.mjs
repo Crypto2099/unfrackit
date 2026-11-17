@@ -5,9 +5,9 @@
 // replays over S1, S8 and M1 run three ways: through one worker
 // that runs every job in turn; through three workers, each replaced after a
 // single job, so every job starts in a fresh worker; and the same with a
-// 1-second watchdog, which stops each stalling job (test-stall, 1.5 seconds
-// on a wallet's first intent), and any other job that runs past it, and has
-// it run again to completion.
+// two workers each replaced after three jobs. (A job that reaches the time
+// limit is stopped and recorded as stopped, which depends on the machine; it is
+// the one rule that does, and test/unit/core/replay-stop.test.mjs checks it.)
 // The three write the same records, byte for byte once the unseeded
 // selectors' (csl-ri and cml-ri, the library table's seeded column) are set aside; theirs are compared by key and count,
 // where those are fixed (the jobs, and one spend record per intent). The
@@ -24,7 +24,6 @@ import { Pool } from '../../src/replay/pool.mjs';
 import { runReplays } from '../../src/replay/run.mjs';
 import { RunOutput } from '../../src/out/records.mjs';
 import { testStage, stageText, stageLog } from '../lib/stage.mjs';
-import { loadSource } from '../../src/replay/source.mjs';
 import { DEFAULT_PINS } from '../../src/treatment/bridge.mjs';
 import { windowPlan, STUDY_ROLES, LIBRARY_TABLE } from '../../src/arms/plan.mjs';
 
@@ -32,11 +31,9 @@ const T = await treatment();
 const pins = process.env.RESEARCH_SIM_TREATMENT_PINS || DEFAULT_PINS;
 const SHAPES = ['S1', 'S8', 'M1'];
 const UNSEEDED = new Set(LIBRARY_TABLE.filter((r) => !r.seeded).map((r) => r.method));
-const STALL_MS = 1500;
-const WATCHDOG_MS = 1000;
-// One worker running every job; three, each job in a fresh worker; the same
-// with the short watchdog.
-const WAYS = [{ name: 'one', size: 1, maxJobs: 40 }, { name: 'fresh', size: 3, maxJobs: 1 }, { name: 'stopped', size: 3, maxJobs: 1, watchdogMs: WATCHDOG_MS }];
+// One worker running every job; three, each job in a fresh worker; two, each
+// replaced after three jobs.
+const WAYS = [{ name: 'one', size: 1, maxJobs: 40 }, { name: 'fresh', size: 3, maxJobs: 1 }, { name: 'pair', size: 2, maxJobs: 3 }];
 
 function withHome(fn) {
   return async () => {
@@ -97,23 +94,14 @@ function assertSame(runs, countedKinds) {
   });
 }
 
-test('replays: one worker, a fresh worker per job, and a watchdog stop write the same records', { skip, timeout: 20 * 60 * 1000 }, withHome(async () => {
+test('replays: one worker, a fresh worker per job, and two workers replaced after three jobs write the same records', { skip, timeout: 20 * 60 * 1000 }, withHome(async () => {
   const wallets = SHAPES.map((name) => ({ spec: { kind: 'shape', name, stream: 'synthetic' } }));
-  const first = wallets.map((w) => loadSource(T, w.spec).events.find((e) => e.kind === 'intent').intent.id);
-  const plan = [
-    // The study's arms, one repetition each, and the stalling test method.
-    ...windowPlan('recent', { reps: 1 }),
-    { hypothesis: 'test', arm: 'observed', variant: 'default', role: 'stall', change: 'default', repetitions: 1 }
-  ];
-  const opts = { wallets, plan, roles: { ...STUDY_ROLES, stall: 'test-stall' }, methodOptions: { 'test-stall': { stallMs: STALL_MS, only: first } }, collateralRules: ['ledger'] };
+  // The study's arms, one repetition each.
+  const plan = windowPlan('recent', { reps: 1 });
+  const opts = { wallets, plan, roles: { ...STUDY_ROLES }, collateralRules: ['ledger'] };
   const runs = [];
-  for (const way of WAYS) runs.push(await runWay(way, `machine-replay-${way.name}`, (pool, out) => runReplays(T, pool, { ...opts, out, watchdogMs: way.watchdogMs }), { wallets }));
-  // The stops, in the third way only: every stalling job's (a wallet whose
-  // first intent the arm builds), and any other job past the watchdog.
-  const stalled = [...new Set(runs[0].records.map((l) => JSON.parse(l)).filter((r) => r.kind === 'spend' && r.method === 'test-stall' && r.detail === `stalled ${STALL_MS} ms`).map((r) => r.wallet))].sort();
-  assert.ok(stalled.length > 0);
-  assert.deepEqual([runs[0].stats.watchdogStops, runs[1].stats.watchdogStops], [0, 0]);
-  assert.deepEqual([...new Set(runs[2].log.filter((e) => e.event === 'watchdog stop' && e.method === 'test-stall').map((e) => e.wallet))].sort(), stalled);
+  for (const way of WAYS) runs.push(await runWay(way, `machine-replay-${way.name}`, (pool, out) => runReplays(T, pool, { ...opts, out }), { wallets }));
+  assert.deepEqual(runs.map((r) => r.stats.watchdogStops), [0, 0, 0]);
   assert.ok(runs[1].stats.started >= runs[1].totals.jobs, 'a fresh worker per job');
   assertSame(runs, ['wallet-arm', 'spend']);
 }));
