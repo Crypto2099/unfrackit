@@ -15,7 +15,8 @@
 //
 // Process. One helper process per helper method per process that builds (a
 // pool worker, or the process that runs a replay itself), started on the
-// method's first build and stopped with that process: on its exit, and, when
+// method's first build (in a replay, the warm-up build of replay/warmup.mjs),
+// and stopped with that process: on its exit, and, when
 // the process is killed, by the end of input the helper then reads, on which
 // every helper exits. Requests and responses are one JSON object per line on
 // the helper's stdin and stdout, one request at a time; its stderr goes to

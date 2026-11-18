@@ -63,7 +63,9 @@ class Spooler {
 // timing row beyond the records), where otherwise the files are written a
 // mebibyte at a time; the bytes are the same. close() returns what the
 // commit reads: the paths, the record count, the counts by kind, and the
-// held row ({ n, kind, key, times }) or null.
+// held row ({ n, kind, key, times }) or null. add(rec, extra): extra, an
+// object of times kept beside the record (the warm-up's, replay/warmup.mjs),
+// is added to the record's timing row and changes no record line.
 export class SpoolStream {
   constructor(paths, { hold = () => false, eager = false, resume = null } = {}) {
     this.paths = paths;
@@ -82,9 +84,11 @@ export class SpoolStream {
     this.held = null;
     this.closed = false;
   }
-  add(rec) {
+  add(rec, extra = null) {
     if (this.held) throw new Error('only the last record of a job may hold its timing row');
-    const { line, times } = prepare(rec);
+    const prepared = prepare(rec);
+    const { line } = prepared;
+    const times = extra ? { ...prepared.times, ...extra } : prepared.times;
     const n = ++this.count;
     this.counts[rec.kind] = (this.counts[rec.kind] || 0) + 1;
     const timed = Object.keys(times).length > 0;

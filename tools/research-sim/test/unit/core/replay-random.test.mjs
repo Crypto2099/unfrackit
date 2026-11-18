@@ -14,8 +14,13 @@ import { replay, jobOptions } from '../../../src/replay/engine.mjs';
 import { loadSource } from '../../../src/replay/source.mjs';
 import { makeMethod } from '../../../src/methods/registry.mjs';
 import { makeRng } from '../../../src/shapes/rng.mjs';
+import { setWarmUp } from '../../../src/replay/warmup.mjs';
 
 const T = await treatment();
+// These tests count a method's builds and compare its draws with the job's
+// stream; the warm-up's throwaway build (replay/warmup.mjs) is another build
+// of the method with a generator of its own, tested in warmup.test.mjs.
+setWarmUp(false);
 
 // The test method, drawing 1, 2 or 3 values at each build in turn and
 // recording them with the intent it builds.

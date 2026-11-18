@@ -243,10 +243,11 @@ async function inThread(wallets, plan, roles, collateralRules) {
 }
 
 // Timing rows with every time set to 0: the rows, numbers, kinds, keys and
-// time paths compared, not the times.
+// time paths compared, not the times. The warm-up's time (warmUpMs) is left
+// out: which spends carry it depends on the process that ran the job.
 const timeless = (text) => text.split('\n').filter(Boolean).map((l) => {
   const r = JSON.parse(l);
-  return JSON.stringify({ ...r, times: Object.fromEntries(Object.keys(r.times).map((p) => [p, 0])) });
+  return JSON.stringify({ ...r, times: Object.fromEntries(Object.keys(r.times).filter((p) => p !== 'warmUpMs').map((p) => [p, 0])) });
 });
 
 test('runReplays through two workers writes the records of every job replayed in one thread in job order', { skip, timeout: 5 * 60 * 1000 }, withHome(async () => {

@@ -119,6 +119,7 @@ import { decode, raw } from '../history/cbor.mjs';
 import { settle } from '../kit/heap.mjs';
 import { makeRng } from '../shapes/rng.mjs';
 import { passMachineErrors } from '../kit/machine.mjs';
+import { warmedOnce } from './warmup.mjs';
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0n);
 
@@ -245,9 +246,11 @@ export function jobOptions(opts) {
 // kit/validity.mjs on every transaction the kit passes, and the summary's
 // validity field. Three optional fields serve a worker under a time limit
 // (pre-registration, "Run logistics after the cost probes"): onSpend(rec,
-// checks), told each spend record as it is made, with the validity summary of
-// the checks made for that spend (null with validity off or when none was
-// built); onBuild(on), told when a method's build starts (true) and ends
+// checks, times), told each spend record as it is made, with the validity
+// summary of the checks made for that spend (null with validity off or when
+// none was built) and the times kept beside the record's own (null, or
+// { warmUpMs } with the first spend that has a time after a warm-up build,
+// replay/warmup.mjs, which also reaches onBuild like a build); onBuild(on), told when a method's build starts (true) and ends
 // (false); stopAt, a time on performance.now() at or after which the replay
 // stops before its next intent: it returns what it has, with `stopped` set to
 // { spends, last } (the spend records made and the last one's intent and t, or
@@ -263,9 +266,18 @@ export async function replay(T, params, source, job) {
   // A spend's record: kept, and handed to job.onSpend as it is made, so that a
   // caller can write it before the job ends.
   // checks: the validity summary of the checks made for this spend, or null.
+  // A warm-up the process made before a build (replay/warmup.mjs) has its
+  // time beside the first spend record that carries a time of its own, as a
+  // third argument to onSpend ({ warmUpMs }), never in a record.
+  const warm = { ms: null };
   const spend = (rec, checks = null) => {
     out.spends.push(rec);
-    if (job.onSpend) job.onSpend(rec, checks);
+    let times = null;
+    if (warm.ms !== null && typeof rec.ms === 'number') {
+      times = { warmUpMs: warm.ms };
+      warm.ms = null;
+    }
+    if (job.onSpend) job.onSpend(rec, checks, times);
   };
   const gap = changeAddressGap(source);
   if (gap) {
@@ -366,7 +378,7 @@ export async function replay(T, params, source, job) {
 
     if (intent.burst && intent.burst.parallel && !passed.has(intent.burst.id)) {
       passed.add(intent.burst.id);
-      out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts, validity ? { acc: validity, at: `burst ${intent.burst.id}` } : null, job.onBuild)) });
+      out.bursts.push({ id: intent.burst.id, t: rel(intent.time.blockTime), ...(await burstPass(T, params, state, bursts.get(intent.burst.id), method, opts, validity ? { acc: validity, at: `burst ${intent.burst.id}` } : null, job.onBuild, warm)) });
     }
 
     if (intent.invalid) {
@@ -406,7 +418,7 @@ export async function replay(T, params, source, job) {
     // This spend's checks in an accumulator of their own, then added to the
     // run's and to the spends'.
     const sv = validity ? newValidity(T.CSL) : null;
-    const r = await buildOne(T, params, state, intent, method, opts, aside, sv ? { acc: sv, at: `spend ${n}` } : null, job.onBuild);
+    const r = await buildOne(T, params, state, intent, method, opts, aside, sv ? { acc: sv, at: `spend ${n}` } : null, job.onBuild, warm);
     if (sv) {
       mergeValidity(validity, sv);
       mergeValidity(spendValidity, sv);
@@ -511,7 +523,11 @@ const unpricedText = (r, dropped) => {
 // One intent by the method from the pool the set-aside leaves (setAside, or
 // the whole pool for a library that chooses its own collateral), checked by
 // the kit against the whole state and applied.
-async function buildOne(T, params, state, intent, method, opts, aside, validity = null, onBuild = null) {
+async function buildOne(T, params, state, intent, method, opts, aside, validity = null, onBuild = null, warm = null) {
+  // The method's first build in this process is preceded by one throwaway
+  // build (replay/warmup.mjs), outside the timed span below.
+  const w = await warmedOnce(method, params, opts, { time: intent.time, onBuild });
+  if (w && warm) warm.ms = w.ms;
   const t0 = performance.now();
   let r;
   if (onBuild) onBuild(true);
@@ -564,7 +580,7 @@ async function buildOne(T, params, state, intent, method, opts, aside, validity 
 // state at the burst's start, each later one without the outputs of the
 // earlier ones (their wallet inputs are gone, their outputs never arrive),
 // each at the change address the source names at it.
-async function burstPass(T, params, start, events, method, opts, validity = null, onBuild = null) {
+async function burstPass(T, params, start, events, method, opts, validity = null, onBuild = null, warm = null) {
   let s = start;
   let built = 0;
   for (const { intent: given, changeAddress } of events) {
@@ -580,7 +596,7 @@ async function burstPass(T, params, start, events, method, opts, validity = null
     if (!replaySuffices(T, s, params, intent).suffices) break;
     const aside = collateralFor(T, params, s, intent, opts.collateralRule, method);
     if (!aside.ok) break;
-    const r = await buildOne(T, params, s, intent, method, opts, aside, validity && { ...validity, at: `${validity.at} step ${built}` }, onBuild);
+    const r = await buildOne(T, params, s, intent, method, opts, aside, validity && { ...validity, at: `${validity.at} step ${built}` }, onBuild, warm);
     if (!r.ok) break;
     const heldIns = fixedInputValues(intent).filter((x) => x.held && s.utxos.has(x.ref)).map((x) => x.ref);
     s = removeSpent(s, [...r.txs.flatMap((t) => t.walletInputs), ...heldIns]);

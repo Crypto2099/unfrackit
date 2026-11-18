@@ -128,9 +128,9 @@ export async function runJob(T, source, job, method, { stopAt, received, attempt
   const stream = new SpoolStream(job.spool, { hold: (rec) => rec.kind === 'wallet-arm', eager: true });
   const vfd = job.validity ? openSync(job.spool.validity, 'w', 0o600) : null;
   try {
-    const onSpend = (spend, checks) => {
+    const onSpend = (spend, checks, times = null) => {
       if (vfd !== null) writeSync(vfd, `${JSON.stringify(checks)}\n`);
-      stream.add(record('spend', job.key, spend));
+      stream.add(record('spend', job.key, spend), times);
     };
     const x = await replayFn(T, source.params, source, { ...job, method, ...(stopAt !== undefined ? { stopAt } : {}), onBuild, onSpend });
     x.method = { name: method.name, version: method.version, deterministic: method.deterministic };
