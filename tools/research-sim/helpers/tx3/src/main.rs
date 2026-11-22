@@ -272,7 +272,18 @@ fn main() {
     }
 }
 
+// answer times a build or witness request with the monotonic clock and puts
+// the milliseconds on its response, whether it succeeded or failed.
 fn answer(session: &mut Session, q: &Request) -> Value {
+    let start = std::time::Instant::now();
+    let mut r = answer_request(session, q);
+    if q.schema == SCHEMA && (q.op == "build" || q.op == "witness") {
+        r["ms"] = json!(start.elapsed().as_nanos() as f64 / 1e6);
+    }
+    r
+}
+
+fn answer_request(session: &mut Session, q: &Request) -> Value {
     if q.schema != SCHEMA {
         return json!({ "ok": false, "error": format!("schema {}, the helper's {}", q.schema, SCHEMA) });
     }

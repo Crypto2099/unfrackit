@@ -39,6 +39,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	apollo "github.com/Salvionied/apollo/v2"
 	"github.com/Salvionied/apollo/v2/backend"
@@ -115,6 +116,9 @@ type response struct {
 	Stage         string   `json:"stage,omitempty"`
 	NotReplayable string   `json:"notReplayable,omitempty"`
 	Unpriced      []string `json:"unpriced,omitempty"`
+	// Ms is the helper's own time for a build or witness request, in
+	// milliseconds, from the parsed request to the complete response.
+	Ms *float64 `json:"ms,omitempty"`
 }
 
 // notReplayable is a part the library has no operation for.
@@ -163,7 +167,19 @@ func main() {
 	}
 }
 
+// answer times a build or witness request with the monotonic clock and puts
+// the milliseconds on its response, whether it succeeded or failed.
 func answer(q *request) response {
+	start := time.Now()
+	r := answerRequest(q)
+	if q.Schema == schema && (q.Op == "build" || q.Op == "witness") {
+		ms := float64(time.Since(start).Nanoseconds()) / 1e6
+		r.Ms = &ms
+	}
+	return r
+}
+
+func answerRequest(q *request) response {
 	if q.Schema != schema {
 		return response{Ok: false, Error: fmt.Sprintf("schema %d, the helper's %d", q.Schema, schema)}
 	}

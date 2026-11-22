@@ -95,13 +95,18 @@
 //       returns the transaction, with unpriced ['observed vkey witnesses']
 //       when they outnumber the witnesses its library's fee priced.
 //   response
-//     { id, ok: true, tx (hex), unpriced? [names] }
+//     { id, ok: true, tx (hex), unpriced? [names], ms? }
 //       unpriced: the parts the helper wrote on the transaction after its
 //       library priced it (the engine names them in a failed check's detail)
 //     { id, ok: false, error (the library's error text), stage?,
 //       notReplayable? (the part the library has no way to express),
 //       class? (a failure class of kit/check.mjs, when the helper's adapter
-//       has classified the error itself) }
+//       has classified the error itself), ms? }
+//       ms, on every response to a build or witness request (success or
+//       failure): the helper's own time for it in milliseconds, a number read
+//       from the monotonic clock from the parsed request to the complete
+//       response, before it is serialized. Optional, so schema 1 stands; the
+//       method passes it on as `helper: { buildMs, witnessMs }` on its result.
 //       stage names where the build failed ('requested output', 'replay
 //       parts', or the library's call) and starts the failure's detail; an
 //       unclassified error is classified by the method's own table.
@@ -354,6 +359,10 @@ export function spendTime(state, intent) {
   return { slot: known(t.slot) ? t.slot : known(at.slot) ? at.slot : null, time: known(t.blockTime) ? t.blockTime : known(at.time) ? at.time : null };
 }
 
+// A helper's own time for a request, in milliseconds, from its response, or
+// null when the response carries none.
+const ownMs = (r) => (r && typeof r.ms === 'number' && Number.isFinite(r.ms) && r.ms >= 0 ? r.ms : null);
+
 // The build request of one spend (schema 1).
 export function buildRequest(proc, { library, state, intent, params, opts, pool, collateral, seeded }) {
   const utxos = pool.map((u) => {
@@ -399,88 +408,102 @@ export function buildRequest(proc, { library, state, intent, params, opts, pool,
 //               cannot be given one (contract.mjs OWN_COLLATERAL_METHODS): the
 //               engine sets nothing aside and the helper is sent none
 export function helperMethod(T, { name, version, deterministic, seeded, library, coverage, classify, process: spec, refused, ownCollateral = false }) {
+  // The build of one spend. `timing` collects the helper's own time as its
+  // responses report it (their `ms`), for the wrapper below.
+  const buildTimed = async (state, intent, params, opts, timing) => {
+    refuseUncovered(name, coverage, intent);
+    const layout = opts.changePolicy === 'layout';
+    if (opts.changePolicy !== 'default' && !layout) return { ok: false, class: CLASSES.other, detail: refused };
+    const replay = intent.source === 'replay';
+    if (replay) {
+      const kit = replayRefusal(intent);
+      if (kit) return { ok: false, class: NOT_REPLAYABLE, detail: kit };
+    }
+    const f = replay ? intent.fixed : null;
+    const collateral = opts.collateral || null;
+    if (intent.collateral && intent.collateral.required && !collateral && !ownCollateral) throw new Error(`${name}: a script spend needs the collateral the engine sets aside`);
+    const fixedRefs = new Set(f ? f.inputs.map((x) => x.ref) : []);
+    const pool = inputOrder(state).filter((u) => !fixedRefs.has(u.ref));
+    const proc = helperProcess(spec);
+    const r = await proc.request(buildRequest(proc, { library, state, intent, params, opts, pool, collateral, seeded: seeded && !deterministic }));
+    timing.answered = true;
+    timing.buildMs = ownMs(r);
+    // The collateral a library that chooses its own wrote: its inputs, total
+    // and return, which the layout change keeps as the library wrote them
+    // (as methods/lucid.mjs layoutOnLibraryInputs does).
+    // A collateral that is one of the intent's fixed inputs is taken with
+    // the output the intent holds (library.mjs libraryCollateral); a
+    // refusal of it comes back as { failure }.
+    const ownCollateralOf = (t) => {
+      const c = libraryCollateral(state, intent, t.collateralInputs.map((x) => x.ref), name);
+      if (!c.ok) return { failure: { ok: false, class: c.class, detail: c.detail } };
+      return { utxos: c.utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
+    };
+    const layoutOn = (walletRefs, t = null) => {
+      let change = { collateral };
+      if (ownCollateral) {
+        const own = t ? ownCollateralOf(t) : { utxos: [] };
+        if (own.failure) return own.failure;
+        if (own.utxos.length) change = { collateralFor: () => ({ ok: true, collateral: own }) };
+        else if (intent.collateral && intent.collateral.required) change = { collateralFor: () => null };
+        else change = {};
+      }
+      const c = buildWithChange(T, { state, params, inputs: recordsOf(state, walletRefs), intent, policy: 'layout', ...change });
+      if (!c.ok) return { ok: false, class: c.class, detail: `layout change on the library's inputs: ${c.detail}` };
+      return { ok: true, kind: 'single', txs: [txRecord(c.bytes, walletRefs, c.fee, c.size, c.k)] };
+    };
+    if (!r.ok && layout && Array.isArray(r.inputs)) return layoutOn(r.inputs);
+    if (!r.ok) {
+      const text = typeof r.error === 'string' ? r.error : String(r.error);
+      const detail = r.stage ? `${r.stage}: ${text}` : text;
+      if (r.notReplayable) return { ok: false, class: NOT_REPLAYABLE, detail: `${r.notReplayable}: ${text}` };
+      if (r.class !== undefined && r.class !== null) {
+        if (!RESULT_CLASSES.has(r.class)) throw proc.error(`answered with an unknown failure class ${r.class}`);
+        return { ok: false, class: r.class, detail };
+      }
+      return { ok: false, class: classify(text), detail };
+    }
+    if (typeof r.tx !== 'string' || !/^[0-9a-f]+$/.test(r.tx)) throw proc.error('answered a build without transaction bytes');
+    const built = inspectTx(r.tx);
+    const refs = built.inputs.map((i) => i.ref);
+    for (const x of fixedRefs) if (!refs.includes(x)) return { ok: false, class: CLASSES.other, detail: `the library left out the fixed input ${x}` };
+    const walletRefs = refs.filter((x) => !fixedRefs.has(x));
+    if (layout) return layoutOn(walletRefs, built);
+    const inputs = recordsOf(state, walletRefs);
+    // The vkey witnesses: the wallet's keys, synthetic, then the intent's
+    // other vkey witnesses as observed, written by the helper.
+    const own = ownCollateral ? ownCollateralOf(built) : null;
+    if (own && own.failure) return own.failure;
+    const keys = replayWitnessKeys(f, { inputs, collateral: own ? own.utxos : collateral ? [collateral] : [] });
+    const others = f && f.witnesses[0] !== undefined ? listItems(f.witnesses[0]) : [];
+    const vkeys = [...syntheticVkeys(T, keys.size), ...others].map((b) => Buffer.from(b).toString('hex'));
+    const w = await proc.request({ op: 'witness', vkeys, observed: others.length });
+    timing.witnessMs = ownMs(w);
+    if (!w.ok || typeof w.tx !== 'string' || !/^[0-9a-f]+$/.test(w.tx)) throw proc.error(`did not write the witnesses: ${w.ok ? 'no transaction bytes' : w.error}`);
+    const tx = inspectTx(w.tx);
+    const unpriced = [...(Array.isArray(r.unpriced) ? r.unpriced : []), ...(Array.isArray(w.unpriced) ? w.unpriced : [])];
+    return {
+      ok: true,
+      kind: 'single',
+      txs: [txRecord(w.tx, walletRefs, tx.fee, tx.size, keys.size)],
+      library: { fee: tx.fee, finalMinFee: minFee(params, tx.size, f ? f.scriptFee : 0n), unpriced }
+    };
+  };
+
   return {
     name,
     version,
     deterministic,
     seeded,
     ...(ownCollateral ? { ownCollateral: true } : {}),
+    // Every result returned after the helper answered carries `helper:
+    // { buildMs, witnessMs }`: the helper's own time for the build request and
+    // for the witness request (null when none was made), in milliseconds.
+    // Nothing in the engine reads it.
     async build(state, intent, params, opts) {
-      refuseUncovered(name, coverage, intent);
-      const layout = opts.changePolicy === 'layout';
-      if (opts.changePolicy !== 'default' && !layout) return { ok: false, class: CLASSES.other, detail: refused };
-      const replay = intent.source === 'replay';
-      if (replay) {
-        const kit = replayRefusal(intent);
-        if (kit) return { ok: false, class: NOT_REPLAYABLE, detail: kit };
-      }
-      const f = replay ? intent.fixed : null;
-      const collateral = opts.collateral || null;
-      if (intent.collateral && intent.collateral.required && !collateral && !ownCollateral) throw new Error(`${name}: a script spend needs the collateral the engine sets aside`);
-      const fixedRefs = new Set(f ? f.inputs.map((x) => x.ref) : []);
-      const pool = inputOrder(state).filter((u) => !fixedRefs.has(u.ref));
-      const proc = helperProcess(spec);
-      const r = await proc.request(buildRequest(proc, { library, state, intent, params, opts, pool, collateral, seeded: seeded && !deterministic }));
-      // The collateral a library that chooses its own wrote: its inputs, total
-      // and return, which the layout change keeps as the library wrote them
-      // (as methods/lucid.mjs layoutOnLibraryInputs does).
-      // A collateral that is one of the intent's fixed inputs is taken with
-      // the output the intent holds (library.mjs libraryCollateral); a
-      // refusal of it comes back as { failure }.
-      const ownCollateralOf = (t) => {
-        const c = libraryCollateral(state, intent, t.collateralInputs.map((x) => x.ref), name);
-        if (!c.ok) return { failure: { ok: false, class: c.class, detail: c.detail } };
-        return { utxos: c.utxos, total: t.totalCollateral, returnBytes: t.collateralReturn ? t.collateralReturn.raw : null };
-      };
-      const layoutOn = (walletRefs, t = null) => {
-        let change = { collateral };
-        if (ownCollateral) {
-          const own = t ? ownCollateralOf(t) : { utxos: [] };
-          if (own.failure) return own.failure;
-          if (own.utxos.length) change = { collateralFor: () => ({ ok: true, collateral: own }) };
-          else if (intent.collateral && intent.collateral.required) change = { collateralFor: () => null };
-          else change = {};
-        }
-        const c = buildWithChange(T, { state, params, inputs: recordsOf(state, walletRefs), intent, policy: 'layout', ...change });
-        if (!c.ok) return { ok: false, class: c.class, detail: `layout change on the library's inputs: ${c.detail}` };
-        return { ok: true, kind: 'single', txs: [txRecord(c.bytes, walletRefs, c.fee, c.size, c.k)] };
-      };
-      if (!r.ok && layout && Array.isArray(r.inputs)) return layoutOn(r.inputs);
-      if (!r.ok) {
-        const text = typeof r.error === 'string' ? r.error : String(r.error);
-        const detail = r.stage ? `${r.stage}: ${text}` : text;
-        if (r.notReplayable) return { ok: false, class: NOT_REPLAYABLE, detail: `${r.notReplayable}: ${text}` };
-        if (r.class !== undefined && r.class !== null) {
-          if (!RESULT_CLASSES.has(r.class)) throw proc.error(`answered with an unknown failure class ${r.class}`);
-          return { ok: false, class: r.class, detail };
-        }
-        return { ok: false, class: classify(text), detail };
-      }
-      if (typeof r.tx !== 'string' || !/^[0-9a-f]+$/.test(r.tx)) throw proc.error('answered a build without transaction bytes');
-      const built = inspectTx(r.tx);
-      const refs = built.inputs.map((i) => i.ref);
-      for (const x of fixedRefs) if (!refs.includes(x)) return { ok: false, class: CLASSES.other, detail: `the library left out the fixed input ${x}` };
-      const walletRefs = refs.filter((x) => !fixedRefs.has(x));
-      if (layout) return layoutOn(walletRefs, built);
-      const inputs = recordsOf(state, walletRefs);
-      // The vkey witnesses: the wallet's keys, synthetic, then the intent's
-      // other vkey witnesses as observed, written by the helper.
-      const own = ownCollateral ? ownCollateralOf(built) : null;
-      if (own && own.failure) return own.failure;
-      const keys = replayWitnessKeys(f, { inputs, collateral: own ? own.utxos : collateral ? [collateral] : [] });
-      const others = f && f.witnesses[0] !== undefined ? listItems(f.witnesses[0]) : [];
-      const vkeys = [...syntheticVkeys(T, keys.size), ...others].map((b) => Buffer.from(b).toString('hex'));
-      const w = await proc.request({ op: 'witness', vkeys, observed: others.length });
-      if (!w.ok || typeof w.tx !== 'string' || !/^[0-9a-f]+$/.test(w.tx)) throw proc.error(`did not write the witnesses: ${w.ok ? 'no transaction bytes' : w.error}`);
-      const tx = inspectTx(w.tx);
-      const unpriced = [...(Array.isArray(r.unpriced) ? r.unpriced : []), ...(Array.isArray(w.unpriced) ? w.unpriced : [])];
-      return {
-        ok: true,
-        kind: 'single',
-        txs: [txRecord(w.tx, walletRefs, tx.fee, tx.size, keys.size)],
-        library: { fee: tx.fee, finalMinFee: minFee(params, tx.size, f ? f.scriptFee : 0n), unpriced }
-      };
+      const timing = { answered: false, buildMs: null, witnessMs: null };
+      const res = await buildTimed(state, intent, params, opts, timing);
+      return timing.answered ? { ...res, helper: { buildMs: timing.buildMs, witnessMs: timing.witnessMs } } : res;
     }
   };
 }
-

@@ -79,6 +79,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
+import GHC.Clock (getMonotonicTimeNSec)
 import Lens.Micro ((&), (.~), (^.))
 import qualified Ouroboros.Consensus.HardFork.History as History
 import System.Exit (ExitCode (..), exitWith)
@@ -936,8 +937,28 @@ failureJson = \case
   Stage s e -> ["stage" .= s, "error" .= e]
   Classified c s e -> ["class" .= c, "stage" .= s, "error" .= e]
 
+-- | Times a build or witness request with the monotonic clock and puts the
+-- milliseconds on its response, whether it succeeded or failed: from the
+-- parsed request to the complete response, read after the existing 'evaluate'
+-- has forced the transaction text.
 answer :: State -> Request -> IO A.Value
 answer st q = do
+  t0 <- getMonotonicTimeNSec
+  r <- answerRequest st q
+  _ <- evaluate r
+  t1 <- getMonotonicTimeNSec
+  let timed = case (qSchema q, qOp q) of
+        (Just s, _) | s /= helperSchema -> False
+        (_, Just "build") -> True
+        (_, Just "witness") -> True
+        _ -> False
+      ms = fromIntegral (t1 - t0) / 1e6 :: Double
+  pure $ case r of
+    A.Object o | timed -> A.Object (AKM.insert (AK.fromText "ms") (A.toJSON ms) o)
+    _ -> r
+
+answerRequest :: State -> Request -> IO A.Value
+answerRequest st q = do
   let respond kvs = object (("id" .= qId q) : kvs)
   case (qSchema q, qOp q) of
     (Just s, _) | s /= helperSchema -> pure (respond ["ok" .= False, "error" .= ("schema " <> show s <> ", the helper's " <> show helperSchema)])

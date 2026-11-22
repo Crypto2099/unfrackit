@@ -216,6 +216,7 @@ import Data.Aeson
     , eitherDecodeStrict
     , encode
     , object
+    , toJSON
     , (.:)
     , (.:?)
     , (.=)
@@ -255,6 +256,9 @@ import Data.Text
 import Data.Time.Clock.POSIX
     ( posixSecondsToUTCTime
     )
+import GHC.Clock
+    ( getMonotonicTimeNSec
+    )
 import Data.Word
     ( Word64
     , Word8
@@ -284,6 +288,7 @@ import System.Random
     )
 
 import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base16 as B16
 import qualified Data.ByteString.Char8 as B8
@@ -349,8 +354,28 @@ main = do
                 loop
     loop
 
+-- | Times a build or witness request with the monotonic clock and puts the
+-- milliseconds on its response, whether it succeeded or failed: from the
+-- parsed request to the complete response, read after the transaction text
+-- has been forced.
 answer :: St -> Object -> IO Value
 answer st q = do
+    t0 <- getMonotonicTimeNSec
+    r <- answerRequest st q
+    _ <- evaluate r
+    t1 <- getMonotonicTimeNSec
+    let timed = case (parseEither (.:? "schema") q, parseEither (.:? "op") q) of
+            (Right (Just (s :: Int)), _) | s /= helperSchema -> False
+            (_, Right (Just ("build" :: Text))) -> True
+            (_, Right (Just "witness")) -> True
+            _ -> False
+        ms = fromIntegral (t1 - t0) / 1e6 :: Double
+    pure $ case r of
+        Object o | timed -> Object (KM.insert (Key.fromText "ms") (toJSON ms) o)
+        _ -> r
+
+answerRequest :: St -> Object -> IO Value
+answerRequest st q = do
     let field :: (Object -> Parser a) -> Either String a
         field p = parseEither p q
         reqId = either (const Null) id (field (.: "id"))

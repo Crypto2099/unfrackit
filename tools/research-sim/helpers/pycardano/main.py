@@ -36,6 +36,7 @@ import json
 import logging
 import random
 import sys
+import time
 import typing
 from fractions import Fraction
 
@@ -557,6 +558,17 @@ def witness(q):
 
 
 def answer(q):
+    # The helper's own time for a build or witness request, in milliseconds,
+    # from the parsed request to the complete response (perf_counter_ns is
+    # monotonic).
+    start = time.perf_counter_ns()
+    r = answer_request(q)
+    if q.get("schema") == SCHEMA and q.get("op") in ("build", "witness"):
+        r["ms"] = (time.perf_counter_ns() - start) / 1e6
+    return r
+
+
+def answer_request(q):
     if q.get("schema") != SCHEMA:
         return {"ok": False, "error": f"schema {q.get('schema')}, the helper's {SCHEMA}"}
     op = q.get("op")

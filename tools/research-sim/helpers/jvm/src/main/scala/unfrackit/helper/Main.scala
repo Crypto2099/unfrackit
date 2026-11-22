@@ -126,7 +126,18 @@ object Main:
     r.put("error", error)
     r
 
+  // Times a build or witness request with the monotonic clock and puts the
+  // milliseconds on its response, whether it succeeded or failed: from the
+  // parsed request to the complete response object.
   def answer(q: JsonNode): ObjectNode =
+    val start = System.nanoTime
+    val r = answerRequest(q)
+    val op = q.path("op").asText
+    if q.path("schema").asInt == Schema && (op == "build" || op == "witness") then
+      r.put("ms", (System.nanoTime - start) / 1e6)
+    r
+
+  def answerRequest(q: JsonNode): ObjectNode =
     if q.path("schema").asInt != Schema then return failure(s"schema ${q.path("schema").asInt}, the helper's $Schema")
     q.path("op").asText match
       case "build" =>
