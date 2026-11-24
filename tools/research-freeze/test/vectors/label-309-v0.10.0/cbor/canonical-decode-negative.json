@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "primitive": "canonical-cbor-decode-negative",
+  "source": "RFC 8949 §8 + Label 309 validator catalogue",
+  "vectors": [
+    {
+      "name": "indefinite-array",
+      "cbor_hex": "9f010203ff",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "indefinite-map",
+      "cbor_hex": "bf616101616202ff",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "indefinite-bytestring",
+      "cbor_hex": "5f420102420304ff",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "indefinite-textstring",
+      "cbor_hex": "7f626869626f6fff",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "duplicate-keys-text",
+      "cbor_hex": "a2616101616102",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "duplicate-keys-uint",
+      "cbor_hex": "a201010102",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "duplicate-keys-bytes",
+      "cbor_hex": "a241ab0141ab02",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "unsorted-distinct-keys-text",
+      "cbor_hex": "a2616201616102",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "unsorted-distinct-keys-uint",
+      "cbor_hex": "a202010102",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "truncated-uint",
+      "cbor_hex": "1a000f",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "truncated-array",
+      "cbor_hex": "8301",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "float16-integral-value-1.0",
+      "cbor_hex": "f93c00",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "float32-integral-value-1.0",
+      "cbor_hex": "fa3f800000",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "float64-integral-value-1.0",
+      "cbor_hex": "fb3ff0000000000000",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "map-with-float-encoded-integer-value",
+      "cbor_hex": "a16176f93c00",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "negative-zero-float16",
+      "cbor_hex": "f98000",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "undefined-simple-value",
+      "cbor_hex": "f7",
+      "expected_error_code": "MALFORMED_CBOR"
+    },
+    {
+      "name": "unassigned-simple-value-0",
+      "cbor_hex": "e0",
+      "expected_error_code": "MALFORMED_CBOR"
+    }
+  ]
+}

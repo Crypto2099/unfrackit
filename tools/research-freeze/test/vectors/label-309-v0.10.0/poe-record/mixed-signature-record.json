@@ -1,0 +1,55 @@
+{
+  "name": "mixed-signature-record",
+  "source": "project-authored \u2014 mixed path-1 / path-2 signature list, both orderings",
+  "description": "One record body signed twice: a path-1 entry ({cose_sign1} only, 32-byte protected-header kid) and a path-2 CIP-30 wallet entry ({cose_sign1, cose_key}, protected-header address = mainnet header byte 0xe1 || Blake2b-224(pubkey)). Pinned in both orderings to exercise per-entry shape independence and signing-path discrimination. Both records MUST validate and both signatures MUST verify under either ordering; the containing transaction is taken as mainnet for the wallet-address binding.",
+  "cardano_network": "mainnet",
+  "record_body_cbor_hex": "a2617601656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+  "path1_signer_secret_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "path1_signer_public_key_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+  "path1_cose_sign1_hex": "845826a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737a0f65840c2b1a45fbbe837991fd3146053a0f0f38251d810cdd2728989f22806b7072659300f5b8a923e773e873e3fb75dc52cf000478159a8bb75f6f2726f4078c1090c",
+  "path2_signer_secret_key_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "path2_signer_public_key_hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+  "path2_stake_address_hex": "e1e8a8dd8db193fb3f0c2c1df5cb94620cd86be43e4e05539fc678b1b5",
+  "path2_cose_sign1_hex": "84582aa201276761646472657373581de1e8a8dd8db193fb3f0c2c1df5cb94620cd86be43e4e05539fc678b1b5a0f658404e87fa2f570272a1354165e24a9310039d0b18f45d16edbf0d69772475fb15b3c7e610e64b303e9321e6ed36b10571b08bea65aa131eb7586d64b4d47cbd8004",
+  "path2_cose_key_hex": "a4010103272006215820a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+  "vectors": [
+    {
+      "name": "kid-entry-first",
+      "cbor_hex": "a3617601647369677382a16a636f73655f7369676e31586d845826a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737a0f65840c2b1a45fbbe837991fd3146053a0f0f38251d810cdd2728989f22806b7072659300f5b8a923e773e873e3fb75dc52cf000478159a8bb75f6f2726f4078c1090ca268636f73655f6b6579582aa4010103272006215820a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f06a636f73655f7369676e31587184582aa201276761646472657373581de1e8a8dd8db193fb3f0c2c1df5cb94620cd86be43e4e05539fc678b1b5a0f658404e87fa2f570272a1354165e24a9310039d0b18f45d16edbf0d69772475fb15b3c7e610e64b303e9321e6ed36b10571b08bea65aa131eb7586d64b4d47cbd8004656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "expected_error_codes": [],
+      "expected_signer_verdicts": [
+        {
+          "index": 0,
+          "signer_type": "in-signature-kid",
+          "signer_pub_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+          "ok": true
+        },
+        {
+          "index": 1,
+          "signer_type": "wallet-inline-key",
+          "signer_pub_hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "name": "wallet-entry-first",
+      "cbor_hex": "a3617601647369677382a268636f73655f6b6579582aa4010103272006215820a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f06a636f73655f7369676e31587184582aa201276761646472657373581de1e8a8dd8db193fb3f0c2c1df5cb94620cd86be43e4e05539fc678b1b5a0f658404e87fa2f570272a1354165e24a9310039d0b18f45d16edbf0d69772475fb15b3c7e610e64b303e9321e6ed36b10571b08bea65aa131eb7586d64b4d47cbd8004a16a636f73655f7369676e31586d845826a20127045820d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737a0f65840c2b1a45fbbe837991fd3146053a0f0f38251d810cdd2728989f22806b7072659300f5b8a923e773e873e3fb75dc52cf000478159a8bb75f6f2726f4078c1090c656974656d7381a166686173686573a168736861322d323536582097a7881ce48f5bf457261797e06e3387a904f0ee70488d3c03090635800320ee",
+      "expected_error_codes": [],
+      "expected_signer_verdicts": [
+        {
+          "index": 0,
+          "signer_type": "wallet-inline-key",
+          "signer_pub_hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+          "ok": true
+        },
+        {
+          "index": 1,
+          "signer_type": "in-signature-kid",
+          "signer_pub_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+          "ok": true
+        }
+      ]
+    }
+  ]
+}

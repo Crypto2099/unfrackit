@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "primitive": "label309-chunk-array-negative",
+  "source": "Label 309 carriage-error taxonomy",
+  "description": "Non-conformant label-309 value shapes and their pinned dispositions. CHUNK_TOO_LARGE is emitted by the pre-validator reassembly step; every other shape here is MALFORMED_CBOR.",
+  "vectors": [
+    {
+      "name": "bare-map",
+      "label_309_value_cbor_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "The record map stored directly under label 309 (no chunk array) is rejected; the chunk-array form is required regardless of body length."
+    },
+    {
+      "name": "bare-byte-string",
+      "label_309_value_cbor_hex": "583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "A single bare byte string is not the chunk array."
+    },
+    {
+      "name": "text-string-element",
+      "label_309_value_cbor_hex": "8163616263",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "Array elements must be byte strings."
+    },
+    {
+      "name": "integer-element",
+      "label_309_value_cbor_hex": "825820a2617601656974656d7381a166686173686573a168736861322d32353658201107",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "Array elements must be byte strings."
+    },
+    {
+      "name": "nested-array-element",
+      "label_309_value_cbor_hex": "8181583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "Array elements must be byte strings."
+    },
+    {
+      "name": "indefinite-length-array",
+      "label_309_value_cbor_hex": "9f583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111ff",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "Indefinite-length encodings are rejected."
+    },
+    {
+      "name": "indefinite-length-bstr-element",
+      "label_309_value_cbor_hex": "815f4101ff",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "An indefinite-length byte-string element is rejected."
+    },
+    {
+      "name": "chunk-65-bytes",
+      "label_309_value_cbor_hex": "8158419999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "expected_error_code": "CHUNK_TOO_LARGE",
+      "note": "A 65-byte element exceeds the per-chunk 64-byte ceiling \u2014 the single carriage-level size rule. Such a value cannot appear on chain (nodes refuse it at submission), but an implementation validating caller-supplied bytes MUST still pin this rejection."
+    },
+    {
+      "name": "empty-array-empty-body",
+      "label_309_value_cbor_hex": "80",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "An empty transport array reassembles to zero bytes; the code surfaces from the canonical decode of the empty record body, not from the transport layer."
+    },
+    {
+      "name": "zero-only-chunks-empty-body",
+      "label_309_value_cbor_hex": "824040",
+      "expected_error_code": "MALFORMED_CBOR",
+      "note": "Only zero-length chunks: tolerated at the transport layer, but the reassembled empty body fails canonical decode."
+    }
+  ]
+}

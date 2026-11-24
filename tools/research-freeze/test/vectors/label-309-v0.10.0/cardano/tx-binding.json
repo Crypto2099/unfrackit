@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "primitive": "cardano-tx-integrity-binding",
+  "source": "Label 309 verifier pipeline \u2014 transaction-reference integrity binding",
+  "description": "Before reading anything out of fetched transaction bytes, a verifier MUST recompute blake2b-256 over the fetched transaction-body bytes (the transaction id, by ledger definition) against the requested hash, and blake2b-256 over the fetched auxiliary-data bytes against the verified body's auxiliary_data_hash field \u2014 both over the bytes exactly as fetched, never a re-encoding. The transaction bodies here are synthetic minimal CBOR (not ledger-valid transactions); the hashing inputs and outputs are what is pinned.",
+  "vectors": [
+    {
+      "name": "binding-ok",
+      "requested_tx_hash_hex": "1cb1a31316736ba7ed4dad3fe42198e173e86e23b2728d0d32f64b5284c34f9c",
+      "transaction_body_cbor_hex": "a400818258200000000000000000000000000000000000000000000000000000000000000000000180021a0002981007582031ba775a31a1d59e67d2bf65ba3beff46c0f0152e92b4d981d524f031580d113",
+      "auxiliary_data_cbor_hex": "d90103a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "ok": true,
+        "computed_tx_hash_hex": "1cb1a31316736ba7ed4dad3fe42198e173e86e23b2728d0d32f64b5284c34f9c",
+        "computed_auxiliary_data_hash_hex": "31ba775a31a1d59e67d2bf65ba3beff46c0f0152e92b4d981d524f031580d113",
+        "record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "note": "blake2b-256 over the transaction-body bytes exactly as fetched equals the requested transaction hash, and blake2b-256 over the auxiliary-data bytes equals the body's auxiliary_data_hash (key 7); the record body then reassembles from the label-309 chunk array."
+    },
+    {
+      "name": "requested-tx-hash-mismatch",
+      "requested_tx_hash_hex": "1cb1a31316736ba7ed4dad3fe42198e173e86e23b2728d0d32f64b5284c34f9d",
+      "transaction_body_cbor_hex": "a400818258200000000000000000000000000000000000000000000000000000000000000000000180021a0002981007582031ba775a31a1d59e67d2bf65ba3beff46c0f0152e92b4d981d524f031580d113",
+      "auxiliary_data_cbor_hex": "d90103a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "ok": false,
+        "error_code": "TX_INTEGRITY_MISMATCH"
+      },
+      "note": "The fetched body bytes hash to a different transaction id than requested; the response carries provably wrong bytes and MUST be discarded before anything is read out of it."
+    },
+    {
+      "name": "auxiliary-data-tampered",
+      "requested_tx_hash_hex": "1cb1a31316736ba7ed4dad3fe42198e173e86e23b2728d0d32f64b5284c34f9c",
+      "transaction_body_cbor_hex": "a400818258200000000000000000000000000000000000000000000000000000000000000000000180021a0002981007582031ba775a31a1d59e67d2bf65ba3beff46c0f0152e92b4d981d524f031580d113",
+      "auxiliary_data_cbor_hex": "d90103a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111110",
+      "expected": {
+        "ok": false,
+        "error_code": "TX_INTEGRITY_MISMATCH"
+      },
+      "note": "One flipped byte inside the auxiliary data fails the auxiliary_data_hash binding even though the transaction-body hash still matches."
+    },
+    {
+      "name": "auxiliary-data-hash-field-absent",
+      "requested_tx_hash_hex": "f6c9b68e51fca2ec7d856e556f88dce984d198fc8513d89cffc530e575365147",
+      "transaction_body_cbor_hex": "a300818258200000000000000000000000000000000000000000000000000000000000000000000180021a00029810",
+      "auxiliary_data_cbor_hex": "d90103a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "ok": false,
+        "error_code": "TX_INTEGRITY_MISMATCH"
+      },
+      "note": "A response whose verified body carries no auxiliary_data_hash while auxiliary data is present fails the same binding: such a transaction cannot exist on chain."
+    },
+    {
+      "name": "bound-transaction-without-label-309",
+      "requested_tx_hash_hex": "a5c4e298559f2169c0b733b3a40cd5180a6f7708e761262d2c3a0e21763b1807",
+      "transaction_body_cbor_hex": "a400818258200000000000000000000000000000000000000000000000000000000000000000000180021a0002981007582070c69d21232fcf791bfd940d2b1cca35b63a3a9e2b0f0c9c10a96f3881a5c7b6",
+      "auxiliary_data_cbor_hex": "a11902a2a1636d7367816568656c6c6f",
+      "expected": {
+        "ok": false,
+        "error_code": "METADATA_NOT_FOUND"
+      },
+      "note": "Both bindings hold, but the integrity-bound transaction carries no metadata under label 309 \u2014 a record-attributable outcome proven by the transaction itself."
+    }
+  ]
+}

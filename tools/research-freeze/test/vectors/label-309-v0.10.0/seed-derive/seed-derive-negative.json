@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "primitive": "seed-derive-negative",
+  "source": "seed length validation negative cases",
+  "vectors": [
+    {
+      "name": "length-zero",
+      "seed_hex": "",
+      "expected_error_code": "INVALID_SEED_LENGTH"
+    },
+    {
+      "name": "length-16",
+      "seed_hex": "00000000000000000000000000000000",
+      "expected_error_code": "INVALID_SEED_LENGTH"
+    },
+    {
+      "name": "length-31",
+      "seed_hex": "00000000000000000000000000000000000000000000000000000000000000",
+      "expected_error_code": "INVALID_SEED_LENGTH"
+    },
+    {
+      "name": "length-33",
+      "seed_hex": "000000000000000000000000000000000000000000000000000000000000000000",
+      "expected_error_code": "INVALID_SEED_LENGTH"
+    },
+    {
+      "name": "length-64",
+      "seed_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected_error_code": "INVALID_SEED_LENGTH"
+    },
+    {
+      "name": "length-128",
+      "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "expected_error_code": "INVALID_SEED_LENGTH"
+    }
+  ]
+}

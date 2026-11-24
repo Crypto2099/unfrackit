@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "primitive": "auxiliary-data-envelope-forms",
+  "source": "Conway-era auxiliary-data encodings (cardano-ledger CDDL)",
+  "description": "Unwrapping fetched auxiliary-data bytes down to the label-309 value. All three Conway envelope forms MUST be accepted, dispatching purely on the top-level CBOR type and tag \u2014 never on map-key inspection. The three positive forms carry the same chunk array and reassemble to the same record body. METADATA_NOT_FOUND is the verifier-layer outcome for well-formed auxiliary data with no label-309 entry; it is record-attributable because the bytes are hash-bound to the requested transaction before unwrapping.",
+  "vectors": [
+    {
+      "name": "metadata-map",
+      "auxiliary_data_cbor_hex": "a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "label_309_value_cbor_hex": "81583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+        "record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "note": "An untagged map is always the metadata map itself."
+    },
+    {
+      "name": "metadata-with-scripts-array",
+      "auxiliary_data_cbor_hex": "82a119013581583fa2617601656974656d7381a166686173686573a168736861322d3235365820111111111111111111111111111111111111111111111111111111111111111180",
+      "expected": {
+        "label_309_value_cbor_hex": "81583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+        "record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "note": "The two-element [transaction_metadata, auxiliary_scripts] form; the metadata map is element 0."
+    },
+    {
+      "name": "tag-259-keyed-map",
+      "auxiliary_data_cbor_hex": "d90103a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "label_309_value_cbor_hex": "81583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+        "record_body_hex": "a2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "note": "The tag-259 form; the metadata map sits under integer key 0."
+    },
+    {
+      "name": "untagged-map-with-integer-key-0-is-metadata",
+      "auxiliary_data_cbor_hex": "a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "error_code": "METADATA_NOT_FOUND"
+      },
+      "note": "Dispatch is on top-level type and tag only: an untagged map is the metadata map itself, never key-sniffed into the keyed-wrapper form. This map's only label is 0, so it carries no label-309 entry."
+    },
+    {
+      "name": "tag-259-no-key-0",
+      "auxiliary_data_cbor_hex": "d90103a10180",
+      "expected": {
+        "error_code": "METADATA_NOT_FOUND"
+      },
+      "note": "Well-formed auxiliary data that simply carries no metadata map."
+    },
+    {
+      "name": "metadata-map-no-309",
+      "auxiliary_data_cbor_hex": "a11902a2a1636d7367816568656c6c6f",
+      "expected": {
+        "error_code": "METADATA_NOT_FOUND"
+      },
+      "note": "Well-formed metadata under another label only; a verifier ignores every label other than 309."
+    },
+    {
+      "name": "tag-258-rejected",
+      "auxiliary_data_cbor_hex": "d90102a100a119013581583fa2617601656974656d7381a166686173686573a168736861322d32353658201111111111111111111111111111111111111111111111111111111111111111",
+      "expected": {
+        "error_code": "MALFORMED_CBOR"
+      },
+      "note": "Any tag other than 259 at the top of the auxiliary data is rejected."
+    },
+    {
+      "name": "top-level-byte-string-rejected",
+      "auxiliary_data_cbor_hex": "43010203",
+      "expected": {
+        "error_code": "MALFORMED_CBOR"
+      },
+      "note": "Any top-level shape other than map, array, or tag-259 is rejected."
+    }
+  ]
+}

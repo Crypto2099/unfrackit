@@ -1,0 +1,38 @@
+{
+  "name": "unfrackit-research-freeze",
+  "version": "0.1.0",
+  "description": "Builds, signs, submits and verifies the study's CIP-190 Proof of Existence records on Cardano.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Adam K. Dean",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "bin": {
+    "research-freeze": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@cardanowall/crypto-core": "0.12.0",
+    "@cardanowall/poe-standard": "0.12.0",
+    "@cardanowall/sdk-ts": "0.12.0",
+    "@emurgo/cardano-serialization-lib-nodejs": "13.2.1",
+    "bip39": "3.1.0"
+  },
+  "overrides": {
+    "@noble/ciphers": "2.2.0",
+    "@noble/curves": "2.2.0",
+    "@noble/ed25519": "3.1.0",
+    "@noble/hashes": "2.2.0",
+    "@noble/post-quantum": "0.6.1",
+    "cbor2": "2.3.0",
+    "hash-wasm": "4.12.0",
+    "zod": "4.4.3",
+    "bip39": {
+      "@noble/hashes": "1.8.0"
+    }
+  }
+}

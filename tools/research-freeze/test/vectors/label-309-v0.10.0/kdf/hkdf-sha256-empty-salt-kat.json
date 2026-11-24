@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "primitive": "hkdf-sha256",
+  "source": "Zero-length HKDF salt (RFC 5869 section 2.2 absent salt). When salt is a zero-length octet string, HKDF-Extract substitutes a string of HashLen zero bytes. This case isolates that semantic with a non-empty info string, mirroring the slots_mac HKDF call in the sealed-PoE construction (salt is the empty octet string, info is the domain-separation label), so the absent-salt behaviour is pinned by an exact byte vector rather than left to the library. The RFC 5869 A.3 KAT in hkdf-sha256-kat.json also uses salt='' but pairs it with an empty info; this file pins salt='' against a non-empty info so the two inputs cannot mask each other.",
+  "vectors": [
+    {
+      "name": "empty-salt-slots-mac-info",
+      "ikm_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "salt_hex": "",
+      "info_hex": "63617264616e6f2d706f652d736c6f74732d6d61632d7631",
+      "info_ascii": "cardano-poe-slots-mac-v1",
+      "length": 32,
+      "expected_hex": "86cb5d60731470dbacf20bfe88e959aa993182ecfc9a85beb77daaa429ecd188"
+    }
+  ]
+}
