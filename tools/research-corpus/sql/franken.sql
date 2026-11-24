@@ -1,0 +1,71 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Adam K. Dean
+--
+-- Franken addresses, per sampled wallet over its whole history up to the
+-- snapshot.
+--
+-- In a wallet with two or more payment credentials, a payment credential is
+-- flagged if it never appears as an input in a transaction that also spends
+-- another of the wallet's credentials, in a wallet where at least one pair of
+-- its credentials does co-spend. A wallet with one payment credential is never
+-- flagged. Flagged credentials' UTxOs are held, not planned; a sensitivity
+-- analysis drops wallets with any flag. Read as: key payment credentials only,
+-- whole history up to the snapshot; script payment credentials are held anyway
+-- (x13_all includes them).
+--
+-- Inputs are reduced to distinct (wallet, transaction, credential) first; a
+-- credential co-spends when its transaction holds two or more of the wallet's
+-- credentials. This is the pairwise definition without the pairwise join.
+
+-- @step franken
+-- @outputs study.franken study.sample
+DROP TABLE IF EXISTS study.franken;
+CREATE TABLE study.franken AS
+WITH creds AS (
+  SELECT DISTINCT t.sa_id, t.payment_cred
+    FROM study.txo t JOIN study.sample_wallet w ON w.sa_id = t.sa_id
+   WHERE ({{x13_all}} OR NOT t.script_pay) AND t.created_tx <= {{snap_tx}}
+),
+ins AS (
+  SELECT DISTINCT t.sa_id, t.consumed_tx AS tx, t.payment_cred
+    FROM study.txo t JOIN study.sample_wallet w ON w.sa_id = t.sa_id
+   WHERE ({{x13_all}} OR NOT t.script_pay) AND t.consumed_tx <= {{snap_tx}}
+),
+multi AS (SELECT sa_id, tx FROM ins GROUP BY sa_id, tx HAVING count(*) >= 2),
+co AS (SELECT DISTINCT i.sa_id, i.payment_cred FROM ins i JOIN multi m ON m.sa_id = i.sa_id AND m.tx = i.tx),
+nc AS (SELECT sa_id, count(*) AS n_creds FROM creds GROUP BY sa_id),
+anyco AS (SELECT DISTINCT sa_id FROM co)
+SELECT c.sa_id, c.payment_cred, nc.n_creds, (a.sa_id IS NOT NULL) AS any_cospend,
+       (nc.n_creds >= 2 AND a.sa_id IS NOT NULL AND co.payment_cred IS NULL) AS flagged
+  FROM creds c
+  JOIN nc ON nc.sa_id = c.sa_id
+  LEFT JOIN anyco a ON a.sa_id = c.sa_id
+  LEFT JOIN co ON co.sa_id = c.sa_id AND co.payment_cred = c.payment_cred;
+CREATE INDEX franken_sa ON study.franken (sa_id);
+-- The two per-wallet flags on study.sample, from the table just built, for the
+-- sensitivity analyses: franken_any (some credential flagged; the count
+-- n_wallets_flagged below) and franken_no_cospend (two or more key credentials,
+-- no pair co-spends; n_multi_cred_no_cospend). A wallet with no row in
+-- study.franken has no credential in scope and carries neither.
+UPDATE study.sample x
+   SET franken_any = coalesce(w.any_flag, false),
+       franken_no_cospend = coalesce(w.no_cospend, false)
+  FROM (SELECT sa_id, bool_or(flagged) AS any_flag, bool_or(n_creds >= 2 AND NOT any_cospend) AS no_cospend
+          FROM study.franken GROUP BY sa_id) w
+ WHERE w.sa_id = x.sa_id;
+
+-- Per kind (the sample's wallets and the pilot's, counted apart), less those
+-- the reconstruction check excluded. n_multi_cred_no_cospend counts the
+-- wallets the rule cannot flag because no pair of their key credentials ever
+-- co-spends: one real credential beside a third party's output at a mangled
+-- address (CIP-19, "Delegation part") is such a case.
+-- @query franken_counts
+SELECT w.kind, count(DISTINCT f.sa_id) AS n_wallets,
+       count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2) AS n_multi_cred,
+       count(DISTINCT f.sa_id) FILTER (WHERE f.flagged) AS n_wallets_flagged,
+       count(*) FILTER (WHERE f.flagged) AS n_creds_flagged,
+       count(DISTINCT f.sa_id) FILTER (WHERE f.n_creds >= 2 AND NOT f.any_cospend) AS n_multi_cred_no_cospend
+  FROM study.franken f
+  JOIN (SELECT sa_id, min(kind) AS kind FROM study.sample GROUP BY sa_id) w ON w.sa_id = f.sa_id
+ WHERE NOT EXISTS (SELECT 1 FROM study.reconstruction_check k WHERE k.sa_id = f.sa_id AND NOT k.agree)
+ GROUP BY w.kind ORDER BY w.kind;
