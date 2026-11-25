@@ -128,7 +128,9 @@ const blocksQuery = (h, name) => fill(h.blocks.get(name).statements[0], h.p);
 test('draw_check holds on a valid run and fails when a pilot wallet is placed in a sample', async () => {
   const h = await drawAll(ORDER, OVER);
   const check = async () => (await h.db.query(blocksQuery(h, 'draw_check'))).rows[0];
-  assert.deepEqual(await check(), { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true, pilot_outside_samples: true, pilot_after_sample: true });
+  const valid = await check();
+  assert.equal(Object.keys(valid).length, 16);
+  assert.ok(Object.values(valid).every((v) => v === true), JSON.stringify(valid));
   // w9 is a peak pilot wallet: put it in the recent sample as well.
   await h.db.exec(`INSERT INTO study.sample (frame, kind, sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi)
                    VALUES ('recent', 'random', 9, 1, 'B0', 0, 0, 5, false, 200)`);

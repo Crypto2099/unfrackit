@@ -7,18 +7,23 @@
 -- sample and then its pilot: a pilot row (kind 'pilot') is exploration, a
 -- sample row (kind 'random') is confirmation, so every sampled wallet is
 -- confirmation and the pilot, drawn after the sample outside it, is the
--- exploration set. A wallet is never in a pilot and a sample (the pilot's
--- candidates leave out both samples' wallets), so a wallet in both frames'
--- pilots, or in both frames' samples, carries one label in both.
+-- exploration set. The same holds for the recent frame's ADA-only kinds: an
+-- ADA-only sample row (kind 'ada_only') is confirmation and an ADA-only pilot
+-- row (kind 'ada_only_pilot') exploration. A wallet is never in a pilot and a
+-- sample of either kind (each pilot's candidates leave out both samples'
+-- wallets and the ADA-only sample's), so a wallet in two kinds of one label
+-- (both frames' pilots, both frames' samples, or the ADA-only sample and the
+-- peak sample) carries one label in both.
 --
--- study.sample_wallet lists every sampled and pilot credential once, for the
+-- study.sample_wallet lists every credential of every kind once, for the
 -- per-wallet steps that follow (the reconstruction check, prior-treated flags, franken
 -- flags), and study.sample_frame each (frame, wallet) once, for the profile
 -- inputs.
 
 -- @step split
 -- @outputs study.sample
-UPDATE study.sample SET split = CASE kind WHEN 'pilot' THEN 'exploration' ELSE 'confirmation' END;
+UPDATE study.sample SET split = CASE kind WHEN 'random' THEN 'confirmation' WHEN 'ada_only' THEN 'confirmation'
+                                          WHEN 'pilot' THEN 'exploration' WHEN 'ada_only_pilot' THEN 'exploration' END;
 -- Every sampled and pilot wallet carries its frame's fragmentation flag
 -- (frames.sql), a descriptive field, so outcomes can be reported by it.
 UPDATE study.sample x

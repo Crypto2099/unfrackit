@@ -12,7 +12,9 @@
 // sweep), M2 and S1 none, so none of the three is a candidate of the draw.
 // The sample, its size groups, the drawn and taken counts per group and the
 // cap fields agree with the rule computed here from the frame and the life
-// table; every sample row carries its frame's fragmentation flag; the franken
+// table, and so does the recent frame's ADA-only sample (short at the guard,
+// like the sample), with an empty ADA-only pilot and neither ADA-only kind in
+// the peak frame; every sample row carries its frame's fragmentation flag; the franken
 // step covers the sampled wallets; the profile features agree with the frame;
 // the split follows its rule; the run repeated gives identical tables.
 // T12. The first run captures EXPLAIN (ANALYZE, BUFFERS), wall time and rows
@@ -28,6 +30,12 @@ import { runPipeline } from '../../src/pipeline.mjs';
 import { q } from '../../src/db.mjs';
 import { Runner } from '../../src/runner.mjs';
 import { FIXED } from '../../src/params.mjs';
+
+// Every key of the draw's check, each true on a valid draw.
+const DRAW_CHECK_KEYS = ['groups_add_up', 'quotas_hold', 'sample_size_holds', 'caps_hold', 'pilot_outside_samples', 'pilot_after_sample',
+  'ada_only_size_holds', 'ada_only_members_qualify', 'ada_only_none_passed_over', 'ada_only_caps_hold',
+  'ada_only_pilot_size_holds', 'ada_only_pilot_members_qualify', 'ada_only_pilot_none_passed_over', 'ada_only_pilot_caps_hold',
+  'ada_only_pilot_outside_samples', 'ada_only_outside_pilots'];
 
 async function fingerprint(c) {
   const tables = (await c.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'study' AND tablename NOT IN ('run', 'param', 'step') ORDER BY 1`)).rows.map((r) => r.tablename);
@@ -124,12 +132,13 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(dk.readings.db, dk.readings.koios);
     assert.equal(b.report.freeze.h, dk.nonce);
 
-    // The split by kind: one label per credential; every sampled wallet is
-    // confirmation, and any pilot wallet exploration.
+    // The split by kind: one label per credential; every sampled wallet, the
+    // ADA-only sample's included, is confirmation, and any pilot wallet of
+    // either pilot exploration.
     const labels = (await c.query(`SELECT sa_id, count(DISTINCT split) AS n FROM study.sample GROUP BY sa_id HAVING count(DISTINCT split) > 1`)).rows;
     assert.equal(labels.length, 0, 'no credential has two labels');
     assert.deepEqual([b.report.split_overall.n_exploration, b.report.split_overall.n_confirmation], [0, b.report.split_overall.n_credentials]);
-    assert.equal((await c.query(`SELECT count(*) AS n FROM study.sample WHERE (kind = 'pilot') <> (split = 'exploration')`)).rows[0].n, '0');
+    assert.equal((await c.query(`SELECT count(*) AS n FROM study.sample WHERE (kind IN ('pilot', 'ada_only_pilot')) <> (split = 'exploration')`)).rows[0].n, '0');
 
     // The guard path ran in both frames, and the sample did not fill, so the pilot, which starts after the sample's stopping point at the guard, is empty.
     for (const d of b.report.draw) {
@@ -138,7 +147,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       assert.equal(d.k_full, null);
       assert.ok(d.n_sample < 1000);
     }
-    assert.deepEqual(b.report.draw_check, { groups_add_up: true, quotas_hold: true, sample_size_holds: true, caps_hold: true, pilot_outside_samples: true, pilot_after_sample: true });
+    assert.deepEqual(b.report.draw_check, Object.fromEntries(DRAW_CHECK_KEYS.map((k) => [k, true])));
     assert.deepEqual(b.report.draw_pilot.map((d) => d.n_taken), [0, 0]);
 
     // The draw against the rule, computed here from the frame and the life
@@ -147,7 +156,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     // at the reference block, held UTxOs counted; T the distinct window
     // transactions creating or consuming the wallet's outputs; the group the
     // highest edge either reaches; each group taken until its quota is full.
-    for (const frame of ['recent', 'peak']) {
+    const computed = async (frame, cond) => {
       const w = b.report.windows[frame];
       const cands = (await c.query(
         `SELECT d.k, d.sa_id, f.n_utxo AS ref,
@@ -158,33 +167,60 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
                    UNION
                    SELECT t.consumed_tx FROM study.txo t WHERE t.sa_id = d.sa_id AND t.consumed_tx BETWEEN $3 AND $4) e) AS txs
            FROM study.draw_order d JOIN study.frame f ON f.frame = d.frame AND f.sa_id = d.sa_id
-          WHERE d.frame = $1 AND d.k <= 1000 AND f.tok AND f.n_spends >= 5
+          WHERE d.frame = $1 AND d.k <= 1000 AND ${cond} AND f.n_spends >= 5
           ORDER BY d.k`,
         [frame, w.t_start, w.lo, w.hi])).rows;
-      const quota = { B0: Infinity, B1: FIXED.quota_b1, B2: FIXED.quota_b2, B3: FIXED.quota_b3 };
-      const taken = { B0: 0, B1: 0, B2: 0, B3: 0 };
-      const drawn = { B0: 0, B1: 0, B2: 0, B3: 0 };
-      const want = [];
-      for (const r of cands) {
+      return cands.map((r) => {
         const txs = (r.txs || []).map(Number);
         const u = Math.max(Number(r.start), Number(r.ref));
         const t = txs.length;
         const reaches = (e) => u >= e || t >= e;
         const g = reaches(4000) ? 'B3' : reaches(1000) ? 'B2' : reaches(250) ? 'B1' : 'B0';
+        return [Number(r.sa_id), Number(r.k), g, Number(r.start), Number(r.ref), t, t > 1000, t > 1000 ? txs[999] : Number(w.hi)];
+      });
+    };
+    const sampleRows = async (frame, kind) => (await c.query(`SELECT sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 AND kind = $2 ORDER BY draw_rank`, [frame, kind])).rows
+      .map((r) => [Number(r.sa_id), Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)]);
+    for (const frame of ['recent', 'peak']) {
+      const quota = { B0: Infinity, B1: FIXED.quota_b1, B2: FIXED.quota_b2, B3: FIXED.quota_b3 };
+      const taken = { B0: 0, B1: 0, B2: 0, B3: 0 };
+      const drawn = { B0: 0, B1: 0, B2: 0, B3: 0 };
+      const want = [];
+      for (const x of await computed(frame, 'f.tok')) {
+        const g = x[2];
         drawn[g]++;
         if (taken[g] >= quota[g]) continue;
         taken[g]++;
-        want.push([Number(r.sa_id), Number(r.k), g, Number(r.start), Number(r.ref), t, t > 1000, t > 1000 ? txs[999] : Number(w.hi)]);
+        want.push(x);
         if (want.length === 1000) break;
       }
-      const got = (await c.query(`SELECT sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi FROM study.sample WHERE frame = $1 AND kind = 'random' ORDER BY draw_rank`, [frame])).rows
-        .map((r) => [Number(r.sa_id), Number(r.draw_rank), r.size_group, Number(r.n_utxo_start), Number(r.n_utxo_ref), Number(r.n_window_tx), r.capped, Number(r.history_hi)]);
+      const got = await sampleRows(frame, 'random');
       assert.deepEqual(got, want, `${frame}: the sample`);
       const groups = b.report.draw_groups.filter((x) => x.frame === frame);
       assert.deepEqual(groups.map((x) => [x.size_group, x.n_drawn, x.n_taken]), ['B0', 'B1', 'B2', 'B3'].map((g) => [g, drawn[g], taken[g]]), `${frame}: D_k and A_k`);
       assert.deepEqual(groups.map((x) => x.quota), [null, FIXED.quota_b1, FIXED.quota_b2, FIXED.quota_b3]);
     }
     assert.deepEqual(b.manifest.draw_groups, b.report.draw_groups);
+
+    // The ADA-only sample against the rule: the recent frame's keys within
+    // the guard holding no token at the snapshot with at least 5 spends, in
+    // draw order, every one taken up to the sample's stopping point (the
+    // guard, 1,000, since the sample is short) until 1,000 are taken, with no
+    // quota. Fewer than 1,000 qualify within the guard, so it stops at the
+    // sample's stopping point; the ADA-only pilot, after it and at or before
+    // the pilot's stopping point (also the guard), is empty.
+    const adaWant = (await computed('recent', 'NOT f.tok')).slice(0, FIXED.ada_only_n);
+    assert.ok(adaWant.length < FIXED.ada_only_n);
+    assert.deepEqual(await sampleRows('recent', 'ada_only'), adaWant, 'recent: the ADA-only sample');
+    assert.deepEqual(b.report.draw_ada_only.map((d) => [d.frame, d.k_full, d.k_stop, d.guard_reached, d.n_drawn, d.n_taken, d.n_sample, d.sample_n]),
+      [['recent', null, 1000, true, adaWant.length, adaWant.length, adaWant.length, FIXED.ada_only_n]]);
+    assert.deepEqual(b.report.draw_groups_ada_only.map((x) => [x.frame, x.size_group, x.quota, x.n_drawn, x.n_taken, x.n_skipped]),
+      ['B0', 'B1', 'B2', 'B3'].map((g) => ['recent', g, null, adaWant.filter((x) => x[2] === g).length, adaWant.filter((x) => x[2] === g).length, 0]));
+    assert.deepEqual(b.report.draw_ada_only_pilot.map((d) => [d.frame, d.k_full, d.k_stop, d.guard_reached, d.n_taken, d.n_sample]), [['recent', null, 1000, true, 0, 0]]);
+    assert.deepEqual(b.manifest.draw_groups_ada_only, b.report.draw_groups_ada_only);
+    assert.equal(Number((await c.query(`SELECT count(*) AS n FROM study.sample WHERE frame = 'peak' AND kind IN ('ada_only', 'ada_only_pilot')`)).rows[0].n), 0, 'neither ADA-only kind in the peak frame');
+    const adaSplit = b.report.split_overall_ada_only || { n_exploration: 0, n_confirmation: 0 };
+    assert.deepEqual([adaSplit.n_exploration, adaSplit.n_confirmation], [0, adaWant.length]);
 
     // The shapes.
     const sa = {};
@@ -196,7 +232,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     assert.equal(Number(s1.n_spends_any), 0);
     assert.equal(s1.eligible, true, 'S1 is eligible like any wallet');
     const s1Samples = (await c.query('SELECT frame, kind FROM study.sample WHERE sa_id = $1', [sa.S1])).rows;
-    const s1Rank = (await c.query(`SELECT k, candidate FROM study.draw_order WHERE frame = 'recent' AND sa_id = $1`, [sa.S1])).rows[0];
+    const s1Rank = (await c.query(`SELECT k, candidate, ada_only_candidate FROM study.draw_order WHERE frame = 'recent' AND sa_id = $1`, [sa.S1])).rows[0];
     assert.ok(s1Rank, 'S1 is in the draw order');
     assert.equal(await row('peak', sa.S1), undefined, 'S1 has no spend, so it is not in the peak frame');
     const s3 = await row('recent', sa.S3);
@@ -211,6 +247,7 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
     // Fewer than 5 spends: S1, S3 and M2 are never candidates, so never in
     // the sample.
     assert.equal(s1Rank.candidate, false);
+    assert.equal(s1Rank.ada_only_candidate, false, 'S1 holds no token but has no spend, so it is no ADA-only candidate');
     for (const k of ['S1', 'S3', 'M2']) {
       const n = Number((await c.query('SELECT count(*) AS n FROM study.sample WHERE sa_id = $1', [sa[k]])).rows[0].n);
       assert.equal(n, 0, `${k} is not in the sample`);
@@ -259,9 +296,13 @@ test('T10 frames, draw and samples end to end, run twice; T12 capture', { timeou
       frame_report: b.report.frame_report,
       draw: b.report.draw,
       draw_groups: b.report.draw_groups,
+      draw_ada_only: b.report.draw_ada_only,
+      draw_groups_ada_only: b.report.draw_groups_ada_only,
+      draw_ada_only_pilot: b.report.draw_ada_only_pilot,
       draw_check: b.report.draw_check,
       split: b.report.split,
       split_overall: b.report.split_overall,
+      split_overall_ada_only: b.report.split_overall_ada_only,
       sample_bounds: b.report.sample_bounds,
       pointer_wallets: b.report.pointer_wallets,
       probes: b.report.probes,

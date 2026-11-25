@@ -182,3 +182,50 @@ test('per-wallet flags on study.sample: each reported count equals the sum of it
   assert.deepEqual(flags(27), [false, false, false, false, false]);
   assert.deepEqual(flags(24), [true, false, false, false, false]); // flagged but excluded from the counts
 });
+
+// A wallet in two kinds, one per frame, counts in each: the reports stay each
+// kind's own, none summed into another, and no wallet leaves the sample's
+// count for an ADA-only kind's.
+test('per-kind counts: a wallet in the peak sample and the ADA-only sample counts in both', async () => {
+  const { db, blocks, runBlock, rows } = await freshDb();
+  const out = await txoTables(db, blocks);
+  await runBlock('reconstruction_check_table');
+  await db.exec('CREATE TABLE study.sample_frame (frame text, sa_id bigint, lo bigint, hi bigint, PRIMARY KEY (frame, sa_id))');
+  // 41: the peak sample and the recent ADA-only sample, franken-flagged and a
+  // UnFrack.It key spend (tx 300). 42: both frames' samples, one credential.
+  // 43: the recent ADA-only pilot and the peak pilot, franken-flagged.
+  const rowsOf = [['peak', 'random', 41], ['recent', 'ada_only', 41], ['recent', 'random', 42], ['peak', 'random', 42], ['recent', 'ada_only_pilot', 43], ['peak', 'pilot', 43]];
+  await db.exec('INSERT INTO study.sample_wallet VALUES (41), (42), (43)');
+  for (const [frame, kind, w] of rowsOf) {
+    await db.query(`INSERT INTO study.sample (frame, kind, sa_id, draw_rank, size_group, n_utxo_start, n_utxo_ref, n_window_tx, capped, history_hi)
+                    VALUES ($1, $2, $3, $3, 'B0', 1, 1, 1, false, 1)`, [frame, kind, w]);
+    await db.query('INSERT INTO study.sample_frame VALUES ($1, $2, 1, 100000)', [frame, w]);
+  }
+  const A = '0a'.repeat(28), B = '0b'.repeat(28), C = '0c'.repeat(28), D = '0d'.repeat(28);
+  for (const [sa, tx] of [[41, 300], [43, 310]]) {
+    await out({ sa, created: 1, consumed: tx, cred: A });
+    await out({ sa, created: 1, consumed: tx, cred: B });
+    await out({ sa, created: 1, consumed: tx + 1, cred: C });
+  }
+  await out({ sa: 42, created: 1, consumed: 320, cred: D });
+  await db.exec(`INSERT INTO study.unfrackit_tx VALUES (300, 'json')`);
+  await db.exec(`INSERT INTO study.reconstruction_check VALUES (41, 0, '', 0, '', 0, '', true, true), (42, 0, '', 0, '', 0, '', true, true), (43, 0, '', 0, '', 0, '', true, true)`);
+  await db.exec('UPDATE study.sample s SET reconstruction_excluded = NOT k.agree FROM study.reconstruction_check k WHERE k.sa_id = s.sa_id');
+  await runBlock('prior_flags', params());
+  await runBlock('franken', params());
+  // franken: the sample holds 41 and 42 (41 flagged); the ADA-only sample 41;
+  // both pilots 43.
+  const fr = await rows(blocks.get('franken_counts').statements[0]);
+  assert.deepEqual(fr.map((r) => [r.kind, Number(r.n_wallets), Number(r.n_wallets_flagged)]), [['ada_only', 1, 1], ['ada_only_pilot', 1, 1], ['pilot', 1, 1], ['random', 2, 1]]);
+  // prior-treated, per frame and the kind of the wallet's row in that frame:
+  // 41 is the peak sample's UnFrack.It user and the recent ADA-only sample's.
+  const pr = await rows(blocks.get('prior_counts').statements[0]);
+  assert.deepEqual(pr.map((r) => [r.frame, r.kind, Number(r.n_wallets), Number(r.unfrackit_any)]), [
+    ['recent', 'ada_only', 1, 1], ['recent', 'ada_only_pilot', 1, 0], ['recent', 'random', 1, 0], ['peak', 'pilot', 1, 0], ['peak', 'random', 2, 1]
+  ]);
+  const rc = await rows(blocks.get('reconstruction_check_counts').statements[0]);
+  assert.deepEqual(rc.map((r) => [r.kind, Number(r.n_wallets), Number(r.n_excluded)]), [['ada_only', 1, 0], ['ada_only_pilot', 1, 0], ['pilot', 1, 0], ['random', 2, 0]]);
+  // The flags reach every row of each wallet.
+  const per = await rows(`SELECT frame, kind, sa_id, franken_any, unfrackit_user FROM study.sample WHERE sa_id = 41 ORDER BY frame, kind`);
+  assert.deepEqual(per.map((r) => [r.frame, r.kind, r.franken_any, r.unfrackit_user]), [['peak', 'random', true, true], ['recent', 'ada_only', true, true]]);
+});
