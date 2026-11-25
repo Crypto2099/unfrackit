@@ -75,14 +75,18 @@ function functionalChecks(report) {
   if (report.order_check) c.order_check = report.order_check.passed;
   if (report.cred_checks) c.credential_checks = true;
   if (report.peak_vs_frozen) c.peak_rule_reproduces_frozen = report.peak_vs_frozen.agrees;
-  if (report.reconstruction_check) c.reconstruction_check_all_agree = report.reconstruction_check.n_excluded === 0 && (report.reconstruction_check_pilot ? report.reconstruction_check_pilot.n_excluded === 0 : true);
+  if (report.reconstruction_check) {
+    // Every kind is checked: each kind's wallets are extracted like the sample's.
+    const all = [report.reconstruction_check, report.reconstruction_check_pilot, report.reconstruction_check_ada_only, report.reconstruction_check_ada_only_pilot].filter(Boolean);
+    c.reconstruction_check_all_agree = all.every((x) => x.n_excluded === 0);
+  }
   if (report.draw_check) for (const [k, v] of Object.entries(report.draw_check)) c[`draw_${k}`] = v;
   if (report.profile_check) {
-    // Both kinds are checked: the pilot's features are extracted like the sample's.
-    const both = [report.profile_check, report.profile_check_pilot].filter(Boolean);
-    c.profile_spends_match_frame = both.every((x) => x.spend_count_mismatch === 0);
-    c.profile_receipts_within_frame = both.every((x) => x.receipt_count_mismatch === 0);
-    c.profile_utxos_match_frame = both.every((x) => x.utxo_count_mismatch === 0);
+    // Every kind is checked: each kind's features are extracted like the sample's.
+    const all = [report.profile_check, report.profile_check_pilot, report.profile_check_ada_only, report.profile_check_ada_only_pilot].filter(Boolean);
+    c.profile_spends_match_frame = all.every((x) => x.spend_count_mismatch === 0);
+    c.profile_receipts_within_frame = all.every((x) => x.receipt_count_mismatch === 0);
+    c.profile_utxos_match_frame = all.every((x) => x.utxo_count_mismatch === 0);
   }
   return c;
 }
@@ -406,13 +410,19 @@ export async function runPipeline(opts) {
 
     // The draw and the sample.
     await runner.run('draw');
-    // Every count is the sample's (kind 'random'); the pilot's is beside it under a _pilot key, never summed in.
+    // Every count is the sample's (kind 'random'); the pilot's is beside it
+    // under a _pilot key, and the ADA-only sample's and ADA-only pilot's under
+    // _ada_only and _ada_only_pilot keys, never summed in.
     const drawRows = (await q(client, blocks, 'draw_summary_rows')).map((r) => numRow(r, ['frame', 'kind', 'guard_reached', 'quota_scale']));
     report.draw = drawRows.filter((r) => r.kind === 'random');
     report.draw_pilot = drawRows.filter((r) => r.kind === 'pilot');
+    report.draw_ada_only = drawRows.filter((r) => r.kind === 'ada_only');
+    report.draw_ada_only_pilot = drawRows.filter((r) => r.kind === 'ada_only_pilot');
     const groupRows = (await q(client, blocks, 'draw_group_rows')).map((r) => numRow(r, ['frame', 'kind', 'size_group']));
     report.draw_groups = groupRows.filter((r) => r.kind === 'random');
     report.draw_groups_pilot = groupRows.filter((r) => r.kind === 'pilot');
+    report.draw_groups_ada_only = groupRows.filter((r) => r.kind === 'ada_only');
+    report.draw_groups_ada_only_pilot = groupRows.filter((r) => r.kind === 'ada_only_pilot');
     report.draw_check = (await q(client, blocks, 'draw_check', runner.params))[0];
     const badDraw = Object.entries(report.draw_check).filter(([, v]) => v !== true).map(([k]) => k);
     if (badDraw.length) throw new Error(`draw checks failed: ${badDraw.join(', ')}`);
@@ -427,14 +437,20 @@ export async function runPipeline(opts) {
     const reconRows = (await q(client, blocks, 'reconstruction_check_counts')).map((r) => numRow(r, ['kind', 'direct_valid']));
     report.reconstruction_check = reconRows.find((r) => r.kind === 'random');
     report.reconstruction_check_pilot = reconRows.find((r) => r.kind === 'pilot');
+    report.reconstruction_check_ada_only = reconRows.find((r) => r.kind === 'ada_only');
+    report.reconstruction_check_ada_only_pilot = reconRows.find((r) => r.kind === 'ada_only_pilot');
     report.split = (await q(client, blocks, 'split_counts')).map((r) => numRow(r, ['frame', 'kind', 'size_group']));
     const splitRows = (await q(client, blocks, 'split_overall')).map((r) => numRow(r, ['kind']));
     report.split_overall = splitRows.find((r) => r.kind === 'random');
     report.split_overall_pilot = splitRows.find((r) => r.kind === 'pilot');
+    report.split_overall_ada_only = splitRows.find((r) => r.kind === 'ada_only');
+    report.split_overall_ada_only_pilot = splitRows.find((r) => r.kind === 'ada_only_pilot');
     report.sample_bounds = (await q(client, blocks, 'sample_bounds')).map((r) => ({ ...r, n: num(r.n) }));
     const pointerRows = (await q(client, blocks, 'pointer_wallets')).map((r) => numRow(r, ['kind']));
     report.pointer_wallets = pointerRows.find((r) => r.kind === 'random') || { kind: 'random', n_wallets_with_pointer_outputs: 0 };
     report.pointer_wallets_pilot = pointerRows.find((r) => r.kind === 'pilot') || { kind: 'pilot', n_wallets_with_pointer_outputs: 0 };
+    report.pointer_wallets_ada_only = pointerRows.find((r) => r.kind === 'ada_only') || { kind: 'ada_only', n_wallets_with_pointer_outputs: 0 };
+    report.pointer_wallets_ada_only_pilot = pointerRows.find((r) => r.kind === 'ada_only_pilot') || { kind: 'ada_only_pilot', n_wallets_with_pointer_outputs: 0 };
 
     // Prior-treated and franken flags.
     await runner.run('unfrackit_tx');
@@ -444,10 +460,14 @@ export async function runPipeline(opts) {
     const priorRows = (await q(client, blocks, 'prior_counts')).map((r) => numRow(r, ['frame', 'kind']));
     report.prior = priorRows.filter((r) => r.kind === 'random');
     report.prior_pilot = priorRows.filter((r) => r.kind === 'pilot');
+    report.prior_ada_only = priorRows.filter((r) => r.kind === 'ada_only');
+    report.prior_ada_only_pilot = priorRows.filter((r) => r.kind === 'ada_only_pilot');
     await runner.run('franken');
     const frankenRows = (await q(client, blocks, 'franken_counts')).map((r) => numRow(r, ['kind']));
     report.franken = frankenRows.find((r) => r.kind === 'random');
     report.franken_pilot = frankenRows.find((r) => r.kind === 'pilot');
+    report.franken_ada_only = frankenRows.find((r) => r.kind === 'ada_only');
+    report.franken_ada_only_pilot = frankenRows.find((r) => r.kind === 'ada_only_pilot');
 
     // Profile inputs: the eight features of the clustering procedure, and the
     // descriptive cut-point profiles and flags.
@@ -456,9 +476,13 @@ export async function runPipeline(opts) {
     const checkRows = (await q(client, blocks, 'profile_check', runner.params)).map((r) => numRow(r, ['kind']));
     report.profile_check = checkRows.find((r) => r.kind === 'random');
     report.profile_check_pilot = checkRows.find((r) => r.kind === 'pilot');
+    report.profile_check_ada_only = checkRows.find((r) => r.kind === 'ada_only');
+    report.profile_check_ada_only_pilot = checkRows.find((r) => r.kind === 'ada_only_pilot');
     const profileRows = (await q(client, blocks, 'profile_counts')).map((r) => ({ ...r, n: num(r.n), nft_heavy: num(r.nft_heavy), ft_heavy: num(r.ft_heavy), dex_active: num(r.dex_active) }));
     report.profiles = profileRows.filter((r) => r.kind === 'random');
     report.profiles_pilot = profileRows.filter((r) => r.kind === 'pilot');
+    report.profiles_ada_only = profileRows.filter((r) => r.kind === 'ada_only');
+    report.profiles_ada_only_pilot = profileRows.filter((r) => r.kind === 'ada_only_pilot');
 
     // The simulator's live-fire wallets, picked from this run's draw order;
     // the selection is written once the run's tables are dropped.

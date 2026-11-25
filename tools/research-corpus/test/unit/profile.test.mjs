@@ -82,4 +82,10 @@ test('f5 counts receipts that consume none of the wallet\'s outputs, f8 the UTxO
   // A frame whose UTxO count differs is caught.
   await db.exec(`UPDATE study.frame SET n_utxo = 4 WHERE frame = 'recent'`);
   assert.equal(Number((await profileCheck()).utxo_count_mismatch), 1);
+  // The check counts each profile row under the kind of the wallet's row in
+  // its frame: wallet 2 as an ADA-only sample wallet of the recent frame
+  // counts there, and wallet 1's two rows stay the sample's.
+  await db.exec(`UPDATE study.sample SET kind = 'ada_only' WHERE sa_id = 2; INSERT INTO study.frame VALUES ('recent', 2, 0, 0)`);
+  const byKind = (await db.query(fill(blocks.get('profile_check').statements[0], params()))).rows;
+  assert.deepEqual(byKind.map((r) => [r.kind, Number(r.n)]), [['ada_only', 1], ['random', 2]]);
 });

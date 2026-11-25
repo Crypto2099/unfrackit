@@ -15,6 +15,8 @@ export const FIXED = {
   guard: 200000, // the draw's guard per frame; it counts eligible keys taken in draw order
   sample_n: 1000, // the sample per frame: active token-holding wallets taken in draw order
   pilot_n: 100, // the pilot per frame: drawn after the sample, outside it, the exploration set; its quotas are the sample's scaled by pilot_n / sample_n, at least one each
+  ada_only_n: 1000, // the ADA-only sample, recent frame only: ADA-only wallets with at least 5 spends, in draw order up to the sample's stopping point, no quota, confirmation wallets
+  ada_only_pilot_n: 100, // the ADA-only pilot, recent frame only: drawn after the ADA-only sample up to the recent pilot's stopping point, outside every sample, exploration wallets
   spends_min: 5, // active: at least 5 spends in the window
   group_edge_b1: 250, // size groups: B1 from 250 UTxOs or window transactions,
   group_edge_b2: 1000, // B2 from 1,000,
