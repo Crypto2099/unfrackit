@@ -1,0 +1,47 @@
+cabal-version: 3.0
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Adam K. Dean
+--
+-- The cardano-wallet helper of the simulator's bridge (src/methods/helper.mjs,
+-- schema 1). Its dependencies are what the helper calls: cardano-balance-tx's
+-- balanceTx over cardano-coin-selection, the ledger packages that decode the
+-- request's CBOR, build the protocol parameters and encode the transaction,
+-- cardano-slotting for the time translation, bech32 for the change address,
+-- and MonadRandom and random, the source of the selection's random draws,
+-- which the helper seeds from the request. Every one of them is in
+-- cardano-balance-tx's own dependency closure except aeson,
+-- base16-bytestring and bech32, which the ledger packages and
+-- cardano-addresses already depend on.
+name:          cwallet-helper
+version:       0.1.0.0
+license:       Apache-2.0
+copyright:     2026 Adam K. Dean
+build-type:    Simple
+
+executable cwallet-helper
+  main-is:          Main.hs
+  hs-source-dirs:   .
+  default-language: Haskell2010
+  ghc-options:      -threaded -rtsopts
+  other-modules:    CostModels
+  build-depends:
+    , aeson
+    , base
+    , base16-bytestring
+    , bech32
+    , bytestring
+    , cardano-balance-tx
+    , cardano-crypto-class
+    , cardano-ledger-api
+    , cardano-ledger-binary
+    , cardano-ledger-conway
+    , cardano-ledger-core
+    , cardano-ledger-mary
+    , cardano-slotting
+    , containers
+    , microlens
+    , MonadRandom
+    , random
+    , text
+    , time
+    , transformers
